@@ -1286,6 +1286,8 @@ function renderParcels() {
 
 function renderAll() {
   renderMetrics();
+  renderSourceStrip();
+  renderIntegrationHealth();
   renderBoards();
   populateFilters();
   renderOutbound();
@@ -1308,6 +1310,8 @@ document.addEventListener("DOMContentLoaded", () => {
   $("inSearch").addEventListener("input", debounce(renderInbound, 120));
   $("modeFilter").addEventListener("change", renderInbound);
   $("exportCsv").addEventListener("click", exportOutboundCsv);
+  const integrationExportButton = $("exportIntegration");
+  if (integrationExportButton) integrationExportButton.addEventListener("click", exportIntegrationHealth);
   const statusChange = (event) => {
     if (event.target.matches(".status-select")) updateStatus(event.target);
   };
