@@ -462,24 +462,40 @@ function mapParcels(table) {
   let section = "";
   const result = [];
   for (const row of table.rows || []) {
-    const label = rawCell(row, 0);
-    if (PARCEL_SECTIONS.test(label)) section = label.toUpperCase();
-    const num = rawCell(row, 1).replace(/^TRACKING#$/i, "").trim();
-    if (!num || /^TRACK/i.test(num) || !looksLikeParcelTracking(num)) continue;
+    const cells = (row.c || []).map((_, i) => rawCell(row, i));
+    const rowText = cells.join(" ");
+
+    const sectionLabel = cells.find((value) => PARCEL_SECTIONS.test(clean(value)));
+    if (sectionLabel) section = sectionLabel.toUpperCase();
+
+    const trackingCell = cells.find((value) => {
+      const normalized = clean(value).replace(/\s/g, "").toUpperCase();
+      return normalized && !/^TRACKING#?$/i.test(normalized) && looksLikeParcelTracking(normalized);
+    });
+    if (!trackingCell) continue;
+
+    const num = clean(trackingCell).replace(/\s/g, "").toUpperCase();
     const carrier = inferParcelCarrier(section, num);
     if (!carrier) continue;
-    const detail = rawCell(row, 4);
-    const rowText = (row.c || []).map((_, i) => rawCell(row, i)).join(" ");
+
+    const invoice = clean(rawCell(row, 2)) ||
+      (cells.find((value) => /\bIN\d{4,}\b/i.test(value)) || "");
+    const origin = clean(rawCell(row, 3)) ||
+      (cells.find((value) => /KOREA|ASIA|LAX|LA\s*\/\s*LONG\s*BEACH/i.test(value)) || "Imports");
+    const detail = clean(rawCell(row, 4)) ||
+      cells.filter(Boolean).slice(2).join(" · ");
+
     let status = classifyStatus(rowText);
     if (/label created|not shipped/i.test(detail)) status = "Scheduled";
     else if (!FINISHED.has(status) && /pending|clearance|customs|waiting|transit/i.test(rowText)) status = "Shipping";
-    status = PARCEL_STATUS_OVERRIDES.get(num.replace(/\s/g, "").toUpperCase()) || status;
+    status = PARCEL_STATUS_OVERRIDES.get(num) || status;
+
     result.push({
       carrier,
       tracking: num,
-      invoice: rawCell(row, 2),
-      origin: rawCell(row, 3) || "Imports",
-      eta: lastDateIn(detail),
+      invoice: clean(invoice),
+      origin: clean(origin) || "Imports",
+      eta: lastDateIn(detail || rowText),
       note: detail.replace(/\s+/g, " ").trim() || "No carrier tracking note yet",
       url: parcelTrackingUrl(carrier, num),
       status
