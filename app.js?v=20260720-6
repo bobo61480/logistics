@@ -108,7 +108,13 @@ function parseGviz(text) {
   const a = text.indexOf("{");
   const b = text.lastIndexOf("}");
   if (a < 0 || b < 0) throw Error("Google Sheets did not return data");
-  return JSON.parse(text.slice(a, b + 1)).table;
+  const payload = JSON.parse(text.slice(a, b + 1));
+  if (payload.status && payload.status !== "ok") {
+    const detail = payload.errors?.map((entry) => entry?.detailed_message || entry?.message).filter(Boolean).join("; ");
+    throw Error(detail || `Google Sheets query failed (${payload.status})`);
+  }
+  if (!payload.table) throw Error("Google Sheets returned no table data");
+  return payload.table;
 }
 
 async function fetchTable(tab, range, withHeaders = true) {
@@ -117,22 +123,27 @@ async function fetchTable(tab, range, withHeaders = true) {
   u.searchParams.set("headers", withHeaders ? "1" : "0");
   u.searchParams.set("sheet", tab);
   if (range) u.searchParams.set("range", range);
-  /* FIX: without a timeout, one hung request left `loading` stuck true
-     and killed every future auto-refresh. */
-  const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), 20000);
-  try {
-    const r = await fetch(u, { cache: "no-store", signal: ctl.signal });
-    if (!r.ok) throw Error(`${tab}: HTTP ${r.status}`);
-    const table = parseGviz(await r.text());
-    const rowMatch = clean(range).match(/^[A-Z]+(\d+)/i);
-    table.__sourceStartRow = rowMatch ? Number(rowMatch[1]) : 1;
-    return table;
-  } catch (e) {
-    throw e.name === "AbortError" ? Error(`${tab}: timed out (20s)`) : e;
-  } finally {
-    clearTimeout(timer);
+
+  let lastError = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 20000);
+    try {
+      const r = await fetch(u, { cache: "no-store", signal: ctl.signal });
+      if (!r.ok) throw Error(`${tab}: HTTP ${r.status}`);
+      const table = parseGviz(await r.text());
+      const rowMatch = clean(range).match(/^[A-Z]+(\d+)/i);
+      table.__sourceStartRow = rowMatch ? Number(rowMatch[1]) : 1;
+      return table;
+    } catch (e) {
+      lastError = e.name === "AbortError" ? Error(`${tab}: timed out (20s)`) : e;
+      if (attempt === 0) continue;
+      throw lastError;
+    } finally {
+      clearTimeout(timer);
+    }
   }
+  throw lastError || Error(`${tab}: unknown fetch failure`);
 }
 
 function objects(table) {
@@ -1201,7 +1212,12 @@ async function updateStatus(select) {
         method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({ ...relation, status })
       });
-      if (!response.ok) throw new Error(`Status endpoint returned HTTP ${response.status}`);
+      if (!response.ok) {
+        const hint = response.status === 401 || response.status === 403
+          ? "Apps Script denied access. Sign in with the allowed domain or redeploy the web app with the correct access policy."
+          : "Status endpoint is unavailable.";
+        throw new Error(`${hint} (HTTP ${response.status})`);
+      }
       const data = await response.json();
       if (!data.ok) throw new Error(data.error || "Update failed");
     }
