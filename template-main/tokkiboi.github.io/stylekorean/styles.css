@@ -408,6 +408,6 @@ th[data-sort].sorted.desc::after { content: "↓"; }
   border:1px solid var(--line); border-radius:8px; background:var(--paper);
   color:var(--ink); font:600 12px/1.2 "Archivo", sans-serif;
 }
-.status-select:focus { outline:2px solid color-mix(in srgb, var(--orange) 40%, transparent); outline-offset:1px; }
-.status-select:disabled { cursor:not-allowed; opacity:.58; background:var(--paper-2); }
+.status-select:focus { outline:2px solid color-mix(in srgb, var(--accent) 40%, transparent); outline-offset:1px; }
+.status-select:disabled { cursor:not-allowed; opacity:.58; background:var(--paper); }
 .status-result { min-height:14px; color:var(--steel); font:500 10px/1.2 "IBM Plex Mono", monospace; }

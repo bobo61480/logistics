@@ -1157,7 +1157,8 @@ function statusControl(row, kind) {
 async function updateStatus(select) {
   const relation = JSON.parse(decodeURIComponent(select.dataset.statusRelation));
   const result = select.parentElement.querySelector(".status-result");
-  const previous = relation.currentStatus || "";
+  const previous = clean(select.dataset.previousValue || select.value || relation.currentStatus || "") || "";
+  select.dataset.previousValue = previous;
   const status = select.value;
   select.disabled = true;
   result.textContent = "Saving…";
@@ -1182,6 +1183,7 @@ async function updateStatus(select) {
     select.value = fallback;
     select.disabled = false;
   }
+  select.dataset.previousValue = select.value;
 }
 
 /* CSV export of exactly what's on screen (filters + consolidation + sort) */
@@ -1295,8 +1297,13 @@ document.addEventListener("DOMContentLoaded", () => {
   const statusChange = (event) => {
     if (event.target.matches(".status-select")) updateStatus(event.target);
   };
+  const statusFocus = (event) => {
+    if (event.target.matches(".status-select")) event.target.dataset.previousValue = event.target.value;
+  };
   $("outRows").addEventListener("change", statusChange);
   $("inRows").addEventListener("change", statusChange);
+  $("outRows").addEventListener("focusin", statusFocus);
+  $("inRows").addEventListener("focusin", statusFocus);
 
   /* sortable outbound columns */
   const sortHeaders = [...document.querySelectorAll("#outTable th[data-sort]")];
