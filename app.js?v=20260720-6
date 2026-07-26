@@ -718,15 +718,21 @@ function applyDatabaseShipments(records) {
   outboundRows = [];
   parcelRows = [];
   records.forEach((record) => {
+    const raw = record && typeof record.raw === "object" && record.raw ? record.raw : {};
+    const sourceTab = clean(record.source_sheet || raw.source_sheet || raw.sourceSheet || "");
+    const sourceRow = Number(record.source_row || raw.source_row || raw.sourceRow || 0) || 0;
+    const sourceStatus = clean(record.source_status || raw.source_status || raw.sourceStatus || "");
+
     const base = {
       databaseId: record.id, databaseVersion: record.version,
       status: databaseStatus(record.status), carrier: clean(record.carrier),
-      origin: clean(record.origin), destination: clean(record.destination)
+      origin: clean(record.origin), destination: clean(record.destination),
+      sourceTab, sourceRow, sourceStatus
     };
     if (record.direction === "outbound") {
       outboundRows.push({
         ...base, source: record.sources?.label || record.sources?.source_key || "Database",
-        sourceTab: "", shipDate: databaseDate(record.scheduled_at), customer: clean(record.customer),
+        shipDate: databaseDate(record.scheduled_at), customer: clean(record.customer),
         invoice: clean(record.invoice_number || record.order_number), pro: clean(record.tracking_number),
         units: [record.pallets ? `${record.pallets} Pallets` : "", record.cartons ? `${record.cartons} Cartons` : ""].filter(Boolean).join(" · "),
         qty: clean(record.quantity), length: "", width: "", height: "", weight: clean(record.weight_lbs),
@@ -745,7 +751,7 @@ function applyDatabaseShipments(records) {
         shipmentNo: clean(record.shipment_number), invoice: clean(record.invoice_number),
         mbl: clean(record.raw?.mbl), hbl: clean(record.raw?.hbl),
         container: clean(record.container_number),
-        trackingUrl: tracking.url, trackingSource: tracking.source, sourceTab: "", sourceRow: 0, sourceStatus: ""
+        trackingUrl: tracking.url, trackingSource: tracking.source
       });
     }
   });
@@ -1132,25 +1138,29 @@ function renderOutbound() {
 function statusControl(row, kind) {
   const current = clean(row.status) || "Scheduled";
   const values = STATUS_OPTIONS.includes(current) ? STATUS_OPTIONS : [current, ...STATUS_OPTIONS];
-  const relation = row.databaseId
-    ? { databaseId: row.databaseId, databaseVersion: row.databaseVersion, currentStatus: current }
-    : {
-        kind, sourceSheet: row.sourceTab || "", sourceRow: row.sourceRow || 0,
-        shipmentNo: row.shipmentNo || "", container: row.container || "", mbl: row.mbl || "", hbl: row.hbl || "",
-        pro: row.pro || "", invoice: row.invoice || "", customer: row.customer || "", shipDate: row.shipDate || "",
-        currentStatus: row.sourceStatus || ""
-      };
+  const relation = {
+    kind,
+    sourceSheet: row.sourceTab || "",
+    sourceRow: row.sourceRow || 0,
+    shipmentNo: row.shipmentNo || "", container: row.container || "", mbl: row.mbl || "", hbl: row.hbl || "",
+    pro: row.pro || "", invoice: row.invoice || "", customer: row.customer || "", shipDate: row.shipDate || "",
+    currentStatus: row.sourceStatus || current
+  };
+  if (row.databaseId) {
+    relation.databaseId = row.databaseId;
+    relation.databaseVersion = row.databaseVersion;
+  }
   const sheetWritable = COMPLETE_ENDPOINT && relation.sourceSheet && (kind !== "inbound" || relation.sourceRow);
-  const enabled = Boolean(row.databaseId || sheetWritable);
-  const title = enabled ? "Update status and synchronize the source" :
+  const enabled = Boolean((row.databaseId && globalThis.StyleKoreanDatabase?.configured?.()) || sheetWritable);
+  const title = enabled ? "Update status and synchronize linked backends" :
     (relation.sourceSheet ? "Deploy and configure the authenticated Apps Script endpoint to enable edits" : "This row has no writable source relation");
   const options = values.map((value) =>
-    '<option value="' + esc(value) + '"' + (value === current ? " selected" : "") + ">" + esc(value) + "</option>"
+    '<option value="' + esc(value) + '"' + (value === current ? " selected" : "") + "\">" + esc(value) + "</option>"
   ).join("");
   return '<label class="status-control" title="' + esc(title) + '">' +
     '<span class="visually-hidden">Change status</span>' +
     '<select class="status-select" data-status-relation="' + encodeURIComponent(JSON.stringify(relation)) + '"' +
-      (enabled ? "" : " disabled") + ">" + options + "</select>" +
+      (enabled ? "" : " disabled") + "\">" + options + "</select>" +
     '<span class="status-result" aria-live="polite"></span></label>';
 }
 
@@ -1158,22 +1168,28 @@ async function updateStatus(select) {
   const relation = JSON.parse(decodeURIComponent(select.dataset.statusRelation));
   const result = select.parentElement.querySelector(".status-result");
   const previous = relation.currentStatus || "";
+  const canDbWrite = Boolean(relation.databaseId && globalThis.StyleKoreanDatabase?.configured?.());
+  const canSheetWrite = Boolean(COMPLETE_ENDPOINT && relation.sourceSheet && (relation.kind !== "inbound" || relation.sourceRow));
   const status = select.value;
   select.disabled = true;
   result.textContent = "Saving…";
   try {
-    if (relation.databaseId) {
+    if (!canDbWrite && !canSheetWrite) throw new Error("No writable backend is configured for this row.");
+    if (canDbWrite) {
       const dbStatus = status.toLowerCase().replace(/\s+/g, "_");
       await globalThis.StyleKoreanDatabase.updateShipment(relation.databaseId, relation.databaseVersion, { status: dbStatus });
-    } else {
-      if (!COMPLETE_ENDPOINT) throw new Error("Status endpoint is not configured.");
+    }
+
+    if (canSheetWrite) {
       const response = await fetch(COMPLETE_ENDPOINT, {
         method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({ ...relation, status })
       });
+      if (!response.ok) throw new Error(`Status endpoint returned HTTP ${response.status}`);
       const data = await response.json();
       if (!data.ok) throw new Error(data.error || "Update failed");
     }
+
     result.textContent = "Saved";
     await load();
   } catch (error) {
