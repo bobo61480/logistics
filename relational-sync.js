@@ -2,7 +2,7 @@
    Set APPS_SCRIPT_URL after deploying google-apps-script/Code.gs. */
 (() => {
   const RELATIONAL = {
-    appsScriptUrl: "",
+    appsScriptUrl: window.CONFIG?.appsScriptUrl || "",
     outboundStatuses: ["SHIPPING", "DELIVERED", "RECEIVED", "COMPLETED"],
     inboundStatuses: ["N/A", "Delivered", "Customs Clearance", "FDA Review/Hold", "FWS Review/Hold", "Delayed"]
   };
@@ -40,8 +40,8 @@
     if (kind === "inbound") {
       return {
         kind,
-        sourceSheet: "IMPORTS",
-        sourceRow: Number(row["IMPORTS Source Row"]) || null,
+        sourceSheet: String(row["IMPORTS Source Sheet"] || row["Source Sheet"] || "IMPORTS"),
+        sourceRow: Number(row["IMPORTS Source Row"] || row["Source Row"]) || null,
         key: row["Shipment #"] || row["Container"] || row["HBL"] || row["MBL"],
         currentStatus: row["Inbound Status"] || ""
       };

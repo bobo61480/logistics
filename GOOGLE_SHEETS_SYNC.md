@@ -10,7 +10,7 @@ The dashboard already reads **LOGISTICS MASTER 2026**. These files add validated
 4. Execute as: **Me**.
 5. Choose the narrowest access option that works for dashboard users. Do not use anonymous public access unless you accept that anyone with the endpoint can submit allowed status changes.
 6. Copy the `/exec` deployment URL.
-7. In `relational-sync.js`, set `appsScriptUrl` to that URL and commit the change.
+7. In `app.js`, set `CONFIG.appsScriptUrl` to that URL and commit the change.
 
 ## Relations
 

@@ -97,6 +97,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .sync-bar { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 17px 4px 15px; color: var(--muted); }
 .sync-bar > div { display: flex; align-items: center; gap: 8px; }
 .sync-dot { width: 10px; height: 10px; border-radius: 50%; background: #f5b23e; box-shadow: 0 0 0 6px rgba(245,178,62,.14); }
+.status-dot { width: 10px; height: 10px; border-radius: 50%; background: #f5b23e; box-shadow: 0 0 0 6px rgba(245,178,62,.14); }
+.status-dot.good { background: #2eae6f; box-shadow: 0 0 0 6px rgba(46,174,111,.18); }
+.status-dot.bad { background: #d55353; box-shadow: 0 0 0 6px rgba(213,83,83,.18); }
+.hidden { display: none !important; }
+.relational-status { min-width: 140px; max-width: 190px; }
+.relation-disabled { display: inline-block; margin-left: 6px; color: #7d8c94; font-size: 11px; font-weight: 700; }
+.relation-result { display: inline-block; margin-left: 6px; color: #24765f; font-size: 11px; font-weight: 700; }
 
 .metrics { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 14px; }
 .metric-card { min-height: 148px; padding: 23px 22px; border: 1px solid rgba(206,220,225,.9); border-radius: 22px; background: rgba(255,255,255,.9); box-shadow: var(--shadow); display: flex; flex-direction: column; }
@@ -228,4 +235,28 @@ footer p { margin: 0; }
   .metric-card { min-height: 124px; }
   .metric-card span { font-size: 10px; }
   .sync-bar { align-items: flex-start; flex-direction: column; padding-left: 4px; }
+}
+
+.source-links-panel .panel-heading { padding-bottom: 12px; }
+.source-sheet-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 0 28px 22px;
+}
+.source-sheet-link {
+  display: inline-flex;
+  align-items: center;
+  padding: 7px 11px;
+  border-radius: 999px;
+  border: 1px solid #d5e2e8;
+  background: #f8fbfd;
+  color: #0b4f6b;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+}
+.source-sheet-link:hover {
+  border-color: #9fc7d8;
+  background: #eef6fb;
 }

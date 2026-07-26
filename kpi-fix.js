@@ -4,9 +4,11 @@
 
 (() => {
   function refreshCorrectedKpis() {
-    if (!Array.isArray(window.outboundRows)) return;
+    const rows = typeof window.getOutboundRows === "function"
+      ? window.getOutboundRows()
+      : window.outboundRows;
 
-    const rows = window.outboundRows;
+    if (!Array.isArray(rows)) return;
     const completed = /(SHIPPED|DELIVERED|RECEIVED|COMPLETED)/;
     const shipped = rows.filter(r => completed.test(String(r["STATUS"] || "").toUpperCase())).length;
 

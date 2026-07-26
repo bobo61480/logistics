@@ -6,18 +6,19 @@
 const CONFIG = {
   spreadsheetId: "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc",
   sheetUrl: "https://docs.google.com/spreadsheets/d/1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc",
+  appsScriptUrl: "",
   sheets: {
     outbound: {
       name: "All Outbound Shipping Schedule",
-      range: "A3:W7000"
+      range: "A3:W"
     },
     inbound: {
       name: "INBOUND SHIPMENTS DATA",
-      range: "A3:Q1200"
+      range: "A3:S"
     },
     importSchedule: {
       name: "INBOUND SHIPMENTS DATA",
-      range: "U238:AI260"
+      range: "U238:AI"
     }
   }
 };
@@ -57,17 +58,57 @@ const INBOUND_COLUMNS = [
   "Inbound Status"
 ];
 
+const SOURCE_SHEET_NAMES = [
+  "All Outbound Shipping Schedule",
+  "INBOUND SHIPMENTS DATA",
+  "WH Trucking Request",
+  "B2B/E-COM TRUCKING",
+  "TRANSFERS",
+  "ULTA",
+  "IHERB",
+  "IMPORTS"
+];
+
 let outboundRows = [];
 let inboundRows = [];
 let importScheduleRows = [];
+
+window.publishRows = function publishRows() {
+  window.outboundRows = outboundRows;
+  window.inboundRows = inboundRows;
+  window.importScheduleRows = importScheduleRows;
+};
+
+window.getOutboundRows = () => outboundRows;
+window.publishRows();
 
 const $ = (id) => document.getElementById(id);
 
 document.addEventListener("DOMContentLoaded", () => {
   $("sheetLink").href = CONFIG.sheetUrl;
+  renderSourceSheetLinks();
   wireEvents();
   refreshAll();
 });
+
+function renderSourceSheetLinks() {
+  const host = document.getElementById("sourceSheetLinks");
+  if (!host) return;
+
+  host.innerHTML = "";
+  SOURCE_SHEET_NAMES.forEach(sheetName => {
+    const link = document.createElement("a");
+    const url = new URL(`https://docs.google.com/spreadsheets/d/${CONFIG.spreadsheetId}/gviz/tq`);
+    url.searchParams.set("sheet", sheetName);
+    url.searchParams.set("tqx", "out:html");
+    link.href = url.toString();
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.className = "source-sheet-link";
+    link.textContent = sheetName;
+    host.appendChild(link);
+  });
+}
 
 function wireEvents() {
   $("refreshBtn").addEventListener("click", refreshAll);
@@ -95,6 +136,7 @@ async function refreshAll() {
       .filter(isInboundDataRow)
       .map(normalizeInboundRow);
     importScheduleRows = importSchedule.filter(row => hasAnyValue(row) && !containsSheetError(row));
+    window.publishRows();
 
     populateFilters();
     renderKPIs();
@@ -511,6 +553,12 @@ function decorateInboundCell(col, value, row) {
   if (col === "Carrier Type") {
     return `<span class="type-pill ${typeClass(value)}">${escapeHtml(value || "Other")}</span>`;
   }
+  if (col === "Shipment #") {
+    const sourceLink = getInboundSourceLink(row);
+    if (!sourceLink) return escapeHtml(value);
+    const label = escapeHtml(value || "Open source row");
+    return `<a class="tracking-link" href="${escapeAttribute(sourceLink)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+  }
   if (col === "Container") {
     return formatTrackingLinks(value, row);
   }
@@ -520,9 +568,18 @@ function decorateInboundCell(col, value, row) {
   return escapeHtml(value);
 }
 
+function getInboundSourceLink(row) {
+  const link = String(row?.["IMPORTS Source Link"] || row?.["Source Link"] || "").trim();
+  return /^https?:\/\//i.test(link) ? link : "";
+}
+
 function formatTrackingLinks(value, row) {
   const text = String(value || "").trim();
   if (!text) return "";
+
+  if (window.TrackingLinks?.formatTrackingLinks) {
+    return window.TrackingLinks.formatTrackingLinks(text, row);
+  }
 
   return text
     .split(/\n+/)
@@ -569,7 +626,7 @@ function getTrackingUrl(container, row) {
     return `https://esvc.smlines.com/smline/CUP_HOM_3301GS.do?_search=false&f_cmd=121&page=1&rows=10000&search_name=${encoded}&search_type=C&sidx=&sord=asc`;
   }
   if (/HDMU|(^| )HMM( |$)/.test(carrierKey)) {
-    return "https://www.hmm21.com/e-service/general/trackNTrace/TrackNTrace.do";
+    return `https://www.hmm21.com/e-service/general/trackNTrace/TrackNTrace.do?searchType=cntr&searchNo=${encoded}`;
   }
   if (/MAEU|MAERSK| MRSU| MSKU/.test(`${carrierKey} ${upperContainer}`)) {
     return `https://www.maersk.com/tracking/${encoded}`;

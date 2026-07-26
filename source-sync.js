@@ -3,11 +3,11 @@
    operational source worksheets in the browser. */
 
 const DIRECT_OUTBOUND_SOURCES = {
-  wh: { name: "WH Trucking Request", range: "A2:U815", source: "WH TRUCKING" },
-  b2b: { name: "B2B/E-COM TRUCKING", range: "A1:R853", source: "B2B/E-COM" },
-  transfers: { name: "TRANSFERS", range: "A1:M974", source: "TRANSFERS" },
-  ulta: { name: "ULTA", range: "A1:N1012", source: "ULTA" },
-  iherb: { name: "IHERB", range: "A1:M967", source: "IHERB" }
+  wh: { name: "WH Trucking Request", range: "A2:U", source: "WH TRUCKING" },
+  b2b: { name: "B2B/E-COM TRUCKING", range: "A1:R", source: "B2B/E-COM" },
+  transfers: { name: "TRANSFERS", range: "A1:M", source: "TRANSFERS" },
+  ulta: { name: "ULTA", range: "A1:N", source: "ULTA" },
+  iherb: { name: "IHERB", range: "A1:M", source: "IHERB" }
 };
 
 refreshAll = async function refreshAllFromSourceWorksheets() {
@@ -44,6 +44,7 @@ refreshAll = async function refreshAllFromSourceWorksheets() {
       .map(normalizeInboundRow)
       .filter(isOngoingInboundRow);
     importScheduleRows = importSchedule.filter(row => hasAnyValue(row) && !containsSheetError(row));
+    if (typeof window.publishRows === "function") window.publishRows();
 
     populateFilters();
     renderKPIs();
@@ -91,10 +92,10 @@ function mapWhRows(rows) {
 
 function mapB2bRows(rows) {
   return rows
-    .filter(row => clean(row["NOTE"]))
+    .filter(row => clean(row["NOTE"]) || clean(row["INVOICE"]) || clean(row["TO"]) || clean(row["PRO#"]))
     .map(row => outboundRow({
       source: "B2B/E-COM",
-      customer: row["NOTE"],
+      customer: row["NOTE"] || row["TO"] || row["INVOICE"],
       invoice: row["INVOICE"],
       address: row["TO"],
       shipDate: row["PU"],
