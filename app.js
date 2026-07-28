@@ -1351,8 +1351,9 @@ function exportOutboundCsv() {
 function renderInbound() {
   const q = $("inSearch").value.toLowerCase();
   const mode = $("modeFilter").value;
+  const showFinished = Boolean($("showInboundFinished")?.checked);
   const rows = inboundRows
-    .filter((r) => !FINISHED.has(r.status) &&
+    .filter((r) => (showFinished || Boolean(q) || !FINISHED.has(r.status)) &&
       (!mode || r.mode === mode) &&
       (!q || Object.values(r).join(" ").toLowerCase().includes(q)))
     .sort((a, b) =>
@@ -1437,6 +1438,8 @@ document.addEventListener("DOMContentLoaded", () => {
   $("showFinished").addEventListener("change", renderOutbound);
   $("inSearch").addEventListener("input", debounce(renderInbound, 120));
   $("modeFilter").addEventListener("change", renderInbound);
+  const showInboundFinishedToggle = $("showInboundFinished");
+  if (showInboundFinishedToggle) showInboundFinishedToggle.addEventListener("change", renderInbound);
   $("exportCsv").addEventListener("click", exportOutboundCsv);
   const integrationExportButton = $("exportIntegration");
   if (integrationExportButton) integrationExportButton.addEventListener("click", exportIntegrationHealth);
