@@ -946,9 +946,12 @@ async function load() {
       kpiSource: "computed"
     };
 
+    let kpiOk = true;
     try {
-      await kpiPromise;
+      const kpi = await kpiPromise;
+      if (kpi && kpi.__error) throw kpi.__error;
     } catch (e) {
+      kpiOk = false;
       console.warn("KPI block fetch logged.", e);
     }
 
