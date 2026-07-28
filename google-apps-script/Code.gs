@@ -301,4 +301,99 @@ function create30MinTrigger() {
   Logger.log("30-minute time-driven trigger created for scanAndImportWmsTruckingOrders");
 }
 
+/**
+ * Adds "WEBSITE STATUS" dropdown data validation column at the end of each source sheet
+ * in LOGISTICS MASTER 2026, applying the same validation rules as Column AE of IMPORTS.
+ * Explicitly excludes external sheets 14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I and 12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8.
+ */
+function addWebsiteStatusDropdownToAllSourceSheets() {
+  const EXCLUDED_SPREADSHEET_IDS = [
+    "14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I",
+    "12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8"
+  ];
+  
+  const targetSpreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  if (EXCLUDED_SPREADSHEET_IDS.includes(targetSpreadsheet.getId())) {
+    Logger.log("Target spreadsheet is in excluded list. Skipping.");
+    return { ok: false, error: "Spreadsheet excluded." };
+  }
+
+  const TARGET_SOURCE_TABS = [
+    "TRANSFERS",
+    "ULTA",
+    "IHERB",
+    "B2B/E-COM TRUCKING",
+    "WH Trucking Request",
+    "NATIONAL ORDER PROGRESS",
+    "Outbound Shipping Schedule",
+    "TJX/ROSS"
+  ];
+
+  const STATUS_LIST = [
+    "SCHEDULED",
+    "WORK IN PROGRESS",
+    "PENDING",
+    "SHIPPING",
+    "SHIPPED",
+    "DELIVERED",
+    "RECEIVED",
+    "CANCELLED",
+    "COMPLETED"
+  ];
+
+  const rule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(STATUS_LIST, true)
+    .setAllowInvalid(false)
+    .setHelpText("Select a valid Website Status from the list.")
+    .build();
+
+  let modifiedCount = 0;
+
+  TARGET_SOURCE_TABS.forEach((tabName) => {
+    const sheet = targetSpreadsheet.getSheetByName(tabName);
+    if (!sheet) {
+      Logger.log("Sheet tab not found: " + tabName);
+      return;
+    }
+
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 1) return;
+
+    // Detect header row and column
+    const headers = sheet.getRange(1, 1, Math.min(3, lastRow), sheet.getLastColumn()).getDisplayValues();
+    let headerRowIdx = 1;
+    let colIdx = -1;
+
+    for (let r = 0; r < headers.length; r++) {
+      const row = headers[r].map(c => String(c || "").trim().toUpperCase());
+      const foundIdx = row.indexOf("WEBSITE STATUS");
+      if (foundIdx !== -1) {
+        headerRowIdx = r + 1;
+        colIdx = foundIdx + 1;
+        break;
+      }
+    }
+
+    // If column doesn't exist, append header to last column + 1
+    if (colIdx === -1) {
+      colIdx = sheet.getLastColumn() + 1;
+      headerRowIdx = 2; // Default header row index for standard tabs
+      sheet.getRange(headerRowIdx, colIdx).setValue("WEBSITE STATUS").setFontWeight("bold");
+    }
+
+    // Apply data validation rule down the column
+    const startRow = headerRowIdx + 1;
+    const numRows = Math.max(lastRow - headerRowIdx, 100);
+    const range = sheet.getRange(startRow, colIdx, numRows, 1);
+    range.setDataValidation(rule);
+
+    modifiedCount++;
+    Logger.log("Applied WEBSITE STATUS dropdown to sheet: " + tabName + " (Col " + colIdx + ")");
+  });
+
+  SpreadsheetApp.flush();
+  return { ok: true, sheetsUpdated: modifiedCount };
+}
+
+
 
