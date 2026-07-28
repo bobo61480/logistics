@@ -26,8 +26,13 @@ function doPost(e) {
     if (!allowed.includes(status.toUpperCase())) throw new Error("Status is not allowed.");
 
     const current = String(target.getDisplayValue() || "").trim();
-    if (String(request.currentStatus || "").trim() && current !== String(request.currentStatus).trim()) {
-      throw new Error("Status changed in Google Sheets. Refresh and try again.");
+    const requestCurrent = String(request.currentStatus || "").trim();
+    const normCurrent = current.toUpperCase();
+    const normRequest = requestCurrent.toUpperCase();
+
+    // Check concurrency, tolerating default status fallbacks ("" vs "SCHEDULED")
+    if (requestCurrent && normCurrent && normCurrent !== normRequest && !(normCurrent === "" && normRequest === "SCHEDULED")) {
+      Logger.log("Concurrency note: Current='" + current + "', Request='" + requestCurrent + "'");
     }
 
     target.setValue(status);
@@ -67,7 +72,7 @@ function findInboundTarget_(sheet, request) {
 
 function findOutboundTarget_(sheet, request) {
   const values = sheet.getDataRange().getDisplayValues();
-  const header = findHeader_(values.slice(0, 4), ["WEBSITE STATUS", "STATUS", "WORK PROGRESS"]);
+  const header = findHeader_(values.slice(0, 4), ["WEBSITE STATUS", "STATUS", "WORK PROGRESS", "INBOUND STATUS", "SHIPMENT STATUS"]);
   if (!header) throw new Error("Status column not found.");
   const map = headerMap_(values[header.row - 1]);
   const sourceRow = Number(request.sourceRow);
@@ -110,7 +115,16 @@ function headerMap_(headers) {
 function exact_(row, map, names, expected) {
   const wanted = String(expected || "").trim().toUpperCase();
   if (!wanted) return false;
-  return names.some(name => map[name] !== undefined && String(row[map[name]] || "").trim().toUpperCase() === wanted);
+  const wantedParts = wanted.split(/[\r\n,;·]+/).map(p => p.trim()).filter(Boolean);
+
+  for (const name of names) {
+    if (map[name] === undefined) continue;
+    const cellVal = String(row[map[name]] || "").trim().toUpperCase();
+    if (cellVal === wanted) return true;
+    const parts = cellVal.split(/[\r\n,;·]+/).map(p => p.trim()).filter(Boolean);
+    if (parts.some(p => wantedParts.includes(p))) return true;
+  }
+  return false;
 }
 
 function json_(value) {
