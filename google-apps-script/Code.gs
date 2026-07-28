@@ -409,12 +409,17 @@ function addWebsiteStatusDropdownToAllSourceSheets() {
 }
 
 /**
- * Deletes non-essential tabs ("Dimensions", "Reference", "Summary", "Dashboard")
+ * Deletes non-essential tabs ("Dimensions", "Reference", "Summary", "Dashboard", "Outbound Data", "Inbound_Data")
  * from LOGISTICS MASTER 2026.
  */
 function deleteUnnecessaryTabs() {
   const targetSpreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
-  const tabsToDelete = ["Dimensions", "Reference", "Summary", "Dashboard", "DIMENSIONS", "REFERENCE", "SUMMARY", "DASHBOARD"];
+  const tabsToDelete = [
+    "Dimensions", "Reference", "Summary", "Dashboard",
+    "Outbound Data", "Inbound_Data", "Inbound Data",
+    "DIMENSIONS", "REFERENCE", "SUMMARY", "DASHBOARD",
+    "OUTBOUND DATA", "INBOUND_DATA", "INBOUND DATA"
+  ];
   
   let deletedCount = 0;
   tabsToDelete.forEach((tabName) => {
