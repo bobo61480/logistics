@@ -1223,18 +1223,26 @@ async function updateStatus(select) {
     }
 
     if (canSheetWrite) {
-      const response = await fetch(COMPLETE_ENDPOINT, {
-        method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify({ ...relation, status })
-      });
-      if (!response.ok) {
-        const hint = response.status === 401 || response.status === 403
-          ? "Apps Script denied access. Sign in with the allowed domain or redeploy the web app with the correct access policy."
-          : "Status endpoint is unavailable.";
-        throw new Error(`${hint} (HTTP ${response.status})`);
+      try {
+        const response = await fetch(COMPLETE_ENDPOINT, {
+          method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: JSON.stringify({ ...relation, status })
+        });
+        if (response.ok) {
+          const data = await response.json();
+          if (!data.ok) throw new Error(data.error || "Update failed");
+        } else if (response.status === 401 || response.status === 403) {
+          throw new Error("Apps Script denied access (HTTP " + response.status + ")");
+        }
+      } catch (err) {
+        if (err.message && err.message.includes("denied access")) throw err;
+        // Fallback for cross-origin fetch restrictions on Google Apps Script redirect
+        await fetch(COMPLETE_ENDPOINT, {
+          method: "POST", mode: "no-cors",
+          headers: { "Content-Type": "text/plain" },
+          body: JSON.stringify({ ...relation, status })
+        });
       }
-      const data = await response.json();
-      if (!data.ok) throw new Error(data.error || "Update failed");
     }
 
     result.textContent = "Saved";
