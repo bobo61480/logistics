@@ -2,7 +2,8 @@
 
 /**
  * Sync Runner Script: WMS Trucking Scanner & Importer
- * Scans WMS Invoice and Issues tab for rows with Shipping Method = "Trucking"
+ * Scans WMS Invoice and Issues tab for rows with Shipping Method = "Trucking",
+ * combines multiple invoices for the same customer and ship date into one entry,
  * and synchronizes new or updated entries to the WH Trucking Request tab.
  */
 
@@ -51,7 +52,7 @@ function getColValue(row, ...names) {
 
 async function runScan({ dryRun = false } = {}) {
   const timestamp = new Date().toLocaleString();
-  console.log(`[${timestamp}] Starting WMS Trucking scan... (dryRun=${dryRun})`);
+  console.log(`[${timestamp}] Starting WMS Trucking scan (multi-invoice grouping enabled)... (dryRun=${dryRun})`);
 
   let wmsRows = [];
   let wmsTabName = "WMS Invoice and Issues";
@@ -77,6 +78,27 @@ async function runScan({ dryRun = false } = {}) {
 
   console.log(`[INFO] Scanned ${wmsRows.length} total rows from '${wmsTabName}'. Found ${truckingRows.length} with Shipping Method = 'Trucking'.`);
 
+  // Group by (Customer + Ship Date)
+  const groups = new Map();
+  truckingRows.forEach((row, idx) => {
+    const invoice = getColValue(row, "INVOICE NO.", "INVOICE #", "INVOICE", "PO#");
+    const customer = getColValue(row, "CUSTOMER", "CLIENT", "ACCOUNT");
+    const shipDate = getColValue(row, "SHIP DATE", "DATE", "PU DATE");
+    const pallets = getColValue(row, "PALLET", "PLT", "QTY", "CARTONS");
+    const carrier = getColValue(row, "CARRIER", "TRUCKING");
+    const pro = getColValue(row, "PRO#", "PRO", "TRACKING#", "BOL");
+    const note = getColValue(row, "NOTE", "REMARK", "MEMO", "ISSUE");
+
+    const normCust = customer.toUpperCase().replace(/\s+/g, " ").trim();
+    const normDate = shipDate.toUpperCase().trim();
+    const groupKey = normCust ? (normCust + "___" + normDate) : ("UNKNOWN___" + idx);
+
+    if (!groups.has(groupKey)) groups.set(groupKey, []);
+    groups.get(groupKey).push({ invoice, customer, shipDate, pallets, carrier, pro, note, sourceRow: row.__sourceRow });
+  });
+
+  console.log(`[INFO] Grouped ${truckingRows.length} rows into ${groups.size} distinct customer + ship date shipments.`);
+
   // Fetch target WH Trucking Request tab
   let targetRows = [];
   try {
@@ -87,65 +109,75 @@ async function runScan({ dryRun = false } = {}) {
     return { ok: false, error: err.message };
   }
 
-  // Index existing target rows by Invoice No / Customer
+  // Index existing target rows by Customer + Ship Date or Invoice
   const existingMap = new Map();
-  targetRows.forEach((row, idx) => {
-    const inv = getColValue(row, "INVOICE NO.", "INVOICE #", "INVOICE");
-    const cust = getColValue(row, "CUSTOMER");
-    const pro = getColValue(row, "PRO#", "PRO");
-    const key = (inv || pro || (cust + "_" + idx)).toUpperCase();
-    if (key) existingMap.set(key, row);
+  targetRows.forEach((row) => {
+    const invs = getColValue(row, "INVOICE NO.", "INVOICE #", "INVOICE").split(/[\r\n,;·]+/);
+    const cust = getColValue(row, "CUSTOMER").toUpperCase().replace(/\s+/g, " ").trim();
+    const date = getColValue(row, "SHIP DATE").toUpperCase().trim();
+    if (cust && date) existingMap.set(cust + "___" + date, row);
+    invs.forEach(inv => {
+      const cleanInv = inv.trim().toUpperCase();
+      if (cleanInv) existingMap.set("INV___" + cleanInv, row);
+    });
   });
 
   const newEntries = [];
   const modifiedEntries = [];
 
-  truckingRows.forEach((row, idx) => {
-    const invoice = getColValue(row, "INVOICE NO.", "INVOICE #", "INVOICE", "PO#");
-    const customer = getColValue(row, "CUSTOMER", "CLIENT", "ACCOUNT");
-    const shipDate = getColValue(row, "SHIP DATE", "DATE", "PU DATE");
-    const pallets = getColValue(row, "PALLET", "PLT", "QTY", "CARTONS");
-    const carrier = getColValue(row, "CARRIER", "TRUCKING") || "Trucking";
-    const pro = getColValue(row, "PRO#", "PRO", "TRACKING#", "BOL");
-    const note = getColValue(row, "NOTE", "REMARK", "MEMO", "ISSUE") || "Imported from WMS Invoice & Issues";
+  groups.forEach((items, groupKey) => {
+    const customer = items[0].customer;
+    const shipDate = items[0].shipDate;
+    const combinedInvoices = [...new Set(items.map(i => i.invoice).filter(Boolean))].join("\n");
+    const combinedCarrier = items.map(i => i.carrier).find(Boolean) || "Trucking";
+    const combinedPro = [...new Set(items.map(i => i.pro).filter(Boolean))].join("\n");
+    const combinedPallets = [...new Set(items.map(i => i.pallets).filter(Boolean))].join(" · ");
+    const combinedNote = [...new Set(items.map(i => i.note).filter(Boolean))].join(" · ") || "Imported from WMS Invoice & Issues";
 
-    const lookupKey = (invoice || pro || (customer + "_" + idx)).toUpperCase();
+    const normCust = customer.toUpperCase().replace(/\s+/g, " ").trim();
+    const normDate = shipDate.toUpperCase().trim();
+    const matchKey = normCust + "___" + normDate;
+
+    let matchedRow = existingMap.get(matchKey);
+    if (!matchedRow) {
+      for (const item of items) {
+        if (item.invoice && existingMap.has("INV___" + item.invoice.toUpperCase())) {
+          matchedRow = existingMap.get("INV___" + item.invoice.toUpperCase());
+          break;
+        }
+      }
+    }
 
     const entry = {
-      sourceRow: row.__sourceRow,
       customer,
-      invoice,
       shipDate,
-      pallets,
-      carrier,
-      pro,
-      note,
+      invoice: combinedInvoices,
+      pallets: combinedPallets,
+      carrier: combinedCarrier,
+      pro: combinedPro,
+      note: combinedNote,
       status: "WORK IN PROGRESS"
     };
 
-    if (existingMap.has(lookupKey)) {
-      const existing = existingMap.get(lookupKey);
-      const existingStatus = getColValue(existing, "STATUS");
-      if (!existingStatus) {
-        modifiedEntries.push({ ...entry, existingRow: existing.__sourceRow });
+    if (matchedRow) {
+      const curInvs = getColValue(matchedRow, "INVOICE NO.", "INVOICE #", "INVOICE");
+      if (curInvs !== combinedInvoices) {
+        modifiedEntries.push({ ...entry, existingRow: matchedRow.__sourceRow });
       }
     } else {
       newEntries.push(entry);
     }
   });
 
-  console.log(`[RESULT] Scan complete: ${newEntries.length} new entries, ${modifiedEntries.length} modified entries to import.`);
-  if (newEntries.length > 0) {
-    console.log(`[NEW ENTRIES]:`, newEntries);
-  }
-  if (modifiedEntries.length > 0) {
-    console.log(`[MODIFIED ENTRIES]:`, modifiedEntries);
-  }
+  console.log(`[RESULT] Scan complete: ${newEntries.length} new entries to append, ${modifiedEntries.length} entries to update.`);
+  if (newEntries.length > 0) console.log(`[NEW COMBINED ENTRIES]:`, newEntries);
+  if (modifiedEntries.length > 0) console.log(`[MODIFIED COMBINED ENTRIES]:`, modifiedEntries);
 
   return {
     ok: true,
     scanned: wmsRows.length,
     truckingCount: truckingRows.length,
+    groups: groups.size,
     newCount: newEntries.length,
     modifiedCount: modifiedEntries.length,
     newEntries,

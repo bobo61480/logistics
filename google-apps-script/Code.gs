@@ -105,7 +105,8 @@ function json_(value) {
 
 /**
  * Periodically scans "WMS Invoice and Issues" (or "WMS Invoice & Issues") sheet
- * for rows where "Shipping Method" is "Trucking", and imports new/modified rows into "WH Trucking Request".
+ * for rows where "Shipping Method" is "Trucking", combines multiple invoices
+ * for the same customer & ship date into one entry, and imports/updates into "WH Trucking Request".
  */
 function scanAndImportWmsTruckingOrders() {
   const lock = LockService.getScriptLock();
@@ -159,24 +160,8 @@ function scanAndImportWmsTruckingOrders() {
       return { ok: false, error: "Shipping Method column missing." };
     }
 
-    // Load target sheet existing rows to avoid duplicates
-    const targetData = targetSheet.getDataRange().getDisplayValues();
-    const targetHeaders = targetData.length > 0 ? targetData[1] || targetData[0] : [];
-    const targetMap = headerMap_(targetHeaders);
-
-    const existingKeys = new Map(); // key -> row index 1-based
-    for (let r = 2; r < targetData.length; r++) {
-      const row = targetData[r];
-      const inv = exactVal_(row, targetMap, ["INVOICE NO.", "INVOICE #", "INVOICE"]);
-      const cust = exactVal_(row, targetMap, ["CUSTOMER"]);
-      const pro = exactVal_(row, targetMap, ["PRO#", "PRO", "TRACKING#"]);
-      const key = (inv || pro || (cust + "_" + r)).toUpperCase();
-      if (key) existingKeys.set(key, r + 1);
-    }
-
-    let importedCount = 0;
-    let updatedCount = 0;
-
+    // Group Trucking entries by (Customer + Ship Date)
+    const groups = new Map();
     for (let r = headerRowIdx + 1; r < sourceData.length; r++) {
       const row = sourceData[r];
       const shipMethod = String(row[shipMethodColIdx] || "").trim();
@@ -186,44 +171,97 @@ function scanAndImportWmsTruckingOrders() {
       const customer = customerColIdx !== -1 ? String(row[customerColIdx] || "").trim() : "";
       const shipDate = shipDateColIdx !== -1 ? String(row[shipDateColIdx] || "").trim() : "";
       const pallets = palletColIdx !== -1 ? String(row[palletColIdx] || "").trim() : "";
-      const carrier = carrierColIdx !== -1 ? String(row[carrierColIdx] || "").trim() : "Trucking";
+      const carrier = carrierColIdx !== -1 ? String(row[carrierColIdx] || "").trim() : "";
       const pro = proColIdx !== -1 ? String(row[proColIdx] || "").trim() : "";
-      const note = noteColIdx !== -1 ? String(row[noteColIdx] || "").trim() : "Imported from WMS Invoice & Issues";
+      const note = noteColIdx !== -1 ? String(row[noteColIdx] || "").trim() : "";
 
-      const lookupKey = (invoice || pro || (customer + "_" + r)).toUpperCase();
+      const normCust = customer.toUpperCase().replace(/\s+/g, " ").trim();
+      const normDate = shipDate.toUpperCase().trim();
+      const groupKey = normCust ? (normCust + "___" + normDate) : ("UNKNOWN___" + r);
 
-      if (existingKeys.has(lookupKey)) {
-        // Update existing row if needed
-        const targetRowIdx = existingKeys.get(lookupKey);
-        const targetRowRange = targetSheet.getRange(targetRowIdx, 1, 1, Math.max(targetHeaders.length, 21));
-        const currentVals = targetRowRange.getDisplayValues()[0];
-        
-        // Update fields if empty or changed
-        if (targetMap["STATUS"] !== undefined && !currentVals[targetMap["STATUS"]]) {
-          targetSheet.getRange(targetRowIdx, targetMap["STATUS"] + 1).setValue("WORK IN PROGRESS");
-          updatedCount++;
+      if (!groups.has(groupKey)) groups.set(groupKey, []);
+      groups.get(groupKey).push({ invoice, customer, shipDate, pallets, carrier, pro, note, rowIndex: r + 1 });
+    }
+
+    // Load target sheet existing rows to avoid duplicates
+    const targetData = targetSheet.getDataRange().getDisplayValues();
+    const targetHeaders = targetData.length > 0 ? targetData[1] || targetData[0] : [];
+    const targetMap = headerMap_(targetHeaders);
+
+    const existingRowsMap = new Map(); // key -> row index (1-based)
+    for (let r = 2; r < targetData.length; r++) {
+      const row = targetData[r];
+      const invs = exactVal_(row, targetMap, ["INVOICE NO.", "INVOICE #", "INVOICE"]).split(/[\r\n,;·]+/);
+      const cust = exactVal_(row, targetMap, ["CUSTOMER"]).toUpperCase().replace(/\s+/g, " ").trim();
+      const date = exactVal_(row, targetMap, ["SHIP DATE"]).toUpperCase().trim();
+      
+      if (cust && date) existingRowsMap.set(cust + "___" + date, r + 1);
+      invs.forEach(inv => {
+        const cleanInv = inv.trim().toUpperCase();
+        if (cleanInv) existingRowsMap.set("INV___" + cleanInv, r + 1);
+      });
+    }
+
+    let importedCount = 0;
+    let updatedCount = 0;
+
+    groups.forEach((items, groupKey) => {
+      const customer = items[0].customer;
+      const shipDate = items[0].shipDate;
+      const combinedInvoices = [...new Set(items.map(i => i.invoice).filter(Boolean))].join("\n");
+      const combinedCarrier = items.map(i => i.carrier).find(Boolean) || "Trucking";
+      const combinedPro = [...new Set(items.map(i => i.pro).filter(Boolean))].join("\n");
+      const combinedPallets = [...new Set(items.map(i => i.pallets).filter(Boolean))].join(" · ");
+      const combinedNote = [...new Set(items.map(i => i.note).filter(Boolean))].join(" · ") || "Imported from WMS Invoice & Issues";
+
+      const normCust = customer.toUpperCase().replace(/\s+/g, " ").trim();
+      const normDate = shipDate.toUpperCase().trim();
+      const matchKey = normCust + "___" + normDate;
+      
+      let matchedRowIdx = existingRowsMap.get(matchKey);
+      if (!matchedRowIdx) {
+        for (const item of items) {
+          if (item.invoice && existingRowsMap.has("INV___" + item.invoice.toUpperCase())) {
+            matchedRowIdx = existingRowsMap.get("INV___" + item.invoice.toUpperCase());
+            break;
+          }
+        }
+      }
+
+      if (matchedRowIdx) {
+        // Update existing entry if invoice list or fields changed
+        const rowRange = targetSheet.getRange(matchedRowIdx, 1, 1, Math.max(targetHeaders.length, 21));
+        const currentVals = rowRange.getDisplayValues()[0];
+
+        const invCol = targetMap["INVOICE NO."] !== undefined ? targetMap["INVOICE NO."] : targetMap["INVOICE #"];
+        if (invCol !== undefined && combinedInvoices) {
+          const curInvs = String(currentVals[invCol] || "").trim();
+          if (curInvs !== combinedInvoices) {
+            targetSheet.getRange(matchedRowIdx, invCol + 1).setValue(combinedInvoices);
+            updatedCount++;
+          }
         }
       } else {
-        // Append new row to WH Trucking Request
+        // Append new combined entry for customer + ship date
         const newRow = new Array(Math.max(targetHeaders.length, 21)).fill("");
         if (targetMap["CUSTOMER"] !== undefined) newRow[targetMap["CUSTOMER"]] = customer;
-        if (targetMap["INVOICE NO."] !== undefined) newRow[targetMap["INVOICE NO."]] = invoice;
-        else if (targetMap["INVOICE #"] !== undefined) newRow[targetMap["INVOICE #"]] = invoice;
+        if (targetMap["INVOICE NO."] !== undefined) newRow[targetMap["INVOICE NO."]] = combinedInvoices;
+        else if (targetMap["INVOICE #"] !== undefined) newRow[targetMap["INVOICE #"]] = combinedInvoices;
         if (targetMap["SHIP DATE"] !== undefined) newRow[targetMap["SHIP DATE"]] = shipDate;
-        if (targetMap["PALLET TYPE"] !== undefined) newRow[targetMap["PALLET TYPE"]] = pallets;
-        if (targetMap["CARRIER"] !== undefined) newRow[targetMap["CARRIER"]] = carrier;
-        if (targetMap["PRO#"] !== undefined) newRow[targetMap["PRO#"]] = pro;
-        if (targetMap["NOTE"] !== undefined) newRow[targetMap["NOTE"]] = note;
+        if (targetMap["PALLET TYPE"] !== undefined) newRow[targetMap["PALLET TYPE"]] = combinedPallets;
+        if (targetMap["CARRIER"] !== undefined) newRow[targetMap["CARRIER"]] = combinedCarrier;
+        if (targetMap["PRO#"] !== undefined) newRow[targetMap["PRO#"]] = combinedPro;
+        if (targetMap["NOTE"] !== undefined) newRow[targetMap["NOTE"]] = combinedNote;
         if (targetMap["STATUS"] !== undefined) newRow[targetMap["STATUS"]] = "WORK IN PROGRESS";
 
         targetSheet.appendRow(newRow);
         importedCount++;
       }
-    }
+    });
 
     SpreadsheetApp.flush();
-    Logger.log("WMS Scan completed. Imported: " + importedCount + ", Updated: " + updatedCount);
-    return { ok: true, imported: importedCount, updated: updatedCount };
+    Logger.log("WMS Scan completed. Combined Groups: " + groups.size + ", Imported: " + importedCount + ", Updated: " + updatedCount);
+    return { ok: true, groups: groups.size, imported: importedCount, updated: updatedCount };
   } catch (err) {
     Logger.log("Error in scanAndImportWmsTruckingOrders: " + err.message);
     return { ok: false, error: err.message };
@@ -255,4 +293,5 @@ function create30MinTrigger() {
     .create();
   Logger.log("30-minute time-driven trigger created for scanAndImportWmsTruckingOrders");
 }
+
 
