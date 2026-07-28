@@ -11,7 +11,11 @@ function doPost(e) {
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
-    const request = JSON.parse((e && e.postData && e.postData.contents) || "{}");
+    let rawContents = (e && e.postData && e.postData.contents) || "";
+    if (!rawContents && e && e.parameter && e.parameter.postData) {
+      rawContents = e.parameter.postData;
+    }
+    const request = JSON.parse(rawContents || "{}");
     validateRequest_(request);
     const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
     const sheet = spreadsheet.getSheetByName(request.sourceSheet);

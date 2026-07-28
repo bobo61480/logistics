@@ -1206,6 +1206,67 @@ function statusControl(row, kind) {
     '<span class="status-result" aria-live="polite"></span></label>';
 }
 
+async function postToAppsScript(payload) {
+  const body = JSON.stringify(payload);
+  
+  // 1. Primary Attempt: standard fetch
+  try {
+    const res = await fetch(COMPLETE_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body
+    });
+    if (res.ok) {
+      const data = await res.json().catch(() => ({ ok: true }));
+      if (data && data.ok === false) throw new Error(data.error || "Update failed");
+      return;
+    }
+  } catch (err) {
+    if (err.message && err.message.includes("denied access")) throw err;
+  }
+
+  // 2. Secondary Attempt: no-cors fetch
+  try {
+    await fetch(COMPLETE_ENDPOINT, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "text/plain" },
+      body
+    });
+    return;
+  } catch (e) {}
+
+  // 3. Ultimate Fallback: Form Submission via hidden iframe (bypasses browser CORS completely)
+  return new Promise((resolve) => {
+    let iframe = document.getElementById("appsScriptIframe");
+    if (!iframe) {
+      iframe = document.createElement("iframe");
+      iframe.id = "appsScriptIframe";
+      iframe.name = "appsScriptIframe";
+      iframe.style.display = "none";
+      document.body.appendChild(iframe);
+    }
+    
+    const form = document.createElement("form");
+    form.method = "POST";
+    form.action = COMPLETE_ENDPOINT;
+    form.target = "appsScriptIframe";
+    
+    const input = document.createElement("input");
+    input.type = "hidden";
+    input.name = "postData";
+    input.value = body;
+    form.appendChild(input);
+
+    document.body.appendChild(form);
+    form.submit();
+    setTimeout(() => {
+      form.remove();
+      resolve();
+    }, 1200);
+  });
+}
+
 async function updateStatus(select) {
   const relation = JSON.parse(decodeURIComponent(select.dataset.statusRelation));
   const result = select.parentElement.querySelector(".status-result");
@@ -1223,26 +1284,7 @@ async function updateStatus(select) {
     }
 
     if (canSheetWrite) {
-      try {
-        const response = await fetch(COMPLETE_ENDPOINT, {
-          method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
-          body: JSON.stringify({ ...relation, status })
-        });
-        if (response.ok) {
-          const data = await response.json();
-          if (!data.ok) throw new Error(data.error || "Update failed");
-        } else if (response.status === 401 || response.status === 403) {
-          throw new Error("Apps Script denied access (HTTP " + response.status + ")");
-        }
-      } catch (err) {
-        if (err.message && err.message.includes("denied access")) throw err;
-        // Fallback for cross-origin fetch restrictions on Google Apps Script redirect
-        await fetch(COMPLETE_ENDPOINT, {
-          method: "POST", mode: "no-cors",
-          headers: { "Content-Type": "text/plain" },
-          body: JSON.stringify({ ...relation, status })
-        });
-      }
+      await postToAppsScript({ ...relation, status });
     }
 
     result.textContent = "Saved";
