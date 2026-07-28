@@ -117,12 +117,13 @@ function parseGviz(text) {
   return payload.table;
 }
 
-async function fetchTable(tab, range, withHeaders = true, targetSheetId = SHEET_ID) {
+async function fetchTable(tab, range, withHeaders = true, targetSheetId = SHEET_ID, gid) {
   const fileId = targetSheetId || SHEET_ID;
   const u = new URL(`https://docs.google.com/spreadsheets/d/${fileId}/gviz/tq`);
   u.searchParams.set("tqx", "out:json");
   u.searchParams.set("headers", withHeaders ? "1" : "0");
-  if (tab) u.searchParams.set("sheet", tab);
+  if (gid) u.searchParams.set("gid", String(gid));
+  else if (tab) u.searchParams.set("sheet", tab);
   if (range) u.searchParams.set("range", range);
 
   let lastError = null;
@@ -895,7 +896,7 @@ async function load() {
     /* FIX: catch attached at creation, not at await — otherwise a fast KPI
        failure fires an unhandledrejection while the main batch is in flight. */
     const kpiPromise = fetchKpis().catch((e) => ({ __error: e }));
-    const results = await Promise.allSettled(SOURCES.map((s) => fetchTable(s.tab, s.range, true, s.sheetId)));
+    const results = await Promise.allSettled(SOURCES.map((s) => fetchTable(s.tab, s.range, true, s.sheetId, s.gid)));
     const tables = results.map((r) => (r.status === "fulfilled" ? r.value : { cols: [], rows: [] }));
     const mapped = tables.map(objects);
 
