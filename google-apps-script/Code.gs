@@ -408,5 +408,28 @@ function addWebsiteStatusDropdownToAllSourceSheets() {
   return { ok: true, sheetsUpdated: modifiedCount };
 }
 
+/**
+ * Deletes non-essential tabs ("Dimensions", "Reference", "Summary", "Dashboard")
+ * from LOGISTICS MASTER 2026.
+ */
+function deleteUnnecessaryTabs() {
+  const targetSpreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const tabsToDelete = ["Dimensions", "Reference", "Summary", "Dashboard", "DIMENSIONS", "REFERENCE", "SUMMARY", "DASHBOARD"];
+  
+  let deletedCount = 0;
+  tabsToDelete.forEach((tabName) => {
+    const sheet = targetSpreadsheet.getSheetByName(tabName);
+    if (sheet) {
+      targetSpreadsheet.deleteSheet(sheet);
+      deletedCount++;
+      Logger.log("Deleted non-essential sheet tab: " + tabName);
+    }
+  });
+
+  SpreadsheetApp.flush();
+  return { ok: true, tabsDeleted: deletedCount };
+}
+
+
 
 
