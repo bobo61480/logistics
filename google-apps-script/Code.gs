@@ -5,6 +5,8 @@ const OUTBOUND_STATUS = ["", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "SHIPPI
 const INBOUND_STATUS = ["", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "SHIPPING", "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED", "N/A", "Customs Clearance", "FDA Review/Hold", "FWS Review/Hold", "Delayed"];
 const ALLOWED_SHEETS = ["WH Trucking Request", "B2B/E-COM TRUCKING", "TRANSFERS", "ULTA", "IHERB", "IMPORTS", "NATIONAL ORDER PROGRESS", "Outbound Shipping Schedule", "TJX/ROSS"];
 
+const COMPLETED_STATUSES = ["SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED"];
+
 function doPost(e) {
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
@@ -29,8 +31,19 @@ function doPost(e) {
     }
 
     target.setValue(status);
+
+    // Format row in Google Sheets: Grey out completed rows, reset active rows
+    const rowIdx = target.getRow();
+    const rowRange = sheet.getRange(rowIdx, 1, 1, Math.max(sheet.getLastColumn(), 1));
+    const isCompleted = COMPLETED_STATUSES.includes(status.toUpperCase());
+    if (isCompleted) {
+      rowRange.setBackground("#E8EAED").setFontColor("#5F6368");
+    } else {
+      rowRange.setBackground(null).setFontColor(null);
+    }
+
     SpreadsheetApp.flush();
-    return json_({ ok: true, sheet: sheet.getName(), row: target.getRow(), status });
+    return json_({ ok: true, sheet: sheet.getName(), row: rowIdx, status, isCompleted });
   } catch (error) {
     return json_({ ok: false, error: String(error.message || error) });
   } finally {
@@ -47,14 +60,14 @@ function findInboundTarget_(sheet, request) {
   const row = Number(request.sourceRow);
   if (!Number.isInteger(row) || row < 3 || row > sheet.getLastRow()) throw new Error("Invalid IMPORTS source row.");
   const headers = sheet.getRange(1, 1, 3, sheet.getLastColumn()).getDisplayValues();
-  const header = findHeader_(headers, ["STATUS", "INBOUND STATUS"]);
+  const header = findHeader_(headers, ["WEBSITE STATUS", "STATUS", "INBOUND STATUS", "SHIPMENT STATUS"]);
   if (!header) throw new Error("Inbound status column not found.");
   return sheet.getRange(row, header.column);
 }
 
 function findOutboundTarget_(sheet, request) {
   const values = sheet.getDataRange().getDisplayValues();
-  const header = findHeader_(values.slice(0, 4), ["STATUS"]);
+  const header = findHeader_(values.slice(0, 4), ["WEBSITE STATUS", "STATUS", "WORK PROGRESS"]);
   if (!header) throw new Error("Status column not found.");
   const map = headerMap_(values[header.row - 1]);
   const sourceRow = Number(request.sourceRow);
