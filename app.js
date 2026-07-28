@@ -208,6 +208,24 @@ function money(v) {
   const m = clean(v).replace(/,/g, "").match(/-?\d+(?:\.\d+)?/g);
   return m ? m.reduce((s, n) => s + Number(n), 0) : 0;
 }
+function parseMonetaryRate(v) {
+  const s = clean(v);
+  if (!s || /cancel/i.test(s)) return 0;
+  if (s.includes("$")) {
+    const matches = [...s.matchAll(/\$\s*(\d+(?:,\d{3})*(?:\.\d+)?)/g)];
+    if (matches.length) return matches.reduce((sum, m) => sum + Number(m[1].replace(/,/g, "")), 0);
+  }
+  const trailingMatch = s.match(/(?:-|:|\$)\s*(\d+(?:\.\d{1,2})?)\s*$/);
+  if (trailingMatch) {
+    const val = Number(trailingMatch[1]);
+    if (!isNaN(val) && val > 0 && val <= 50000) return val;
+  }
+  if (/^\s*\$?\s*\d+(?:,\d{3})*(?:\.\d{1,2})?\s*$/.test(s)) {
+    const val = Number(s.replace(/[\$,]/g, ""));
+    if (!isNaN(val) && val > 0 && val <= 50000) return val;
+  }
+  return 0;
+}
 function classifyStatus(v) {
   v = String(v || "").toLowerCase();
   if (/cancel/.test(v)) return "Cancelled";
@@ -564,12 +582,26 @@ function pushOutbound(source, r, mapped, excludedFn) {
     weight: col(r, "WEIGHT (LBS)", "WEIGHT"),
     destination: clean(mapped.destination || ""),
     rate: (() => {
-      for (const n of ["INVOICE AMOUNT", "RATE QUOTE AMOUNT", "RATE QUOTE", "QUOTE AMOUNT", "QUOTE", "RATE"]) {
-        const v = col(r, n);
-        if (v) return money(v);
+      const srcNorm = String(source || "").toUpperCase();
+      const rateVal = parseMonetaryRate(col(r, "RATE", "RATE QUOTE", "RATE QUOTE AMOUNT", "INVOICE AMOUNT", "QUOTE AMOUNT", "QUOTE"));
+
+      if (srcNorm.includes("B2B") || srcNorm.includes("IHERB")) {
+        return rateVal;
       }
-      const inv = col(r, "INVOICE");
-      return inv.includes("$") ? money(inv) : 0;
+      if (srcNorm.includes("TRANSFER")) {
+        const invVal = parseMonetaryRate(col(r, "INVOICE"));
+        return invVal || rateVal;
+      }
+      if (srcNorm.includes("ULTA")) {
+        const invVal = parseMonetaryRate(col(r, "INVOICE", "INVOICE AMOUNT"));
+        return invVal || rateVal;
+      }
+      if (srcNorm.includes("WH TRUCKING")) {
+        const invVal = parseMonetaryRate(col(r, "INVOICE AMOUNT", "FREIGHT INVOICE", "INVOICE NO.", "INVOICE #"));
+        return invVal || rateVal;
+      }
+      const generalInv = parseMonetaryRate(col(r, "INVOICE", "INVOICE AMOUNT", "INVOICE NO."));
+      return rateVal || generalInv;
     })(),
     status: rowStatus
   });
