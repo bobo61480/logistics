@@ -338,6 +338,20 @@ function isInboundShipment(r) {
   return useful(r) && hasShipmentIdentifier && !hasParcelTracking && !sectionLabel && !isPlanningRow;
 }
 
+function portOfLoading(r) {
+  const explicit = col(r, "POL", "PORT OF LOADING", "ORIGIN", "POL / ORIGIN", "LOADING PORT");
+  if (explicit && !/IMPORTS|KOREA\s*\/\s*ASIA|PLANNING\s*GRID/i.test(explicit)) {
+    return explicit;
+  }
+  const rowText = Object.values(r || {}).join(" ").toUpperCase();
+  if (/INCHEON|ICN/.test(rowText)) return "INCHEON";
+  if (/PUSAN|BUSAN|KRPUS/.test(rowText)) return "BUSAN";
+  if (/SHANGHAI|CNSHA/.test(rowText)) return "SHANGHAI";
+  if (/NINGBO|CNNGB/.test(rowText)) return "NINGBO";
+  if (/YANTIAN|CNYTN/.test(rowText)) return "YANTIAN";
+  return "BUSAN";
+}
+
 function mapInbound(rows) {
   return rows.filter(isInboundShipment).map((r) => {
     const containerRaw = col(r, "CONTAINER", "CONTAINER RAW (SYSTEM)");
@@ -360,7 +374,7 @@ function mapInbound(rows) {
       carrier: sourceCarrier || (isAir ? vesselOrFlight || "Air freight" : tracking.carrier || "Ocean freight"),
       trackingUrl: tracking.url,
       trackingSource: tracking.source,
-      origin: col(r, "ORIGIN", "POL", "PORT OF LOADING") || "Korea / Asia",
+      origin: portOfLoading(r),
       destination,
       sourceTab: "IMPORTS",
       sourceRow: r.__sourceRow || 0,
@@ -436,7 +450,7 @@ function mapInboundPlanningGrid(table) {
         sourceTab: "IMPORTS",
         sourceRow: 0,
         sourceStatus: "",
-        origin: "IMPORTS planning grid",
+        origin: "BUSAN",
         destination: "LA / Long Beach",
         /* The row state is authoritative. A column heading such as COMPLETED
            describes the planner lane/date, not every shipment beneath it. */
@@ -464,7 +478,7 @@ function mergeInboundPlanning(detailed, planned) {
       eta: plan.eta || current.eta,
       shipmentNo: current.shipmentNo || plan.shipmentNo,
       status: FINISHED.has(plan.status) ? plan.status : current.status,
-      origin: [current.origin, "IMPORTS planning grid"].filter(Boolean).join(" · ")
+      origin: (current.origin && !/IMPORTS|KOREA\s*\/\s*ASIA/i.test(current.origin)) ? current.origin : (plan.origin || "BUSAN")
     };
   });
   return merged;
