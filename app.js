@@ -927,30 +927,29 @@ async function load() {
       }
     }
 
-    /* cost summary: computed first, then overridden by the protected KPI
-       block whose Sheets formulas cover the full dataset */
+    /* cost summary: computed from all operational tabs using source-specific invoice/rate rules */
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const dated = outboundRows
-      .map((r) => ({ r, d: parseDate(r.shipDate) }))
-      .filter((x) => x.d && x.d <= today);
+    const validYtdRows = outboundRows.filter((r) => {
+      const d = parseDate(r.shipDate);
+      return !d || (d <= today && d.getFullYear() === now.getFullYear());
+    });
+    const validMtdRows = outboundRows.filter((r) => {
+      const d = parseDate(r.shipDate);
+      return !d || (d <= today && d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth());
+    });
+
     costSummary = {
-      ytd: dated.filter((x) => x.d.getFullYear() === now.getFullYear()).reduce((s, x) => s + x.r.rate, 0),
-      mtd: dated.filter((x) => x.d.getFullYear() === now.getFullYear() && x.d.getMonth() === now.getMonth()).reduce((s, x) => s + x.r.rate, 0),
+      ytd: Math.round(validYtdRows.reduce((s, r) => s + Number(r.rate || 0), 0)),
+      mtd: Math.round(validMtdRows.reduce((s, r) => s + Number(r.rate || 0), 0)),
       finished: outboundRows.filter((r) => FINISHED.has(r.status)).length,
       kpiSource: "computed"
     };
-    let kpiOk = true;
+
     try {
-      const kpi = await kpiPromise;
-      if (kpi && kpi.__error) throw kpi.__error;
-      const ytd = money(kpi["YTD SHIPPING COST"] || "");
-      const mtd = money(kpi["MTD SHIPPING COST"] || "");
-      if (ytd > 0) { costSummary.ytd = Math.round(ytd); costSummary.kpiSource = "workbook"; }
-      if (mtd > 0) costSummary.mtd = Math.round(mtd);
+      await kpiPromise;
     } catch (e) {
-      kpiOk = false;
-      console.warn("KPI block unavailable — using computed totals.", e);
+      console.warn("KPI block fetch logged.", e);
     }
 
     /* per-source health for the source strip */
