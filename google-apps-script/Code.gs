@@ -1,4 +1,5 @@
 const SPREADSHEET_ID = "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc";
+const WMS_SPREADSHEET_ID = "14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I";
 
 const OUTBOUND_STATUS = ["", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "SHIPPING", "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED"];
 const INBOUND_STATUS = ["", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "SHIPPING", "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED", "N/A", "Customs Clearance", "FDA Review/Hold", "FWS Review/Hold", "Delayed"];
@@ -104,7 +105,7 @@ function json_(value) {
 }
 
 /**
- * Periodically scans "WMS Invoice and Issues" (or "WMS Invoice & Issues") sheet
+ * Periodically scans external "WMS Invoice and Issues" sheet (14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I)
  * for rows where "Shipping Method" is "Trucking", combines multiple invoices
  * for the same customer & ship date into one entry, and imports/updates into "WH Trucking Request".
  */
@@ -112,11 +113,16 @@ function scanAndImportWmsTruckingOrders() {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) return { ok: false, error: "Lock timeout" };
   try {
-    const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
-    const sourceSheet = spreadsheet.getSheetByName("WMS Invoice and Issues") ||
-                        spreadsheet.getSheetByName("WMS Invoice & Issues") ||
-                        spreadsheet.getSheetByName("WMS INVOICE AND ISSUES");
-    const targetSheet = spreadsheet.getSheetByName("WH Trucking Request");
+    let wmsSpreadsheet;
+    try {
+      wmsSpreadsheet = SpreadsheetApp.openById(WMS_SPREADSHEET_ID);
+    } catch (e) {
+      wmsSpreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+    }
+    const targetSpreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+
+    const sourceSheet = wmsSpreadsheet.getSheets()[0]; // First sheet in WMS workbook
+    const targetSheet = targetSpreadsheet.getSheetByName("WH Trucking Request");
     if (!sourceSheet || !targetSheet) {
       Logger.log("WMS Source sheet or WH Trucking Request sheet not found.");
       return { ok: false, error: "Source or Target sheet missing." };
@@ -124,6 +130,7 @@ function scanAndImportWmsTruckingOrders() {
 
     const sourceData = sourceSheet.getDataRange().getDisplayValues();
     if (sourceData.length < 2) return { ok: true, imported: 0, updated: 0 };
+
 
     // Locate header row in WMS sheet
     let headerRowIdx = -1;

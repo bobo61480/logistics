@@ -2,42 +2,30 @@
 
 /**
  * Sync Runner Script: WMS Trucking Scanner & Importer
- * Scans WMS Invoice and Issues tab for rows with Shipping Method = "Trucking",
- * combines multiple invoices for the same customer and ship date into one entry,
- * and synchronizes new or updated entries to the WH Trucking Request tab.
+ * Scans WMS Invoice and Issues spreadsheet (14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I)
+ * for rows with Shipping Method = "Trucking", combines multiple invoices for the same customer
+ * and ship date into one entry, and synchronizes new/updated entries to the WH Trucking Request tab.
  */
 
-const SHEET_ID = process.env.SHEET_ID || "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc";
+const TARGET_SHEET_ID = process.env.TARGET_SHEET_ID || "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc";
+const WMS_SHEET_ID = process.env.WMS_SHEET_ID || "14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I";
 
-async function fetchGvizTable(tabName, range = "") {
-  const url = new URL(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq`);
+async function fetchGvizTable(sheetId, tabName = "", range = "", headersVal = "1") {
+  const url = new URL(`https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq`);
   url.searchParams.set("tqx", "out:json");
-  url.searchParams.set("headers", "1");
-  url.searchParams.set("sheet", tabName);
+  url.searchParams.set("headers", headersVal);
+  if (tabName) url.searchParams.set("sheet", tabName);
   if (range) url.searchParams.set("range", range);
 
   const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) throw new Error(`HTTP ${res.status} fetching sheet '${tabName}'`);
+  if (!res.ok) throw new Error(`HTTP ${res.status} fetching sheet '${sheetId}' / '${tabName}'`);
   const text = await res.text();
   const a = text.indexOf("{");
   const b = text.lastIndexOf("}");
-  if (a < 0 || b < 0) throw new Error(`Invalid GViz payload for '${tabName}'`);
+  if (a < 0 || b < 0) throw new Error(`Invalid GViz payload for sheet '${sheetId}'`);
   const payload = JSON.parse(text.slice(a, b + 1));
-  if (payload.status !== "ok") throw new Error(`GViz error on '${tabName}': ${payload.status}`);
+  if (payload.status !== "ok") throw new Error(`GViz error on '${sheetId}': ${payload.status}`);
   return payload.table;
-}
-
-function tableToObjects(table) {
-  const headers = table.cols.map((c, i) =>
-    (c.label || `COL_${i}`).toUpperCase().replace(/\s+/g, " ").trim()
-  );
-  return table.rows.map((r, rowIndex) => ({
-    __sourceRow: rowIndex + 2,
-    ...Object.fromEntries(headers.map((h, i) => {
-      const c = r.c?.[i];
-      return [h, String(c ? (c.f ?? c.v ?? "") : "").trim()];
-    }))
-  }));
 }
 
 function getColValue(row, ...names) {
@@ -52,42 +40,57 @@ function getColValue(row, ...names) {
 
 async function runScan({ dryRun = false } = {}) {
   const timestamp = new Date().toLocaleString();
-  console.log(`[${timestamp}] Starting WMS Trucking scan (multi-invoice grouping enabled)... (dryRun=${dryRun})`);
+  console.log(`[${timestamp}] Starting WMS Trucking scan from WMS Sheet ${WMS_SHEET_ID}... (dryRun=${dryRun})`);
 
   let wmsRows = [];
-  let wmsTabName = "WMS Invoice and Issues";
   try {
-    const table = await fetchGvizTable(wmsTabName);
-    wmsRows = tableToObjects(table);
+    const table = await fetchGvizTable(WMS_SHEET_ID, "", "", "0");
+    const rawRows = table.rows || [];
+    
+    // Header is on Row 2 (idx 1)
+    let headerRowIdx = 1;
+    if (rawRows.length <= headerRowIdx) throw new Error("WMS sheet has fewer than 2 rows.");
+    const headerCols = rawRows[headerRowIdx].c.map(c => c ? String(c.f ?? c.v ?? "").trim().toUpperCase() : "");
+
+    wmsRows = rawRows.slice(headerRowIdx + 1).map((r, rowIndex) => {
+      const vals = r.c ? r.c.map(c => c ? String(c.f ?? c.v ?? "").trim() : "") : [];
+      const rowObj = { __sourceRow: rowIndex + headerRowIdx + 2 };
+      headerCols.forEach((h, i) => {
+        const key = h || `COL_${i}`;
+        rowObj[key] = vals[i] || "";
+      });
+      // Fallback positional indexing if header labels vary
+      rowObj["_DATE"] = vals[0] || "";
+      rowObj["_INVOICE"] = vals[1] || "";
+      rowObj["_CUSTOMER"] = vals[2] || "";
+      rowObj["_SALES"] = vals[3] || "";
+      rowObj["_SHIPDATE"] = vals[4] || vals[0] || "";
+      rowObj["_METHOD"] = vals[5] || "";
+      return rowObj;
+    });
   } catch (err) {
-    wmsTabName = "WMS Invoice & Issues";
-    try {
-      const table = await fetchGvizTable(wmsTabName);
-      wmsRows = tableToObjects(table);
-    } catch (err2) {
-      console.warn(`[WARN] Neither 'WMS Invoice and Issues' nor 'WMS Invoice & Issues' tab found in sheet.`);
-      return { ok: false, error: "WMS tab not reachable" };
-    }
+    console.error(`[ERROR] Failed to fetch external WMS sheet '${WMS_SHEET_ID}':`, err.message);
+    return { ok: false, error: err.message };
   }
 
   // Filter rows where Shipping Method is "Trucking"
   const truckingRows = wmsRows.filter(row => {
-    const method = getColValue(row, "SHIPPING METHOD", "SHIP METHOD", "METHOD");
-    return method.toUpperCase() === "TRUCKING";
+    const method = row["_METHOD"] || getColValue(row, "SHIPPING METHOD", "SHIP METHOD", "METHOD");
+    return method.toUpperCase().includes("TRUCKING");
   });
 
-  console.log(`[INFO] Scanned ${wmsRows.length} total rows from '${wmsTabName}'. Found ${truckingRows.length} with Shipping Method = 'Trucking'.`);
+  console.log(`[INFO] Scanned ${wmsRows.length} total rows from WMS sheet. Found ${truckingRows.length} with Shipping Method = 'Trucking'.`);
 
   // Group by (Customer + Ship Date)
   const groups = new Map();
   truckingRows.forEach((row, idx) => {
-    const invoice = getColValue(row, "INVOICE NO.", "INVOICE #", "INVOICE", "PO#");
-    const customer = getColValue(row, "CUSTOMER", "CLIENT", "ACCOUNT");
-    const shipDate = getColValue(row, "SHIP DATE", "DATE", "PU DATE");
+    const invoice = row["_INVOICE"] || getColValue(row, "INVOICE#", "INVOICE NO.", "INVOICE #", "INVOICE");
+    const customer = row["_CUSTOMER"] || getColValue(row, "CUSTOMER NAME", "CUSTOMER", "CLIENT");
+    const shipDate = row["_SHIPDATE"] || getColValue(row, "SHIP DATE", "DATE");
     const pallets = getColValue(row, "PALLET", "PLT", "QTY", "CARTONS");
     const carrier = getColValue(row, "CARRIER", "TRUCKING");
     const pro = getColValue(row, "PRO#", "PRO", "TRACKING#", "BOL");
-    const note = getColValue(row, "NOTE", "REMARK", "MEMO", "ISSUE");
+    const note = getColValue(row, "REMARKS (SALES)", "REMARKS (WAREHOUSE)", "NOTE", "REMARK");
 
     const normCust = customer.toUpperCase().replace(/\s+/g, " ").trim();
     const normDate = shipDate.toUpperCase().trim();
@@ -97,13 +100,20 @@ async function runScan({ dryRun = false } = {}) {
     groups.get(groupKey).push({ invoice, customer, shipDate, pallets, carrier, pro, note, sourceRow: row.__sourceRow });
   });
 
-  console.log(`[INFO] Grouped ${truckingRows.length} rows into ${groups.size} distinct customer + ship date shipments.`);
+  console.log(`[INFO] Grouped ${truckingRows.length} Trucking rows into ${groups.size} distinct customer + ship date shipments.`);
 
-  // Fetch target WH Trucking Request tab
+  // Fetch target WH Trucking Request tab from Logistics Master 2026
   let targetRows = [];
   try {
-    const table = await fetchGvizTable("WH Trucking Request", "A2:U");
-    targetRows = tableToObjects(table);
+    const table = await fetchGvizTable(TARGET_SHEET_ID, "WH Trucking Request", "A2:U", "1");
+    const headers = table.cols.map((c, i) => (c.label || `COL_${i}`).toUpperCase().replace(/\s+/g, " ").trim());
+    targetRows = table.rows.map((r, rowIndex) => ({
+      __sourceRow: rowIndex + 3,
+      ...Object.fromEntries(headers.map((h, i) => {
+        const c = r.c?.[i];
+        return [h, String(c ? (c.f ?? c.v ?? "") : "").trim()];
+      }))
+    }));
   } catch (err) {
     console.error(`[ERROR] Failed to fetch target tab 'WH Trucking Request':`, err.message);
     return { ok: false, error: err.message };
@@ -169,9 +179,15 @@ async function runScan({ dryRun = false } = {}) {
     }
   });
 
-  console.log(`[RESULT] Scan complete: ${newEntries.length} new entries to append, ${modifiedEntries.length} entries to update.`);
-  if (newEntries.length > 0) console.log(`[NEW COMBINED ENTRIES]:`, newEntries);
-  if (modifiedEntries.length > 0) console.log(`[MODIFIED COMBINED ENTRIES]:`, modifiedEntries);
+  console.log(`\n[RESULT] Scan complete: ${newEntries.length} new entries to append, ${modifiedEntries.length} entries to update.`);
+  if (newEntries.length > 0) {
+    console.log(`\n[NEW COMBINED ENTRIES (${newEntries.length})]:`);
+    newEntries.forEach((e, idx) => console.log(`  ${idx+1}. ${e.customer} (${e.shipDate}) -> Invoices: ${e.invoice.replace(/\n/g, ", ")}`));
+  }
+  if (modifiedEntries.length > 0) {
+    console.log(`\n[MODIFIED COMBINED ENTRIES (${modifiedEntries.length})]:`);
+    modifiedEntries.forEach((e, idx) => console.log(`  ${idx+1}. Row ${e.existingRow}: ${e.customer} (${e.shipDate}) -> Invoices: ${e.invoice.replace(/\n/g, ", ")}`));
+  }
 
   return {
     ok: true,
