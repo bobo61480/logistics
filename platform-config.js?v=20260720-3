@@ -16,7 +16,7 @@ window.STYLEKOREAN_PLATFORM = Object.freeze({
   finishedStatuses: Object.freeze(["Shipped", "Delivered", "Received", "Completed", "Cancelled"]),
   parcelStatusOverrides: Object.freeze({ "4634189291": "Delivered" }),
   sources: Object.freeze([
-    { id: "imports", tab: "IMPORTS", range: "A:AF", kind: "inbound", provider: "googleSheets", gid: 1497250700 },
+    { id: "imports", tab: "IMPORTS", range: "A:AF", kind: "inbound", provider: "googleSheets", sheetId: "1Jp4yNAiPI5eAxpZtanWmwOy7m2svgC7Pv9G1zloYFm4", gid: 1000920671 },
     { id: "transfers", tab: "TRANSFERS", range: "A:N", kind: "outbound", provider: "googleSheets", gid: 1834454901 },
     { id: "ulta", tab: "ULTA", range: "A:N", kind: "outbound", provider: "googleSheets", gid: 360479919 },
     { id: "iherb", tab: "IHERB", range: "A:M", kind: "outbound", provider: "googleSheets", gid: 955532469 },

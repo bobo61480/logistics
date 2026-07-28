@@ -117,11 +117,12 @@ function parseGviz(text) {
   return payload.table;
 }
 
-async function fetchTable(tab, range, withHeaders = true) {
-  const u = new URL(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq`);
+async function fetchTable(tab, range, withHeaders = true, targetSheetId = SHEET_ID) {
+  const fileId = targetSheetId || SHEET_ID;
+  const u = new URL(`https://docs.google.com/spreadsheets/d/${fileId}/gviz/tq`);
   u.searchParams.set("tqx", "out:json");
   u.searchParams.set("headers", withHeaders ? "1" : "0");
-  u.searchParams.set("sheet", tab);
+  if (tab) u.searchParams.set("sheet", tab);
   if (range) u.searchParams.set("range", range);
 
   let lastError = null;
@@ -350,7 +351,7 @@ function mapInbound(rows) {
     const sourceStatus = col(r, "WEBSITE STATUS", "STATUS", "SHIPMENT STATUS");
     return {
       mode: isAir ? "Air" : "Ocean",
-      eta: fmtDate(col(r, "ETA")),
+      eta: fmtDate(col(r, "ESTIMATED DELIVERY", "ESTIMATED DELIVERY DATE", "ESTIMATED_DELIVERY", "ETA")),
       shipmentNo: col(r, "SHIPMENT"),
       invoice: invoiceNumber(r, "INVOICE", "INVOICE #"),
       mbl,
@@ -848,7 +849,7 @@ async function load() {
     /* FIX: catch attached at creation, not at await — otherwise a fast KPI
        failure fires an unhandledrejection while the main batch is in flight. */
     const kpiPromise = fetchKpis().catch((e) => ({ __error: e }));
-    const results = await Promise.allSettled(SOURCES.map((s) => fetchTable(s.tab, s.range)));
+    const results = await Promise.allSettled(SOURCES.map((s) => fetchTable(s.tab, s.range, true, s.sheetId)));
     const tables = results.map((r) => (r.status === "fulfilled" ? r.value : { cols: [], rows: [] }));
     const mapped = tables.map(objects);
 
@@ -911,7 +912,7 @@ async function load() {
       .map((rows) => rows.filter(useful).length);
     const checkedAt = new Date().toISOString();
     sourceHealth = SOURCES.map((s, i) => ({
-      id: s.id || s.tab, tab: s.tab, range: s.range, kind: s.kind, gid: s.gid,
+      id: s.id || s.tab, tab: s.tab, range: s.range, kind: s.kind, gid: s.gid, sheetId: s.sheetId,
       provider: s.provider || "googleSheets", checkedAt,
       ok: results[i].status === "fulfilled",
       rows: contributed[i],
@@ -967,7 +968,7 @@ function renderSourceStrip() {
       "NATIONAL ORDER PROGRESS": "var(--c-national-order)",
       "Outbound Shipping Schedule": "var(--c-ship-out)", "TJX/ROSS": "var(--c-tjx)"
     }[s.tab] || "var(--ink-2)";
-    const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit#gid=${s.gid}`;
+    const url = `https://docs.google.com/spreadsheets/d/${s.sheetId || SHEET_ID}/edit#gid=${s.gid}`;
     return `<a class="source-chip ${s.ok ? "" : "failed"}" style="--c:${color}" href="${url}" target="_blank" rel="noopener noreferrer" title="Open ${esc(s.tab)} in Google Sheets" aria-label="Open ${esc(s.tab)} source sheet">
       <span class="st" aria-hidden="true"></span>
       <span><span class="name">${esc(s.tab)}</span><span class="source-open" aria-hidden="true">↗</span><br><span class="rows">${s.ok ? `${s.rows.toLocaleString()} rows` : "unavailable"}</span></span>
@@ -1006,7 +1007,7 @@ function renderIntegrationHealth() {
   ).join("");
   $("integrationRows").innerHTML = sourceHealth.map((source) => {
     const provider = PLATFORM.providers?.[source.provider]?.label || source.provider || "Google Sheets";
-    const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit#gid=${source.gid}`;
+    const url = `https://docs.google.com/spreadsheets/d/${source.sheetId || SHEET_ID}/edit#gid=${source.gid}`;
     return `<tr>
       <td><strong>${esc(source.tab)}</strong>${source.error ? `<small>${esc(source.error)}</small>` : ""}</td>
       <td>${esc(provider)}</td><td>${esc(source.kind)}</td><td class="mono">${esc(source.range || "—")}</td>
