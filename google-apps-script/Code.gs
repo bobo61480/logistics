@@ -299,19 +299,25 @@ function exactVal_(row, map, names) {
 
 /**
  * Creates or resets the 30-minute time-driven trigger for WMS Trucking scanner.
+ * Deletes all obsolete/legacy triggers in the project to ensure a clean schedule.
  */
 function create30MinTrigger() {
   const triggers = ScriptApp.getProjectTriggers();
+  const ALLOWED_TRIGGER_HANDLERS = ["scanAndImportWmsTruckingOrders"];
+  
   for (let i = 0; i < triggers.length; i++) {
-    if (triggers[i].getHandlerFunction() === "scanAndImportWmsTruckingOrders") {
+    const handler = triggers[i].getHandlerFunction();
+    if (!ALLOWED_TRIGGER_HANDLERS.includes(handler) || handler === "scanAndImportWmsTruckingOrders") {
       ScriptApp.deleteTrigger(triggers[i]);
+      Logger.log("Deleted obsolete/existing trigger for handler: " + handler);
     }
   }
+
   ScriptApp.newTrigger("scanAndImportWmsTruckingOrders")
     .timeBased()
     .everyMinutes(30)
     .create();
-  Logger.log("30-minute time-driven trigger created for scanAndImportWmsTruckingOrders");
+  Logger.log("30-minute time-driven trigger cleanly provisioned for scanAndImportWmsTruckingOrders");
 }
 
 /**
