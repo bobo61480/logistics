@@ -81,6 +81,23 @@ type KpiSnapshot = {
   avgOutOfState: number;
 };
 
+type InventoryItem = {
+  id: string;
+  shipmentNo: string;
+  productName: string;
+  sku: string;
+  upc: string;
+  expirationDate: string;
+  quantity: number;
+  location: string;
+  status: string;
+};
+
+type InventoryCollections = {
+  inbound: InventoryItem[];
+  inStock: InventoryItem[];
+};
+
 const EMPTY_KPIS: KpiSnapshot = {
   shippingMtd: 0,
   shippingYtd: 0,
@@ -470,6 +487,221 @@ async function fetchTable(
   const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) throw new Error(`Workbook read failed (${response.status}).`);
   return parseGviz(await response.text());
+}
+
+async function fetchOptionalSheet(sheetName: string, range: string) {
+  const url = new URL(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq`);
+  url.searchParams.set("tqx", "out:json");
+  url.searchParams.set("sheet", sheetName);
+  url.searchParams.set("range", range);
+  url.searchParams.set("headers", "1");
+  url.searchParams.set("_", String(Date.now()));
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) return null;
+  try {
+    return parseGviz(await response.text());
+  } catch {
+    return null;
+  }
+}
+
+function inventoryHeader(value: unknown) {
+  return clean(value)
+    .toUpperCase()
+    .replace(/[_#()]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function inventoryIndexes(table: any) {
+  const labels = (table?.cols ?? []).map((column: any) => inventoryHeader(column.label));
+  return (...names: string[]) => labels.findIndex((label: string) => names.includes(label));
+}
+
+function inventoryNumber(value: string) {
+  return Number(value.replace(/[$,\s]/g, "")) || 0;
+}
+
+function dashboardInventoryItems(table: any): InventoryCollections {
+  if (!table?.rows) return { inbound: [], inStock: [] };
+  const find = inventoryIndexes(table);
+  const indexes = {
+    shipmentNo: find("INBOUND SHIPMENTS 차수", "INBOUND SHIPMENTS", "SHIPMENT NO", "SHIPMENT"),
+    productName: find("PRODUCT NAME", "PRODUCT DESCRIPTION", "DESCRIPTION"),
+    sku: find("SKU"),
+    upc: find("UPC", "BARCODE"),
+    expirationDate: find("NEAREST EXPIRY", "EXPIRY DATE", "EXPIRATION DATE"),
+    incoming: find("REMAINING TO RECEIVE", "INCOMING CONFIRMED"),
+    onHand: find("ON HAND ACTUAL", "ON HAND", "AVAILABLE"),
+    location: find("LOCATIONS", "LOCATION"),
+    status: find("FLAG", "STATUS"),
+  };
+  const inbound: InventoryItem[] = [];
+  const inStock: InventoryItem[] = [];
+  table.rows.forEach((row: any, rowIndex: number) => {
+    const value = (index: number) => (index >= 0 ? cell(row, index) : "");
+    const productName = value(indexes.productName);
+    const sku = value(indexes.sku);
+    const upc = value(indexes.upc);
+    const incoming = inventoryNumber(value(indexes.incoming));
+    if ((!productName && !sku && !upc) || incoming <= 0) return;
+    const base = {
+      shipmentNo: value(indexes.shipmentNo),
+      productName,
+      sku,
+      upc,
+      expirationDate: value(indexes.expirationDate),
+      location: value(indexes.location),
+      status: value(indexes.status),
+    };
+    inbound.push({ ...base, id: `inventory-inbound-${rowIndex}`, quantity: incoming });
+    const onHand = inventoryNumber(value(indexes.onHand));
+    if (onHand > 0) inStock.push({ ...base, id: `inventory-stock-${rowIndex}`, quantity: onHand });
+  });
+  return { inbound, inStock };
+}
+
+function skwInboundItems(table: any): InventoryItem[] {
+  if (!table?.rows) return [];
+  const find = inventoryIndexes(table);
+  const indexes = {
+    shipmentNo: find("IB ID", "PO NUMBER"),
+    productName: find("PRODUCT DESCRIPTION", "PRODUCT NAME", "DESCRIPTION"),
+    sku: find("SKU"),
+    upc: find("UPC", "BARCODE"),
+    expirationDate: find("EXPIRY DATE", "EXPIRATION DATE"),
+    quantity: find("QTY EA", "QUANTITY", "QTY"),
+    status: find("STATUS"),
+    stockPosted: find("STOCK POSTED"),
+  };
+  const finishedStatuses = new Set(["DELIVERED", "RECEIVED", "COMPLETED", "CANCELLED"]);
+  return table.rows.flatMap((row: any, rowIndex: number) => {
+    const value = (index: number) => (index >= 0 ? cell(row, index) : "");
+    const productName = value(indexes.productName);
+    const sku = value(indexes.sku);
+    const upc = value(indexes.upc);
+    const status = value(indexes.status);
+    const stockPosted = value(indexes.stockPosted).toUpperCase();
+    if ((!productName && !sku && !upc) || finishedStatuses.has(status.toUpperCase()) || /^(TRUE|YES|POSTED|1)$/.test(stockPosted)) return [];
+    return [{
+      id: `skw-inbound-${rowIndex}`,
+      shipmentNo: value(indexes.shipmentNo),
+      productName,
+      sku,
+      upc,
+      expirationDate: value(indexes.expirationDate),
+      quantity: inventoryNumber(value(indexes.quantity)),
+      location: "",
+      status,
+    }];
+  });
+}
+
+function skwStockItems(table: any): InventoryItem[] {
+  if (!table?.rows) return [];
+  const find = inventoryIndexes(table);
+  const indexes = {
+    shipmentNo: find("SOURCE IB ID"),
+    productName: find("PRODUCT DESCRIPTION", "PRODUCT NAME", "DESCRIPTION"),
+    sku: find("SKU"),
+    upc: find("UPC", "BARCODE"),
+    expirationDate: find("EXPIRY DATE", "EXPIRATION DATE"),
+    quantity: find("QTY EA", "QUANTITY", "QTY"),
+    location: find("LOCATION"),
+  };
+  return table.rows.flatMap((row: any, rowIndex: number) => {
+    const value = (index: number) => (index >= 0 ? cell(row, index) : "");
+    const productName = value(indexes.productName);
+    const sku = value(indexes.sku);
+    const upc = value(indexes.upc);
+    const quantity = inventoryNumber(value(indexes.quantity));
+    if ((!productName && !sku && !upc) || quantity <= 0) return [];
+    return [{
+      id: `skw-stock-${rowIndex}`,
+      shipmentNo: value(indexes.shipmentNo),
+      productName,
+      sku,
+      upc,
+      expirationDate: value(indexes.expirationDate),
+      quantity,
+      location: value(indexes.location),
+      status: "Received",
+    }];
+  });
+}
+
+function inventoryIdentity(item: InventoryItem, includeShipment: boolean) {
+  return [item.sku || item.upc || item.productName, item.expirationDate, item.location, includeShipment ? item.shipmentNo : ""]
+    .map((value) => clean(value).toUpperCase())
+    .join("||");
+}
+
+function uniqueInventoryItems(items: InventoryItem[], includeShipment: boolean) {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = inventoryIdentity(item, includeShipment);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function InventoryPanel({
+  title,
+  eyebrow,
+  items,
+  loading,
+  showLocation,
+}: {
+  title: string;
+  eyebrow: string;
+  items: InventoryItem[];
+  loading: boolean;
+  showLocation: boolean;
+}) {
+  const [inventoryQuery, setInventoryQuery] = useState("");
+  const filteredItems = useMemo(() => {
+    const needle = inventoryQuery.trim().toLowerCase();
+    if (!needle) return items;
+    return items.filter((item) => [item.productName, item.sku, item.upc, item.expirationDate, item.location, item.shipmentNo]
+      .join(" ")
+      .toLowerCase()
+      .includes(needle));
+  }, [inventoryQuery, items]);
+  const displayedItems = filteredItems.slice(0, 250);
+  const totalQuantity = items.reduce((sum, item) => sum + item.quantity, 0);
+  return (
+    <section className="inventory-panel" aria-label={title}>
+      <div className="panel-heading inventory-heading">
+        <div><p className="eyebrow">{eyebrow}</p><h2>{title}</h2></div>
+        <div className="inventory-total"><strong>{items.length}</strong><span>products · {totalQuantity.toLocaleString()} units</span></div>
+      </div>
+      <div className="inventory-toolbar">
+        <input
+          aria-label={`Search ${title}`}
+          onChange={(event) => setInventoryQuery(event.target.value)}
+          placeholder="Search product, SKU, UPC, shipment, location…"
+          type="search"
+          value={inventoryQuery}
+        />
+        <span>Showing {displayedItems.length.toLocaleString()} of {filteredItems.length.toLocaleString()}</span>
+      </div>
+      <div className="inventory-table-wrap">
+        <table className="inventory-table">
+          <thead><tr><th>Product name</th><th>SKU #</th><th>UPC #</th><th>Expiration</th><th>Qty</th>{showLocation && <th>Location</th>}</tr></thead>
+          <tbody>
+            {displayedItems.map((item) => <tr key={item.id}>
+              <td><strong>{item.productName || "—"}</strong>{!showLocation && item.shipmentNo && <small>{item.shipmentNo}</small>}</td>
+              <td>{item.sku || "—"}</td><td>{item.upc || "—"}</td><td>{item.expirationDate || "—"}</td><td>{item.quantity.toLocaleString()}</td>
+              {showLocation && <td>{item.location || "Unassigned"}</td>}
+            </tr>)}
+            {!loading && filteredItems.length === 0 && <tr><td className="import-empty" colSpan={showLocation ? 6 : 5}>No matching inventory records are currently available.</td></tr>}
+            {loading && <tr><td className="import-empty" colSpan={showLocation ? 6 : 5}>Syncing inventory…</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
 }
 
 async function fetchCsvRows(spreadsheetId: string, gid: number) {
@@ -1523,6 +1755,8 @@ export default function Home() {
   const [savingId, setSavingId] = useState("");
   const [notice, setNotice] = useState("");
   const [kpis, setKpis] = useState<KpiSnapshot>(EMPTY_KPIS);
+  const [inboundInventory, setInboundInventory] = useState<InventoryItem[]>([]);
+  const [warehouseStock, setWarehouseStock] = useState<InventoryItem[]>([]);
   const loadInFlight = useRef(false);
   const lastRefreshAt = useRef(0);
 
@@ -1548,6 +1782,9 @@ export default function Home() {
         nationalOutbound,
         salesOutbound,
         liveKpis,
+        inventoryDashboardTable,
+        skwInboundTable,
+        skwStockTable,
       ] = await Promise.all([
         fetchTable(SHEET_ID, 2026070701, "A3:S1200", 1),
         fetchCsvRows(SHEET_ID, 1497250700),
@@ -1555,6 +1792,9 @@ export default function Home() {
         fetchTable(NATIONAL_SHEET_ID, 99300389, "A1:U3500", 1),
         fetchTable(SALES_SHEET_ID, 0, "A2:AF4200", 1),
         fetchLiveKpis(),
+        fetchOptionalSheet("INVENTORY", "A1:O6500"),
+        fetchOptionalSheet("SKW_Inbound", "A1:R2500"),
+        fetchOptionalSheet("SKW_Stock", "A1:J2500"),
       ]);
       setItems([
         ...inboundItems(inbound, imports),
@@ -1564,6 +1804,15 @@ export default function Home() {
         ...salesOutboundItems(salesOutbound),
       ]);
       setKpis(liveKpis);
+      const dashboardInventory = dashboardInventoryItems(inventoryDashboardTable);
+      setInboundInventory(uniqueInventoryItems([
+        ...dashboardInventory.inbound,
+        ...skwInboundItems(skwInboundTable),
+      ], true));
+      setWarehouseStock(uniqueInventoryItems([
+        ...dashboardInventory.inStock,
+        ...skwStockItems(skwStockTable),
+      ], false));
       const refreshedAt = new Date();
       lastRefreshAt.current = refreshedAt.getTime();
       setUpdatedAt(refreshedAt);
@@ -1900,6 +2149,23 @@ export default function Home() {
         savingId={savingId}
         onStatus={handleStatus}
       />
+
+      <div className="inventory-grid">
+        <InventoryPanel
+          title="Inbound Inventory"
+          eyebrow="PRODUCTS ON INBOUND SHIPMENTS"
+          items={inboundInventory}
+          loading={loading}
+          showLocation={false}
+        />
+        <InventoryPanel
+          title="Inbound Products in Stock"
+          eyebrow="MATCHING PRODUCTS · CURRENT WAREHOUSE ON HAND"
+          items={warehouseStock}
+          loading={loading}
+          showLocation
+        />
+      </div>
 
       <div className="schedule-stack" aria-label="Separate inbound and outbound schedules">
         <ScheduleBoard
