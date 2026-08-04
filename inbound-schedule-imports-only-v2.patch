@@ -1,0 +1,54 @@
+diff --git a/app/page.tsx b/app/page.tsx
+index 774ff4b..273fd83 100644
+--- a/app/page.tsx
++++ b/app/page.tsx
+@@ -938,11 +938,7 @@ function importSourceRecords(rows: string[][]): ImportSourceRecord[] {
+   });
+ }
+ 
+-function pendingImportItems(
+-  importsRows: string[][],
+-  generatedItems: ScheduleItem[],
+-): ScheduleItem[] {
+-  const generatedByRow = new Map(generatedItems.map((item) => [item.sourceRow, item]));
++function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
+   const today = startOfToday();
+ 
+   return importSourceRecords(importsRows).flatMap((record) => {
+@@ -952,9 +948,6 @@ function pendingImportItems(
+     );
+     if (!hasShipmentDocuments || parcelCarrier(record.shipmentNo)) return [];
+ 
+-    const generated = generatedByRow.get(record.sourceRow);
+-    if (generated) return [{ ...generated, status }];
+-
+     const dated = firstDatedValue(record.deliveryExpected, record.eta, record.etd);
+     const date = dated?.date ?? today;
+     const overdue = date.getTime() < today.getTime();
+@@ -2134,7 +2127,6 @@ export default function Home() {
+     setError("");
+     try {
+       const [
+-        inbound,
+         imports,
+         outbound,
+         nationalOutbound,
+@@ -2144,7 +2136,6 @@ export default function Home() {
+         skwInboundTable,
+         skwStockTable,
+       ] = await Promise.all([
+-        fetchTable(SHEET_ID, 2026070701, "A3:S1200", 1),
+         fetchCsvRows(SHEET_ID, 1497250700),
+         fetchCsvRows(SHEET_ID, 20260708),
+         fetchTable(NATIONAL_SHEET_ID, 99300389, "A1:U3500", 1),
+@@ -2154,9 +2145,8 @@ export default function Home() {
+         fetchOptionalSheet("SKW_Inbound", "A1:R2500"),
+         fetchOptionalSheet("SKW_Stock", "A1:J2500"),
+       ]);
+-      const generatedInbound = inboundItems(inbound, imports);
+       setItems(consolidateTruckingItems([
+-        ...pendingImportItems(imports, generatedInbound),
++        ...pendingImportItems(imports),
+         ...inboundParcelItems(imports),
+         ...outboundItems(outbound),
+         ...nationalOutboundItems(nationalOutbound),

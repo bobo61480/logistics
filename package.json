@@ -2,7 +2,9 @@
   "name": "stylekorean-logistics-planner-pages",
   "version": "1.0.0",
   "private": true,
-  "engines": { "node": ">=22.13.0" },
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -21,5 +23,8 @@
     "@types/react-dom": "19.2.3",
     "tailwindcss": "4.2.1",
     "typescript": "5.9.3"
+  },
+  "allowScripts": {
+    "sharp@0.34.5": true
   }
 }

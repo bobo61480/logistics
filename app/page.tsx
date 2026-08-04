@@ -934,11 +934,7 @@ function importSourceRecords(rows: string[][]): ImportSourceRecord[] {
   });
 }
 
-function pendingImportItems(
-  importsRows: string[][],
-  generatedItems: ScheduleItem[],
-): ScheduleItem[] {
-  const generatedByRow = new Map(generatedItems.map((item) => [item.sourceRow, item]));
+function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
   const today = startOfToday();
 
   return importSourceRecords(importsRows).flatMap((record) => {
@@ -947,9 +943,6 @@ function pendingImportItems(
       record.shipmentNo && (record.invoice || record.mbl || record.hbl || record.container),
     );
     if (!hasShipmentDocuments || parcelCarrier(record.shipmentNo)) return [];
-
-    const generated = generatedByRow.get(record.sourceRow);
-    if (generated) return [{ ...generated, status }];
 
     const dated = firstDatedValue(record.deliveryExpected, record.eta, record.etd);
     const date = dated?.date ?? today;
@@ -2130,7 +2123,6 @@ export default function Home() {
     setError("");
     try {
       const [
-        inbound,
         imports,
         outbound,
         nationalOutbound,
@@ -2140,7 +2132,6 @@ export default function Home() {
         skwInboundTable,
         skwStockTable,
       ] = await Promise.all([
-        fetchTable(SHEET_ID, 2026070701, "A3:S1200", 1),
         fetchCsvRows(SHEET_ID, 1497250700),
         fetchCsvRows(SHEET_ID, 20260708),
         fetchTable(NATIONAL_SHEET_ID, 99300389, "A1:U3500", 1),
@@ -2150,9 +2141,8 @@ export default function Home() {
         fetchOptionalSheet("SKW_Inbound", "A1:R2500"),
         fetchOptionalSheet("SKW_Stock", "A1:J2500"),
       ]);
-      const generatedInbound = inboundItems(inbound, imports);
       setItems(consolidateTruckingItems([
-        ...pendingImportItems(imports, generatedInbound),
+        ...pendingImportItems(imports),
         ...inboundParcelItems(imports),
         ...outboundItems(outbound),
         ...nationalOutboundItems(nationalOutbound),
