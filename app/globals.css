@@ -212,6 +212,42 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
   box-shadow: inset 0 4px 0 var(--orange);
 }
 
+.inventory-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.inventory-panel {
+  min-width: 0;
+  border: 1px solid #1a343b;
+  background: rgba(255, 255, 255, .92);
+  box-shadow: inset 0 4px 0 var(--green);
+}
+
+.inventory-panel:first-child { box-shadow: inset 0 4px 0 var(--blue); }
+.inventory-heading { padding-top: 14px; }
+.inventory-heading h2 { margin: 0; font: 800 27px/.95 "Saira Condensed", sans-serif; text-transform: uppercase; }
+.inventory-total { display: grid; justify-items: end; }
+.inventory-total strong { font: 800 28px/.9 "Saira Condensed", sans-serif; }
+.inventory-total span { color: var(--muted); font: 600 8px "IBM Plex Mono", monospace; text-transform: uppercase; }
+.inventory-toolbar { display: flex; align-items: center; gap: 10px; padding: 0 12px 10px; }
+.inventory-toolbar input { min-width: 0; flex: 1; height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfc; color: var(--ink); font: 500 10px "IBM Plex Mono", monospace; outline: none; }
+.inventory-toolbar input:focus { border-color: var(--teal); box-shadow: 0 0 0 2px rgba(13, 141, 148, .12); }
+.inventory-toolbar span { color: var(--muted); font: 600 8px "IBM Plex Mono", monospace; white-space: nowrap; }
+.inventory-table-wrap { overflow: auto; max-height: 360px; border-top: 1px solid var(--line); }
+.inventory-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.inventory-table th { position: sticky; top: 0; z-index: 1; padding: 8px; background: var(--ink); color: #fff; font: 700 8px "IBM Plex Mono", monospace; letter-spacing: .05em; text-align: left; text-transform: uppercase; }
+.inventory-table td { padding: 8px; border-bottom: 1px solid #e2ddd4; vertical-align: top; }
+.inventory-table td:nth-last-child(-n+2) { font-family: "IBM Plex Mono", monospace; }
+.inventory-table td.inventory-pallet { color: var(--orange-dark); font-family: "IBM Plex Mono", monospace; font-weight: 750; white-space: nowrap; }
+.inventory-table small { display: block; margin-top: 3px; color: var(--muted); font: 600 8px "IBM Plex Mono", monospace; }
+.inventory-shipment-links { display: flex !important; flex-wrap: wrap; gap: 3px 8px; }
+.inventory-shipment-links a { color: var(--blue); font-weight: 700; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+.inventory-shipment-links a:hover { color: var(--orange-dark); }
+.inventory-shipment-links a:focus-visible { border-radius: 3px; outline: 2px solid var(--orange); outline-offset: 2px; }
+
 .kpi-heading {
   display: flex;
   align-items: end;
@@ -279,17 +315,47 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
   white-space: nowrap;
 }
 
-.kpi-carrier > strong {
-  display: block;
-  margin-top: 8px;
-  color: var(--orange-dark);
-  font-size: clamp(22px, 2vw, 34px);
-  white-space: normal;
+.kpi-carrier { grid-column: span 2; }
+.kpi-carrier > .carrier-table-head,
+.carrier-ranking li {
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) minmax(72px, .65fr) minmax(76px, .6fr);
+  gap: 8px;
+  align-items: center;
 }
-
-.kpi-carrier > small { display: block; margin-top: 5px; }
-.kpi-average > div { grid-template-columns: 67px minmax(0, 1fr); padding-block: 3px; }
-.kpi-average strong { font-size: 18px; }
+.kpi-carrier > .carrier-table-head { padding: 0 0 4px; border-top: 0; }
+.carrier-table-head small:nth-child(n + 2) { text-align: right; }
+.carrier-ranking { margin: 0; padding: 0; list-style: none; }
+.carrier-ranking li {
+  padding: 5px 0;
+  border-top: 1px solid #e5e0d7;
+}
+.carrier-ranking strong {
+  overflow: hidden;
+  color: var(--orange-dark);
+  font: 800 clamp(15px, 1.35vw, 21px)/.95 "Saira Condensed", sans-serif;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.carrier-ranking b {
+  color: var(--ink);
+  font: 800 16px/.95 "Saira Condensed", sans-serif;
+  text-align: right;
+}
+.carrier-ranking small { text-align: right; white-space: nowrap; }
+.carrier-ranking .carrier-empty {
+  display: block;
+  color: var(--muted);
+  font: 600 8px "IBM Plex Mono", monospace;
+}
+.kpi-average { grid-column: span 2; }
+.kpi-average > div {
+  grid-template-columns: minmax(76px, 1fr) minmax(62px, .65fr) minmax(62px, .65fr);
+  padding-block: 3px;
+}
+.kpi-average > .average-head { padding-top: 0; border-top: 0; }
+.kpi-average > .average-head small:nth-child(n + 2) { text-align: right; }
+.kpi-average strong { font-size: 18px; text-align: right; }
 
 .kpi-method {
   margin: 0;
@@ -1314,6 +1380,53 @@ body {
 .import-table tbody tr:nth-child(even) { background: #f7f9f9; }
 .import-table tbody tr:hover { background: #f1f6f7; }
 
+.inventory-table tbody tr.inventory-selectable {
+  cursor: pointer;
+  transition: background-color .16s ease, box-shadow .16s ease;
+}
+
+.inventory-table tbody tr.inventory-selectable:hover td { background: #eef7f7; }
+
+.inventory-table tbody tr.inventory-selectable:focus-visible {
+  position: relative;
+  z-index: 2;
+  outline: 3px solid var(--orange);
+  outline-offset: -3px;
+}
+
+.inventory-table tbody tr.inventory-selected td,
+.inventory-table tbody tr.inventory-match td {
+  background: #fff0bf;
+  color: var(--ink);
+}
+
+.inventory-table tbody tr.inventory-selected,
+.inventory-table tbody tr.inventory-match {
+  box-shadow: inset 6px 0 0 var(--orange);
+  scroll-margin-block: 90px;
+}
+
+.inventory-table tbody tr.inventory-selected td:first-child strong,
+.inventory-table tbody tr.inventory-match td:first-child strong {
+  color: var(--orange-dark);
+}
+
+.import-table tbody tr.shipment-match,
+.import-table tbody tr.shipment-match:nth-child(even),
+.import-table tbody tr.shipment-match:hover {
+  background: #fff0bf;
+  box-shadow: inset 7px 0 0 var(--orange);
+}
+
+.import-table tbody tr.shipment-match td {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.import-table tbody tr.shipment-match {
+  scroll-margin-block: 120px;
+}
+
 .board-wrap {
   border-top: 0;
   scrollbar-width: thin;
@@ -1420,6 +1533,7 @@ footer strong {
 }
 
 @media (max-width: 900px) {
+  .inventory-grid { grid-template-columns: 1fr; }
   .site-shell { width: min(100% - 20px, 1560px); padding-top: 10px; }
   .manifest-main { padding: 24px 18px 20px; }
   .route-strip,
@@ -1433,4 +1547,5 @@ footer strong {
   .manifest h1 { font-size: 42px; }
   .metrics { gap: 9px; }
   .metrics article { min-height: 86px; }
+  .inventory-toolbar { align-items: stretch; flex-direction: column; }
 }

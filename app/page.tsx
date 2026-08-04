@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { INBOUND_DOCUMENT_LINKS } from "./inbound-links";
+import { INBOUND_DOCUMENT_LINKS, INBOUND_PACKING_LIST_LINKS } from "./inbound-links";
 import { INBOUND_INVOICE_LINKS } from "./inbound-invoice-links";
+import { packingListPallets } from "./inbound-pallets";
 import { computeLiveKpis } from "../lib/sales-kpis";
 
 const SHEET_ID = "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc";
@@ -17,6 +18,9 @@ const SALES_SNAPSHOT = {
   wmsMtd: 3_601_652.95,
   wmsYtd: 15_591_074.08,
 };
+// Deployed from google-apps-script/Code.gs (doPost), bound to LOGISTICS MASTER 2026.
+// VERIFY: confirm this /exec URL is the CURRENT deployment of google-apps-script/Code.gs --
+// if you redeploy that script, Apps Script gives you a new URL and this must be updated too.
 const WRITE_ENDPOINT =
   "https://script.google.com/a/macros/stylekoreanus.com/s/AKfycbwyVnU2jvOtMFXuY7KtX_8-hHXYVLrc6R2Dr_6akdDaTGQPc8duSo7tpguIuk00MjDl/exec";
 const AUTO_REFRESH_MS = 30 * 60 * 1000;
@@ -68,17 +72,44 @@ type KpiSnapshot = {
   shippingYtd: number;
   transfersMtd: number;
   transfersYtd: number;
+  njTransferMtd: number;
+  njTransferYtd: number;
   nationalsSalesMtd: number;
   nationalsSalesYtd: number;
   wmsSalesMtd: number;
   wmsSalesYtd: number;
-  topCarrier: string;
-  topCarrierMoves: number;
+  topCarriers: Array<{
+    name: string;
+    earnings: number;
+    moves: number;
+    shipmentPercent: number;
+  }>;
   ltlPercent: number;
   ftlPercent: number;
   avgLocal: number;
   avgCalifornia: number;
   avgOutOfState: number;
+  avgLocalMtd: number;
+  avgCaliforniaMtd: number;
+  avgOutOfStateMtd: number;
+};
+
+type InventoryItem = {
+  id: string;
+  shipmentNo: string;
+  productName: string;
+  sku: string;
+  upc: string;
+  expirationDate: string;
+  palletNumber?: string;
+  quantity: number;
+  location: string;
+  status: string;
+};
+
+type InventoryCollections = {
+  inbound: InventoryItem[];
+  inStock: InventoryItem[];
 };
 
 const EMPTY_KPIS: KpiSnapshot = {
@@ -86,17 +117,21 @@ const EMPTY_KPIS: KpiSnapshot = {
   shippingYtd: 0,
   transfersMtd: 0,
   transfersYtd: 0,
+  njTransferMtd: 0,
+  njTransferYtd: 0,
   nationalsSalesMtd: SALES_SNAPSHOT.nationalsMtd,
   nationalsSalesYtd: SALES_SNAPSHOT.nationalsYtd,
   wmsSalesMtd: SALES_SNAPSHOT.wmsMtd,
   wmsSalesYtd: SALES_SNAPSHOT.wmsYtd,
-  topCarrier: "—",
-  topCarrierMoves: 0,
+  topCarriers: [],
   ltlPercent: 0,
   ftlPercent: 0,
   avgLocal: 0,
   avgCalifornia: 0,
   avgOutOfState: 0,
+  avgLocalMtd: 0,
+  avgCaliforniaMtd: 0,
+  avgOutOfStateMtd: 0,
 };
 
 const SOURCE_LEGEND = [
@@ -142,6 +177,12 @@ const INBOUND_STATUS_OPTIONS = [
 ];
 
 const finished = new Set(["shipped", "delivered", "received", "cancelled", "completed"]);
+const finishedImports = new Set(["delivered", "received", "cancelled", "completed"]);
+
+// Any import whose ETA is before this date is treated as effectively received/delivered/completed
+// and hidden from the "unfinished" Import Schedules table, even if the sheet's Status cell is blank
+// or stale. This does not overwrite the Status column in the source spreadsheet.
+const IMPORT_STALE_CUTOFF = new Date(2026, 6, 1).getTime(); // July 1, 2026
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -438,6 +479,67 @@ function splitValues(value: string) {
     .filter(Boolean);
 }
 
+function inventoryShipmentReferences(value: string) {
+  return Array.from(new Set(
+    clean(value)
+      .split(/\r?\n|,\s*/)
+      .map((part) => part.replace(/\s*\(rcvd[^)]*\)\s*/gi, "").trim())
+      .filter(Boolean),
+  ));
+}
+
+function normalizedShipmentCode(value: string) {
+  const match = clean(value).toUpperCase().match(/\b([A-Z]{2,10})\s*[- ]?\s*(\d{1,3})\b/);
+  return match ? `${match[1]}${Number(match[2])}` : clean(value).replace(/[^A-Z0-9]/gi, "").toUpperCase();
+}
+
+function inventoryProductsMatch(left: InventoryItem, right: InventoryItem) {
+  const leftSku = normalizedIdentifier(left.sku);
+  const rightSku = normalizedIdentifier(right.sku);
+  if (leftSku && rightSku && leftSku === rightSku) return true;
+  const leftUpc = normalizedIdentifier(left.upc);
+  const rightUpc = normalizedIdentifier(right.upc);
+  if (leftUpc && rightUpc && leftUpc === rightUpc) return true;
+  return Boolean(
+    normalizedIdentifier(left.productName) &&
+    normalizedIdentifier(left.productName) === normalizedIdentifier(right.productName),
+  );
+}
+
+function inventoryShipmentCodes(item: InventoryItem) {
+  return new Set(
+    inventoryShipmentReferences(item.shipmentNo)
+      .map(normalizedShipmentCode)
+      .filter(Boolean),
+  );
+}
+
+function scheduleMatchesInventoryShipment(item: ScheduleItem, selected: InventoryItem | null) {
+  if (!selected) return false;
+  const selectedCodes = inventoryShipmentCodes(selected);
+  if (!selectedCodes.size) return false;
+  return [item.shipmentNo, item.title]
+    .flatMap((value) => inventoryShipmentReferences(value ?? ""))
+    .map(normalizedShipmentCode)
+    .some((value) => selectedCodes.has(value));
+}
+
+function packingListUrl(shipment: string) {
+  const code = normalizedShipmentCode(shipment);
+  const packingList = INBOUND_PACKING_LIST_LINKS[shipment] ?? INBOUND_PACKING_LIST_LINKS[code];
+  if (packingList) return packingList;
+  const direct = INBOUND_DOCUMENT_LINKS[shipment];
+  if (direct) return direct;
+  const candidates = Object.entries(INBOUND_DOCUMENT_LINKS).filter(
+    ([label]) => normalizedShipmentCode(label) === code,
+  );
+  const mapped =
+    candidates.find(([label]) => /\b2026\b/.test(label)) ??
+    candidates[candidates.length - 1];
+  if (mapped) return mapped[1];
+  return `https://drive.google.com/drive/u/0/search?q=${encodeURIComponent(`"${shipment}" "packing list"`)}`;
+}
+
 function driveInvoiceSearchUrl(invoice: string) {
   return `https://drive.google.com/drive/u/0/search?q=${encodeURIComponent(invoice)}`;
 }
@@ -470,6 +572,299 @@ async function fetchTable(
   const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) throw new Error(`Workbook read failed (${response.status}).`);
   return parseGviz(await response.text());
+}
+
+async function fetchOptionalSheet(sheetName: string, range: string) {
+  const url = new URL(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq`);
+  url.searchParams.set("tqx", "out:json");
+  url.searchParams.set("sheet", sheetName);
+  url.searchParams.set("range", range);
+  url.searchParams.set("headers", "1");
+  url.searchParams.set("_", String(Date.now()));
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) return null;
+  try {
+    return parseGviz(await response.text());
+  } catch {
+    return null;
+  }
+}
+
+function inventoryHeader(value: unknown) {
+  return clean(value)
+    .toUpperCase()
+    .replace(/[_#()]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function inventoryIndexes(table: any) {
+  const labels = (table?.cols ?? []).map((column: any) => inventoryHeader(column.label));
+  return (...names: string[]) => labels.findIndex((label: string) => names.includes(label));
+}
+
+function inventoryNumber(value: string) {
+  return Number(value.replace(/[$,\s]/g, "")) || 0;
+}
+
+function dashboardInventoryItems(table: any): InventoryCollections {
+  if (!table?.rows) return { inbound: [], inStock: [] };
+  const find = inventoryIndexes(table);
+  const indexes = {
+    shipmentNo: find("INBOUND SHIPMENTS 차수", "INBOUND SHIPMENTS", "SHIPMENT NO", "SHIPMENT"),
+    productName: find("PRODUCT NAME", "PRODUCT DESCRIPTION", "DESCRIPTION"),
+    sku: find("SKU"),
+    upc: find("UPC", "BARCODE"),
+    expirationDate: find("NEAREST EXPIRY", "EXPIRY DATE", "EXPIRATION DATE"),
+    incoming: find("REMAINING TO RECEIVE", "INCOMING CONFIRMED"),
+    onHand: find("ON HAND ACTUAL", "ON HAND", "AVAILABLE"),
+    location: find("LOCATIONS", "LOCATION"),
+    status: find("FLAG", "STATUS"),
+  };
+  const inbound: InventoryItem[] = [];
+  const inStock: InventoryItem[] = [];
+  table.rows.forEach((row: any, rowIndex: number) => {
+    const value = (index: number) => (index >= 0 ? cell(row, index) : "");
+    const productName = value(indexes.productName);
+    const sku = value(indexes.sku);
+    const upc = value(indexes.upc);
+    const incoming = inventoryNumber(value(indexes.incoming));
+    if ((!productName && !sku && !upc) || incoming <= 0) return;
+    const shipmentNo = value(indexes.shipmentNo);
+    const base = {
+      shipmentNo,
+      productName,
+      sku,
+      upc,
+      expirationDate: value(indexes.expirationDate),
+      palletNumber: packingListPallets(shipmentNo, sku),
+      location: value(indexes.location),
+      status: value(indexes.status),
+    };
+    inbound.push({ ...base, id: `inventory-inbound-${rowIndex}`, quantity: incoming });
+    const onHand = inventoryNumber(value(indexes.onHand));
+    if (onHand > 0) inStock.push({ ...base, id: `inventory-stock-${rowIndex}`, quantity: onHand });
+  });
+  return { inbound, inStock };
+}
+
+function skwInboundItems(table: any): InventoryItem[] {
+  if (!table?.rows) return [];
+  const find = inventoryIndexes(table);
+  const indexes = {
+    shipmentNo: find("IB ID", "PO NUMBER"),
+    productName: find("PRODUCT DESCRIPTION", "PRODUCT NAME", "DESCRIPTION"),
+    sku: find("SKU"),
+    upc: find("UPC", "BARCODE"),
+    expirationDate: find("EXPIRY DATE", "EXPIRATION DATE"),
+    quantity: find("QTY EA", "QUANTITY", "QTY"),
+    palletNumber: find("PALLET NO", "PALLET NUMBER", "PLT NO", "PALLET"),
+    status: find("STATUS"),
+    stockPosted: find("STOCK POSTED"),
+  };
+  const finishedStatuses = new Set(["DELIVERED", "RECEIVED", "COMPLETED", "CANCELLED"]);
+  return table.rows.flatMap((row: any, rowIndex: number) => {
+    const value = (index: number) => (index >= 0 ? cell(row, index) : "");
+    const productName = value(indexes.productName);
+    const sku = value(indexes.sku);
+    const upc = value(indexes.upc);
+    const status = value(indexes.status);
+    const stockPosted = value(indexes.stockPosted).toUpperCase();
+    if ((!productName && !sku && !upc) || finishedStatuses.has(status.toUpperCase()) || /^(TRUE|YES|POSTED|1)$/.test(stockPosted)) return [];
+    const shipmentNo = value(indexes.shipmentNo);
+    return [{
+      id: `skw-inbound-${rowIndex}`,
+      shipmentNo,
+      productName,
+      sku,
+      upc,
+      expirationDate: value(indexes.expirationDate),
+      palletNumber: value(indexes.palletNumber) || packingListPallets(shipmentNo, sku),
+      quantity: inventoryNumber(value(indexes.quantity)),
+      location: "",
+      status,
+    }];
+  });
+}
+
+function skwStockItems(table: any): InventoryItem[] {
+  if (!table?.rows) return [];
+  const find = inventoryIndexes(table);
+  const indexes = {
+    shipmentNo: find("SOURCE IB ID"),
+    productName: find("PRODUCT DESCRIPTION", "PRODUCT NAME", "DESCRIPTION"),
+    sku: find("SKU"),
+    upc: find("UPC", "BARCODE"),
+    expirationDate: find("EXPIRY DATE", "EXPIRATION DATE"),
+    quantity: find("QTY EA", "QUANTITY", "QTY"),
+    location: find("LOCATION"),
+  };
+  return table.rows.flatMap((row: any, rowIndex: number) => {
+    const value = (index: number) => (index >= 0 ? cell(row, index) : "");
+    const productName = value(indexes.productName);
+    const sku = value(indexes.sku);
+    const upc = value(indexes.upc);
+    const quantity = inventoryNumber(value(indexes.quantity));
+    if ((!productName && !sku && !upc) || quantity <= 0) return [];
+    return [{
+      id: `skw-stock-${rowIndex}`,
+      shipmentNo: value(indexes.shipmentNo),
+      productName,
+      sku,
+      upc,
+      expirationDate: value(indexes.expirationDate),
+      quantity,
+      location: value(indexes.location),
+      status: "Received",
+    }];
+  });
+}
+
+function inventoryIdentity(item: InventoryItem, includeShipment: boolean) {
+  return [item.sku || item.upc || item.productName, item.expirationDate, item.location, item.palletNumber, includeShipment ? item.shipmentNo : ""]
+    .map((value) => clean(value).toUpperCase())
+    .join("||");
+}
+
+function uniqueInventoryItems(items: InventoryItem[], includeShipment: boolean) {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = inventoryIdentity(item, includeShipment);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function InventoryPanel({
+  title,
+  eyebrow,
+  items,
+  loading,
+  showLocation,
+  selectedItem,
+  selectable = false,
+  onSelect,
+}: {
+  title: string;
+  eyebrow: string;
+  items: InventoryItem[];
+  loading: boolean;
+  showLocation: boolean;
+  selectedItem: InventoryItem | null;
+  selectable?: boolean;
+  onSelect?: (item: InventoryItem) => void;
+}) {
+  const [inventoryQuery, setInventoryQuery] = useState("");
+  const tableWrapRef = useRef<HTMLDivElement>(null);
+  const filteredItems = useMemo(() => {
+    const needle = inventoryQuery.trim().toLowerCase();
+    if (!needle) return items;
+    return items.filter((item) => [item.productName, item.sku, item.upc, item.expirationDate, item.location, item.shipmentNo]
+      .join(" ")
+      .toLowerCase()
+      .includes(needle));
+  }, [inventoryQuery, items]);
+  const displayedItems = useMemo(() => {
+    if (!selectedItem || !showLocation) return filteredItems.slice(0, 250);
+    const selectedMatches = items.filter((item) => inventoryProductsMatch(item, selectedItem));
+    const visibleById = new Map(
+      [...selectedMatches, ...filteredItems].map((item) => [item.id, item]),
+    );
+    return [...visibleById.values()]
+      .sort((left, right) =>
+        Number(inventoryProductsMatch(right, selectedItem)) -
+        Number(inventoryProductsMatch(left, selectedItem)),
+      )
+      .slice(0, 250);
+  }, [filteredItems, items, selectedItem, showLocation]);
+  useEffect(() => {
+    if (!selectedItem || !showLocation) return;
+    const frame = window.requestAnimationFrame(() => {
+      const wrap = tableWrapRef.current;
+      const matchedRow = wrap?.querySelector<HTMLTableRowElement>("tr.inventory-match");
+      if (!wrap || !matchedRow) return;
+      const targetTop = matchedRow.offsetTop - (wrap.clientHeight - matchedRow.offsetHeight) / 2;
+      wrap.scrollTo({ top: Math.max(0, targetTop), behavior: "smooth" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [displayedItems, selectedItem, showLocation]);
+  const totalQuantity = items.reduce((sum, item) => sum + item.quantity, 0);
+  return (
+    <section className="inventory-panel" aria-label={title}>
+      <div className="panel-heading inventory-heading">
+        <div><p className="eyebrow">{eyebrow}</p><h2>{title}</h2></div>
+        <div className="inventory-total"><strong>{items.length}</strong><span>products · {totalQuantity.toLocaleString()} units</span></div>
+      </div>
+      <div className="inventory-toolbar">
+        <input
+          aria-label={`Search ${title}`}
+          onChange={(event) => setInventoryQuery(event.target.value)}
+          placeholder="Search product, SKU, UPC, shipment, location…"
+          type="search"
+          value={inventoryQuery}
+        />
+        <span>Showing {displayedItems.length.toLocaleString()} of {filteredItems.length.toLocaleString()}</span>
+      </div>
+      <div className="inventory-table-wrap" ref={tableWrapRef}>
+        <table className="inventory-table">
+          <thead><tr><th>Product name</th><th>SKU #</th><th>UPC #</th><th>Expiration</th>{!showLocation && <th>Pallet #</th>}<th>Qty</th>{showLocation && <th>Location</th>}</tr></thead>
+          <tbody>
+            {displayedItems.map((item) => {
+              const selected = selectable && selectedItem?.id === item.id;
+              const matching = !selectable && Boolean(selectedItem && inventoryProductsMatch(item, selectedItem));
+              return <tr
+                aria-label={selectable ? `Select ${item.productName || item.sku || item.upc}` : undefined}
+                aria-selected={selected || matching || undefined}
+                className={[
+                  selectable ? "inventory-selectable" : "",
+                  selected ? "inventory-selected" : "",
+                  matching ? "inventory-match" : "",
+                ].filter(Boolean).join(" ")}
+                data-product-key={normalizedIdentifier(item.sku || item.upc || item.productName)}
+                key={item.id}
+                onClick={selectable ? () => onSelect?.(item) : undefined}
+                onKeyDown={selectable ? (event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onSelect?.(item);
+                  }
+                } : undefined}
+                tabIndex={selectable ? 0 : undefined}
+                title={selectable ? (selected ? "Click again to clear product highlights" : "Click to highlight matching stock and inbound shipments") : undefined}
+              >
+              <td>
+                <strong>{item.productName || "—"}</strong>
+                {!showLocation && inventoryShipmentReferences(item.shipmentNo).length > 0 && (
+                  <small className="inventory-shipment-links">
+                    {inventoryShipmentReferences(item.shipmentNo).map((shipment) => (
+                      <a
+                        aria-label={`Open packing list for shipment ${shipment}`}
+                        href={packingListUrl(shipment)}
+                        key={shipment}
+                        onClick={(event) => event.stopPropagation()}
+                        rel="noreferrer"
+                        target="_blank"
+                        title={`Open packing-list documents for ${shipment}`}
+                      >
+                        {shipment} <span aria-hidden="true">↗</span>
+                      </a>
+                    ))}
+                  </small>
+                )}
+              </td>
+              <td>{item.sku || "—"}</td><td>{item.upc || "—"}</td><td>{item.expirationDate || "—"}</td>
+              {!showLocation && <td className="inventory-pallet">{item.palletNumber || "—"}</td>}
+              <td>{item.quantity.toLocaleString()}</td>
+              {showLocation && <td>{item.location || "Unassigned"}</td>}
+            </tr>})}
+            {!loading && filteredItems.length === 0 && <tr><td className="import-empty" colSpan={6}>No matching inventory records are currently available.</td></tr>}
+            {loading && <tr><td className="import-empty" colSpan={6}>Syncing inventory…</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
 }
 
 async function fetchCsvRows(spreadsheetId: string, gid: number) {
@@ -507,6 +902,9 @@ type ImportSourceRecord = {
   container: string;
   vessel: string;
   status: string;
+  etd: string;
+  eta: string;
+  deliveryExpected: string;
 };
 
 function importSourceRecords(rows: string[][]): ImportSourceRecord[] {
@@ -528,8 +926,82 @@ function importSourceRecords(rows: string[][]): ImportSourceRecord[] {
         container: cell(row, 7),
         vessel: cell(row, 14),
         status: cell(row, 29),
+        etd: cell(row, 15),
+        eta: cell(row, 16),
+        deliveryExpected: cell(row, 18),
       },
     ];
+  });
+}
+
+function pendingImportItems(
+  importsRows: string[][],
+  generatedItems: ScheduleItem[],
+): ScheduleItem[] {
+  const generatedByRow = new Map(generatedItems.map((item) => [item.sourceRow, item]));
+  const today = startOfToday();
+
+  return importSourceRecords(importsRows).flatMap((record) => {
+    const status = normalizeStatus(record.status);
+    const hasShipmentDocuments = Boolean(
+      record.shipmentNo && (record.invoice || record.mbl || record.hbl || record.container),
+    );
+    if (!hasShipmentDocuments || parcelCarrier(record.shipmentNo)) return [];
+
+    const generated = generatedByRow.get(record.sourceRow);
+    if (generated) return [{ ...generated, status }];
+
+    const dated = firstDatedValue(record.deliveryExpected, record.eta, record.etd);
+    const date = dated?.date ?? today;
+    const overdue = date.getTime() < today.getTime();
+    const eta = dated
+      ? `${dated.text}${overdue ? " · OVERDUE" : ""}`
+      : "ETA pending";
+    const mode = resolvedInboundMode(
+      "",
+      record.shipmentNo,
+      record.mbl,
+      record.hbl,
+      record.container,
+      record.vessel,
+    );
+    const trackingNumber = record.container;
+    const invoice = correctedInboundInvoice(record.shipmentNo, record.invoice);
+    const folderUrl = INBOUND_DOCUMENT_LINKS[record.shipmentNo] ?? importsCellUrl(record.sourceRow, "B");
+
+    return [{
+      id: `pending-import-${record.sourceRow}`,
+      direction: "inbound",
+      date,
+      dateText: eta,
+      title: record.shipmentNo,
+      reference: trackingNumber || invoice || record.mbl || record.hbl,
+      secondary: [mode, record.vessel].filter(Boolean).join(" · "),
+      status,
+      sourceSheet: "IMPORTS",
+      sourceRow: record.sourceRow,
+      sourceUrl: SHEET_URL,
+      editable: true,
+      shipmentNo: record.shipmentNo,
+      shipmentUrl: folderUrl,
+      invoice,
+      invoiceUrl: invoiceFileUrl(splitValues(invoice)[0] ?? ""),
+      container: record.container,
+      containerUrl: officialTrackingUrl(
+        trackingNumber,
+        [record.mbl, record.hbl, record.vessel, record.shipmentNo].filter(Boolean).join(" "),
+        importsCellUrl(record.sourceRow, "H"),
+      ),
+      mbl: record.mbl,
+      hbl: record.hbl,
+      mode,
+      vessel: record.vessel,
+      pod: /^OSL/i.test(record.shipmentNo) ? "LGB" : "LAX",
+      eta,
+      isSmallParcel: false,
+      shippingMethod: mode,
+      sourceType: mode,
+    }];
   });
 }
 
@@ -562,7 +1034,12 @@ function inboundParcelItems(rows: string[][]): ScheduleItem[] {
     const datedValue = firstDatedValue(etaSource, description);
     const sourceDate = datedValue?.date ?? today;
     const unfinished = !finished.has(status.toLowerCase());
-    const overdue = unfinished && sourceDate.getTime() < today.getTime();
+    const isStale = sourceDate.getTime() < IMPORT_STALE_CUTOFF;
+    // Stale (pre-cutoff) rows are left at their real source date instead of being
+    // bumped to "today" so they fall out of the 14-day window and stay hidden,
+    // the same way old imports are treated as finished. Recent overdue rows still
+    // get pinned to today so they keep nagging until resolved.
+    const overdue = unfinished && !isStale && sourceDate.getTime() < today.getTime();
     const date = overdue ? today : sourceDate;
     const etaText = datedValue?.text
       ? `${datedValue.text}${overdue ? " · OVERDUE" : ""}`
@@ -648,23 +1125,29 @@ function resolvedInboundMode(
   reportedMode: string,
   shipmentNo: string,
   mbl: string,
+  hbl: string,
+  container: string,
   vessel: string,
 ) {
-  const normalizedMbl = normalizedIdentifier(mbl);
+  const shipmentCode = clean(shipmentNo).toUpperCase();
+  const transportIds = [mbl, hbl, container].map(clean).join(" ").toUpperCase();
   const normalizedVessel = clean(vessel).toUpperCase();
-  const isAirWaybill = /^\d{3}-?\d{8}$/.test(normalizedMbl);
+  const isAirPrefix = /^(?:JSL|KYL)/.test(shipmentCode);
+  const isAirWaybill = /\b\d{3}[- ]?\d{8}\b|\bMAWB\b/.test(transportIds);
   const isFlightNumber = /^(?:[A-Z]{2}|[A-Z]\d|\d[A-Z])[- ]?\d{2,4}[A-Z]?$/.test(
     normalizedVessel,
   );
+  const isOceanScac = /\b[A-Z]{4}[- ]?\d{6,12}\b|\bSCAC\b/.test(transportIds);
   if (
-    /^JSL26072(?:6|7)$/i.test(shipmentNo) ||
+    isAirPrefix ||
     isAirWaybill ||
     isFlightNumber ||
     /\bAIR\b/i.test(reportedMode)
   ) {
     return "Air";
   }
-  return /\bOCEAN\b/i.test(reportedMode) ? "Ocean" : clean(reportedMode) || "Ocean";
+  if (isOceanScac || /\bOCEAN\b/i.test(reportedMode)) return "Ocean";
+  return clean(reportedMode) || "Ocean";
 }
 
 function inboundItems(table: any, importsRows: string[][]): ScheduleItem[] {
@@ -687,7 +1170,7 @@ function inboundItems(table: any, importsRows: string[][]): ScheduleItem[] {
     const container = cell(row, 6) || importSource?.container || "";
     const reportedMode = cell(row, 0);
     const vessel = cell(row, 10) || importSource?.vessel || "";
-    const mode = resolvedInboundMode(reportedMode, shipmentNo, mbl, vessel);
+    const mode = resolvedInboundMode(reportedMode, shipmentNo, mbl, hbl, container, vessel);
     const smallParcelCarrier = parcelCarrier([mode, shipmentNo].join(" "));
     const isSmallParcel = Boolean(smallParcelCarrier);
     if (isSmallParcel) return [];
@@ -754,15 +1237,40 @@ function ImportSchedules({
   loading,
   savingId,
   onStatus,
+  selectedInventory,
 }: {
   items: ScheduleItem[];
   loading: boolean;
   savingId: string;
   onStatus: (item: ScheduleItem, status: string) => void;
+  selectedInventory: InventoryItem | null;
 }) {
-  const sortedItems = [...items].sort((a, b) => a.date.getTime() - b.date.getTime());
+  const sortedItems = useMemo(
+    () => [...items].sort((a, b) => a.date.getTime() - b.date.getTime()),
+    [items],
+  );
+  const tableWrapRef = useRef<HTMLDivElement>(null);
   const oceanCount = sortedItems.filter((item) => item.mode === "Ocean").length;
   const airCount = sortedItems.filter((item) => item.mode === "Air").length;
+
+  useEffect(() => {
+    if (!selectedInventory) return;
+    const timer = window.setTimeout(() => {
+      const wrap = tableWrapRef.current;
+      const matchedRow = wrap?.querySelector<HTMLTableRowElement>(
+        'tr[data-shipment-match="true"]',
+      );
+      if (!wrap || !matchedRow) return;
+      const tableTop = matchedRow.offsetTop - (wrap.clientHeight - matchedRow.offsetHeight) / 2;
+      wrap.scrollTo({ top: Math.max(0, tableTop) });
+      window.requestAnimationFrame(() => {
+        const bounds = matchedRow.getBoundingClientRect();
+        const pageTop = window.scrollY + bounds.top - (window.innerHeight - bounds.height) / 2;
+        window.scrollTo({ top: Math.max(0, pageTop) });
+      });
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [selectedInventory, sortedItems]);
 
   const linkValue = (value: string, href?: string) =>
     value ? (
@@ -781,7 +1289,9 @@ function ImportSchedules({
     <section className="import-schedules" aria-labelledby="import-schedules-heading">
       <div className="panel-heading import-heading">
         <div>
-          <p className="eyebrow">CURRENT + UPCOMING · OCEAN / AIR</p>
+          <p className="eyebrow">
+            {selectedInventory ? "ALL UNFINISHED + SELECTED SHIPMENT" : "ALL UNFINISHED · OCEAN / AIR"}
+          </p>
           <h2 id="import-schedules-heading">Import Schedules</h2>
         </div>
         <div className="import-totals" aria-label="Import schedule totals">
@@ -790,7 +1300,7 @@ function ImportSchedules({
           <strong>{sortedItems.length}</strong>
         </div>
       </div>
-      <div className="import-table-wrap">
+      <div className="import-table-wrap" ref={tableWrapRef}>
         <table className="import-table">
           <thead>
             <tr>
@@ -807,8 +1317,15 @@ function ImportSchedules({
             </tr>
           </thead>
           <tbody>
-            {sortedItems.map((item) => (
-              <tr className={sourceClass(item.sourceType ?? item.mode ?? "")} key={`import-${item.id}`}>
+            {sortedItems.map((item) => {
+              const shipmentMatch = scheduleMatchesInventoryShipment(item, selectedInventory);
+              return (
+              <tr
+                aria-label={shipmentMatch ? `Selected product shipment ${item.shipmentNo || item.title}` : undefined}
+                className={`${sourceClass(item.sourceType ?? item.mode ?? "")} ${shipmentMatch ? "shipment-match" : ""}`}
+                data-shipment-match={shipmentMatch || undefined}
+                key={`import-${item.id}`}
+              >
                 <td><span className={`mode-pill ${item.mode?.toLowerCase()}`}>{item.mode || "—"}</span></td>
                 <td>{linkValue(item.shipmentNo ?? item.title, item.shipmentUrl)}</td>
                 <td>
@@ -851,10 +1368,10 @@ function ImportSchedules({
                   )}
                 </td>
               </tr>
-            ))}
+            )})}
             {!loading && sortedItems.length === 0 && (
               <tr>
-                <td className="import-empty" colSpan={10}>No current or upcoming imports match the active filters.</td>
+                <td className="import-empty" colSpan={10}>No unfinished imports match the active search.</td>
               </tr>
             )}
             {loading && (
@@ -1074,6 +1591,74 @@ function salesOutboundItems(table: any): ScheduleItem[] {
       },
     ];
   });
+}
+
+function consolidateTruckingItems(records: ScheduleItem[]) {
+  const groups = new Map<string, ScheduleItem[]>();
+  const ungrouped: ScheduleItem[] = [];
+
+  records.forEach((item) => {
+    if (
+      item.direction !== "outbound" ||
+      item.isSmallParcel ||
+      !/^trucking$/i.test(item.shippingMethod ?? "")
+    ) {
+      ungrouped.push(item);
+      return;
+    }
+    const customerKey = normalizedIdentifier(item.customer || item.customerNo || item.title);
+    const dateKey = item.date ? dayKey(item.date) : normalizedIdentifier(item.shipDate || item.dateText);
+    if (!customerKey || !dateKey) {
+      ungrouped.push(item);
+      return;
+    }
+    const key = `${customerKey}___${dateKey}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(item);
+  });
+
+  const invoiceKeys = (items: ScheduleItem[]) => new Set(
+    items.flatMap((item) => splitValues(item.invoice ?? "")).map(normalizedIdentifier).filter(Boolean),
+  );
+  const groupEntries = [...groups.entries()];
+  const scheduleGroups = groupEntries.filter(([, items]) =>
+    items.some((item) => item.sourceSheet === "Outbound Shipping Schedule"),
+  );
+  const absorbed = new Set<string>();
+  groupEntries.forEach(([key, items]) => {
+    if (items.some((item) => item.sourceSheet === "Outbound Shipping Schedule")) return;
+    const invoices = invoiceKeys(items);
+    if (!invoices.size) return;
+    const matches = scheduleGroups.filter(([, scheduled]) =>
+      [...invoiceKeys(scheduled)].some((invoice) => invoices.has(invoice)),
+    );
+    if (matches.length !== 1) return;
+    matches[0][1].push(...items);
+    absorbed.add(key);
+  });
+
+  const consolidated = groupEntries.filter(([key]) => !absorbed.has(key)).map(([key, items]) => {
+    const primary =
+      items.find((item) => item.sourceSheet === "Outbound Shipping Schedule") ??
+      items.find((item) => item.editable) ??
+      items[0];
+    const invoices = Array.from(new Set(
+      items.flatMap((item) => splitValues(item.invoice ?? "")).map((value) => value.trim()).filter(Boolean),
+    ));
+    const warningStatus = items.find((item) => /pending|delay|hold|review/i.test(item.status));
+    const secondary = Array.from(new Set(items.map((item) => item.secondary).filter(Boolean))).join(" · ");
+    const invoice = invoices.join("\n");
+    return {
+      ...primary,
+      id: `trucking-${key}`,
+      invoice,
+      reference: invoice || primary.reference,
+      secondary,
+      status: warningStatus?.status ?? primary.status,
+    };
+  });
+
+  return [...ungrouped, ...consolidated];
 }
 
 async function postStatus(item: ScheduleItem, status: string) {
@@ -1523,6 +2108,9 @@ export default function Home() {
   const [savingId, setSavingId] = useState("");
   const [notice, setNotice] = useState("");
   const [kpis, setKpis] = useState<KpiSnapshot>(EMPTY_KPIS);
+  const [inboundInventory, setInboundInventory] = useState<InventoryItem[]>([]);
+  const [warehouseStock, setWarehouseStock] = useState<InventoryItem[]>([]);
+  const [selectedInventory, setSelectedInventory] = useState<InventoryItem | null>(null);
   const loadInFlight = useRef(false);
   const lastRefreshAt = useRef(0);
 
@@ -1548,6 +2136,9 @@ export default function Home() {
         nationalOutbound,
         salesOutbound,
         liveKpis,
+        inventoryDashboardTable,
+        skwInboundTable,
+        skwStockTable,
       ] = await Promise.all([
         fetchTable(SHEET_ID, 2026070701, "A3:S1200", 1),
         fetchCsvRows(SHEET_ID, 1497250700),
@@ -1555,15 +2146,28 @@ export default function Home() {
         fetchTable(NATIONAL_SHEET_ID, 99300389, "A1:U3500", 1),
         fetchTable(SALES_SHEET_ID, 0, "A2:AF4200", 1),
         fetchLiveKpis(),
+        fetchOptionalSheet("INVENTORY", "A1:O6500"),
+        fetchOptionalSheet("SKW_Inbound", "A1:R2500"),
+        fetchOptionalSheet("SKW_Stock", "A1:J2500"),
       ]);
-      setItems([
-        ...inboundItems(inbound, imports),
+      const generatedInbound = inboundItems(inbound, imports);
+      setItems(consolidateTruckingItems([
+        ...pendingImportItems(imports, generatedInbound),
         ...inboundParcelItems(imports),
         ...outboundItems(outbound),
         ...nationalOutboundItems(nationalOutbound),
         ...salesOutboundItems(salesOutbound),
-      ]);
+      ]));
       setKpis(liveKpis);
+      const dashboardInventory = dashboardInventoryItems(inventoryDashboardTable);
+      setInboundInventory(uniqueInventoryItems([
+        ...dashboardInventory.inbound,
+        ...skwInboundItems(skwInboundTable),
+      ], true));
+      setWarehouseStock(uniqueInventoryItems([
+        ...dashboardInventory.inStock,
+        ...skwStockItems(skwStockTable),
+      ], false));
       const refreshedAt = new Date();
       lastRefreshAt.current = refreshedAt.getTime();
       setUpdatedAt(refreshedAt);
@@ -1607,6 +2211,10 @@ export default function Home() {
     return items.filter((item) => {
       const stamp = new Date(item.date.getFullYear(), item.date.getMonth(), item.date.getDate()).getTime();
       if (stamp < first || stamp > last) return false;
+      // Same rule as the Import Schedules table: anything dated before the cutoff is
+      // treated as finished/received/completed and hidden by default. The "Show
+      // completed entries" toggle recovers both these and status-finished rows.
+      if (!includeFinished && item.date.getTime() < IMPORT_STALE_CUTOFF) return false;
       if (!includeFinished && finished.has(item.status.toLowerCase())) return false;
       if (!needle) return true;
       return [
@@ -1669,8 +2277,30 @@ export default function Home() {
   );
 
   const importScheduleItems = useMemo(
-    () => inboundVisibleItems.filter((item) => !item.isSmallParcel),
-    [inboundVisibleItems],
+    () => {
+      const needle = query.trim().toLowerCase();
+      return items.filter((item) => {
+        if (item.direction !== "inbound" || item.isSmallParcel) return false;
+        const selectedShipment = scheduleMatchesInventoryShipment(item, selectedInventory);
+        const isStaleImport = item.date.getTime() < IMPORT_STALE_CUTOFF;
+        const isFinishedOrStale = finishedImports.has(item.status.toLowerCase()) || isStaleImport;
+        if (isFinishedOrStale && !includeFinished && !selectedShipment) return false;
+        if (selectedShipment) return true;
+        if (!needle) return true;
+        return [
+          item.title,
+          item.reference,
+          item.invoice,
+          item.shipmentNo,
+          item.container,
+          item.mbl,
+          item.hbl,
+          item.vessel,
+          item.status,
+        ].join(" ").toLowerCase().includes(needle);
+      });
+    },
+    [items, query, selectedInventory, includeFinished],
   );
 
   const counts = useMemo(() => {
@@ -1805,6 +2435,11 @@ export default function Home() {
             <div><small>YTD</small><strong>{money(kpis.transfersYtd)}</strong></div>
           </article>
           <article className="kpi-card">
+            <span>TRUCKING TRANSFERS TO NJ</span>
+            <div><small>MTD</small><strong>{money(kpis.njTransferMtd)}</strong></div>
+            <div><small>YTD</small><strong>{money(kpis.njTransferYtd)}</strong></div>
+          </article>
+          <article className="kpi-card">
             <span>SALES · NATIONALS</span>
             <div><small>MTD</small><strong>{moneyWithCents(kpis.nationalsSalesMtd)}</strong></div>
             <div><small>YTD</small><strong>{moneyWithCents(kpis.nationalsSalesYtd)}</strong></div>
@@ -1815,9 +2450,20 @@ export default function Home() {
             <div><small>YTD</small><strong>{moneyWithCents(kpis.wmsSalesYtd)}</strong></div>
           </article>
           <article className="kpi-card kpi-carrier">
-            <span>TOP CARRIER · YTD</span>
-            <strong>{kpis.topCarrier}</strong>
-            <small>{kpis.topCarrierMoves} moves</small>
+            <span>TOP 3 CARRIERS · YTD</span>
+            <div className="carrier-table-head" aria-hidden="true">
+              <small>Carrier</small><small>Earnings</small><small>Shipments</small>
+            </div>
+            <ol className="carrier-ranking">
+              {kpis.topCarriers.map((carrier) => (
+                <li key={carrier.name}>
+                  <strong>{carrier.name}</strong>
+                  <b>{money(carrier.earnings)}</b>
+                  <small>{carrier.moves} · {carrier.shipmentPercent.toFixed(1)}%</small>
+                </li>
+              ))}
+              {kpis.topCarriers.length === 0 && <li className="carrier-empty">Carrier data unavailable</li>}
+            </ol>
           </article>
           <article className="kpi-card kpi-split">
             <span>TRUCKLOAD MIX · YTD</span>
@@ -1825,10 +2471,11 @@ export default function Home() {
             <div><small>FTL</small><strong>{kpis.ftlPercent}%</strong></div>
           </article>
           <article className="kpi-card kpi-average">
-            <span>AVG TRUCKING COST · YTD</span>
-            <div><small>LOCAL ≤50 MI</small><strong>{money(kpis.avgLocal)}</strong></div>
-            <div><small>CALIFORNIA</small><strong>{money(kpis.avgCalifornia)}</strong></div>
-            <div><small>OUT OF STATE</small><strong>{money(kpis.avgOutOfState)}</strong></div>
+            <span>AVG TRUCKING COST · MTD / YTD</span>
+            <div className="average-head" aria-hidden="true"><small>Lane</small><small>MTD</small><small>YTD</small></div>
+            <div><small>LOCAL ≤50 MI</small><strong>{money(kpis.avgLocalMtd)}</strong><strong>{money(kpis.avgLocal)}</strong></div>
+            <div><small>CALIFORNIA</small><strong>{money(kpis.avgCaliforniaMtd)}</strong><strong>{money(kpis.avgCalifornia)}</strong></div>
+            <div><small>OUT OF STATE</small><strong>{money(kpis.avgOutOfStateMtd)}</strong><strong>{money(kpis.avgOutOfState)}</strong></div>
           </article>
         </div>
         <p className="kpi-method">
@@ -1838,7 +2485,10 @@ export default function Home() {
           orders. WMS wholesale sales use Date (column A) and numeric INVOICE AMOUNT (column G);
           text entries such as “FREE SAMPLE,” “FOC,” “Sample,” and operational notes are excluded.
           MTD is the current month through today; YTD begins January 1, 2026. Trucking averages
-          exclude transfers and unclassified destinations; local is within 50 miles of Buena Park.{" "}
+          exclude transfers and unclassified destinations; local is within 50 miles of Buena Park.
+          The NJ transfer card includes only TRANSFERS rows whose TO field is NJ or New Jersey.
+          Carrier earnings use the same freight Invoice-first, Rate-fallback cost, and shipment share
+          is each carrier’s moves divided by all YTD moves with a named carrier.{" "}
           <a href={NATIONAL_SHEET_URL} target="_blank" rel="noreferrer">
             Open Nationals source
           </a>
@@ -1866,7 +2516,7 @@ export default function Home() {
             checked={includeFinished}
             onChange={(event) => setIncludeFinished(event.target.checked)}
           />
-          Show completed entries
+          Show completed & older entries
         </label>
       </section>
 
@@ -1899,7 +2549,29 @@ export default function Home() {
         loading={loading}
         savingId={savingId}
         onStatus={handleStatus}
+        selectedInventory={selectedInventory}
       />
+
+      <div className="inventory-grid">
+        <InventoryPanel
+          title="Inbound Inventory"
+          eyebrow="PRODUCTS ON INBOUND SHIPMENTS"
+          items={inboundInventory}
+          loading={loading}
+          onSelect={(item) => setSelectedInventory((current) => current?.id === item.id ? null : item)}
+          selectable
+          selectedItem={selectedInventory}
+          showLocation={false}
+        />
+        <InventoryPanel
+          title="Inbound Products in Stock"
+          eyebrow="MATCHING PRODUCTS · CURRENT WAREHOUSE ON HAND"
+          items={warehouseStock}
+          loading={loading}
+          selectedItem={selectedInventory}
+          showLocation
+        />
+      </div>
 
       <div className="schedule-stack" aria-label="Separate inbound and outbound schedules">
         <ScheduleBoard

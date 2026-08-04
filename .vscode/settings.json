@@ -1,0 +1,10 @@
+{
+    "google.datacloud.starredProjects": [
+        "key=AIzaSyBqwLCAX4w6VJg2FC3iKdTpkiO8faPFmrY"
+    ],
+    "google.datacloud.expandMenus": true,
+    "google.datacloud.executeCellToolForNotebookMCP": true,
+    "google.datacloud.executeCellToolConsent": true,
+    "google.datacloud.composer.region": "us-west2",
+    "google.datacloud.composer.project": "logistics-5609"
+}

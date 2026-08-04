@@ -7,6 +7,13 @@ const NATIONAL_SHEET_ID = "12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8";
 const WMS_SHEET_ID = "14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I";
 const LOGISTICS_SHEET_ID = "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc";
 
+type CarrierKpi = {
+  name: string;
+  earnings: number;
+  moves: number;
+  shipmentPercent: number;
+};
+
 function parseCsv(text: string) {
   const rows: string[][] = [];
   let row: string[] = [];
@@ -61,14 +68,9 @@ function freightDateCode(value: string, today: ReturnType<typeof pacificDatePart
   if (!match) return 0;
   const month = Number(match[1]);
   const day = Number(match[2]);
-  const todayTime = Date.UTC(today.year, today.month - 1, today.day);
-  const candidates = [today.year - 1, today.year, today.year + 1].map((year) => ({
-    code: year * 10_000 + month * 100 + day,
-    time: Date.UTC(year, month - 1, day),
-  }));
-  return candidates.reduce((best, candidate) =>
-    Math.abs(candidate.time - todayTime) < Math.abs(best.time - todayTime) ? candidate : best,
-  ).code;
+  const hasOccurredThisYear = month < today.month || (month === today.month && day <= today.day);
+  const year = hasOccurredThisYear ? today.year : today.year - 1;
+  return year * 10_000 + month * 100 + day;
 }
 
 function amount(value: string, allowSuffix: boolean) {
@@ -98,6 +100,10 @@ function loadType(value: string) {
   const text = value.trim();
   if (/\bFTL\b|FULL\s*TRUCK|TRUCKLOAD/i.test(text)) return "FTL" as const;
   return Number(text.match(/\d+/)?.[0] ?? 0) >= 10 ? ("FTL" as const) : ("LTL" as const);
+}
+
+function isNewJerseyDestination(destination: string) {
+  return /\b(?:NJ|NEW JERSEY)\b/i.test(destination.trim());
 }
 
 function distanceBand(destination: string) {
@@ -148,7 +154,7 @@ async function fullCsv(spreadsheetId: string, gid: number) {
   return parseCsv(await response.text());
 }
 
-export async function computeLiveKpis(): Promise<Record<string, number | string>> {
+export async function computeLiveKpis(): Promise<Record<string, number | string | CarrierKpi[]>> {
   try {
     const [nationalRows, wmsRows, truckingRows, transferRows] = await Promise.all([
       fullCsv(NATIONAL_SHEET_ID, 99300389),
@@ -209,23 +215,43 @@ export async function computeLiveKpis(): Promise<Record<string, number | string>
     const freightMtd = freight.filter((record) => record.date >= monthStart);
     const transferYtd = freight.filter((record) => record.isTransfer);
     const transferMtd = freightMtd.filter((record) => record.isTransfer);
-    const carrierCounts = freight.reduce((counts, record) => {
-      if (!record.carrier) return counts;
+    const njTransferYtd = transferYtd.filter((record) =>
+      isNewJerseyDestination(record.destination),
+    );
+    const njTransferMtd = transferMtd.filter((record) =>
+      isNewJerseyDestination(record.destination),
+    );
+    const carrierTotals = freight.reduce((totals, record) => {
+      if (!record.carrier) return totals;
       const key = record.carrier.toUpperCase();
-      const current = counts.get(key) ?? { label: record.carrier, count: 0 };
-      current.count += 1;
-      counts.set(key, current);
-      return counts;
-    }, new Map<string, { label: string; count: number }>());
-    const topCarrier =
-      [...carrierCounts.values()].sort((a, b) => b.count - a.count)[0] ??
-      { label: "—", count: 0 };
+      const current = totals.get(key) ?? { name: record.carrier, earnings: 0, moves: 0 };
+      current.earnings += record.cost;
+      current.moves += 1;
+      totals.set(key, current);
+      return totals;
+    }, new Map<string, { name: string; earnings: number; moves: number }>());
+    const namedCarrierMoves = [...carrierTotals.values()].reduce(
+      (total, carrier) => total + carrier.moves,
+      0,
+    );
+    const topCarriers: CarrierKpi[] = [...carrierTotals.values()]
+      .sort((a, b) => b.moves - a.moves || b.earnings - a.earnings)
+      .slice(0, 3)
+      .map((carrier) => ({
+        ...carrier,
+        shipmentPercent: namedCarrierMoves
+          ? Math.round((carrier.moves / namedCarrierMoves) * 1_000) / 10
+          : 0,
+      }));
     const classified = freight.filter((record) => !record.isTransfer || record.cost > 0);
     const ltl = classified.filter((record) => record.loadType === "LTL").length;
     const ftl = classified.filter((record) => record.loadType === "FTL").length;
     const splitTotal = ltl + ftl;
-    const average = (band: "local" | "california" | "out-of-state") => {
-      const matching = freight.filter(
+    const average = (
+      records: typeof freight,
+      band: "local" | "california" | "out-of-state",
+    ) => {
+      const matching = records.filter(
         (record) =>
           !record.isTransfer &&
           record.cost > 0 &&
@@ -245,13 +271,17 @@ export async function computeLiveKpis(): Promise<Record<string, number | string>
         shippingYtd: freight.reduce((total, record) => total + record.cost, 0),
         transfersMtd: transferMtd.reduce((total, record) => total + record.cost, 0),
         transfersYtd: transferYtd.reduce((total, record) => total + record.cost, 0),
-        topCarrier: topCarrier.label,
-        topCarrierMoves: topCarrier.count,
+        njTransferMtd: njTransferMtd.reduce((total, record) => total + record.cost, 0),
+        njTransferYtd: njTransferYtd.reduce((total, record) => total + record.cost, 0),
+        topCarriers,
         ltlPercent: splitTotal ? Math.round((ltl / splitTotal) * 100) : 0,
         ftlPercent: splitTotal ? Math.round((ftl / splitTotal) * 100) : 0,
-        avgLocal: average("local"),
-        avgCalifornia: average("california"),
-        avgOutOfState: average("out-of-state"),
+        avgLocal: average(freight, "local"),
+        avgCalifornia: average(freight, "california"),
+        avgOutOfState: average(freight, "out-of-state"),
+        avgLocalMtd: average(freightMtd, "local"),
+        avgCaliforniaMtd: average(freightMtd, "california"),
+        avgOutOfStateMtd: average(freightMtd, "out-of-state"),
     };
   } catch (error) {
     throw error instanceof Error ? error : new Error("KPI calculation failed.");

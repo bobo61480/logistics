@@ -38,6 +38,15 @@ function getColValue(row, ...names) {
   return "";
 }
 
+function normalizeShipDate(value) {
+  const text = String(value || "").trim();
+  const match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (!match) return text.toUpperCase();
+  let year = Number(match[3]);
+  if (year < 100) year += 2000;
+  return [year, String(Number(match[1])).padStart(2, "0"), String(Number(match[2])).padStart(2, "0")].join("-");
+}
+
 async function runScan({ dryRun = false } = {}) {
   const timestamp = new Date().toLocaleString();
   console.log(`[${timestamp}] Starting WMS Trucking scan from WMS Sheet ${WMS_SHEET_ID}... (dryRun=${dryRun})`);
@@ -93,7 +102,7 @@ async function runScan({ dryRun = false } = {}) {
     const note = getColValue(row, "REMARKS (SALES)", "REMARKS (WAREHOUSE)", "NOTE", "REMARK");
 
     const normCust = customer.toUpperCase().replace(/\s+/g, " ").trim();
-    const normDate = shipDate.toUpperCase().trim();
+    const normDate = normalizeShipDate(shipDate);
     const groupKey = normCust ? (normCust + "___" + normDate) : ("UNKNOWN___" + idx);
 
     if (!groups.has(groupKey)) groups.set(groupKey, []);
@@ -119,21 +128,25 @@ async function runScan({ dryRun = false } = {}) {
     return { ok: false, error: err.message };
   }
 
-  // Index existing target rows by Customer + Ship Date or Invoice
+  // Index existing target rows by exact normalized Customer + Ship Date.
   const existingMap = new Map();
+  const existingInvoiceMap = new Map();
   targetRows.forEach((row) => {
-    const invs = getColValue(row, "INVOICE NO.", "INVOICE #", "INVOICE").split(/[\r\n,;·]+/);
+    const invoices = getColValue(row, "INVOICE NO.", "INVOICE #", "INVOICE").split(/[\r\n,;·]+/);
     const cust = getColValue(row, "CUSTOMER").toUpperCase().replace(/\s+/g, " ").trim();
-    const date = getColValue(row, "SHIP DATE").toUpperCase().trim();
+    const date = normalizeShipDate(getColValue(row, "SHIP DATE"));
     if (cust && date) existingMap.set(cust + "___" + date, row);
-    invs.forEach(inv => {
-      const cleanInv = inv.trim().toUpperCase();
-      if (cleanInv) existingMap.set("INV___" + cleanInv, row);
+    invoices.forEach(invoice => {
+      const key = invoice.trim().toUpperCase();
+      if (!key) return;
+      if (!existingInvoiceMap.has(key)) existingInvoiceMap.set(key, new Set());
+      existingInvoiceMap.get(key).add(row);
     });
   });
 
   const newEntries = [];
   const modifiedEntries = [];
+  const skippedRescheduled = [];
 
   groups.forEach((items, groupKey) => {
     const customer = items[0].customer;
@@ -145,16 +158,27 @@ async function runScan({ dryRun = false } = {}) {
     const combinedNote = [...new Set(items.map(i => i.note).filter(Boolean))].join(" · ") || "Imported from WMS Invoice & Issues";
 
     const normCust = customer.toUpperCase().replace(/\s+/g, " ").trim();
-    const normDate = shipDate.toUpperCase().trim();
+    const normDate = normalizeShipDate(shipDate);
     const matchKey = normCust + "___" + normDate;
 
     let matchedRow = existingMap.get(matchKey);
     if (!matchedRow) {
-      for (const item of items) {
-        if (item.invoice && existingMap.has("INV___" + item.invoice.toUpperCase())) {
-          matchedRow = existingMap.get("INV___" + item.invoice.toUpperCase());
-          break;
+      const invoiceMatches = new Set();
+      items.forEach(item => {
+        const rows = existingInvoiceMap.get(String(item.invoice || "").trim().toUpperCase());
+        if (rows) rows.forEach(row => invoiceMatches.add(row));
+      });
+      if (invoiceMatches.size === 1) {
+        const candidate = [...invoiceMatches][0];
+        if (normalizeShipDate(getColValue(candidate, "SHIP DATE")) === normDate) {
+          matchedRow = candidate;
+        } else {
+          skippedRescheduled.push({ customer, shipDate, invoice: combinedInvoices, existingRow: candidate.__sourceRow });
+          return;
         }
+      } else if (invoiceMatches.size > 1) {
+        skippedRescheduled.push({ customer, shipDate, invoice: combinedInvoices, existingRow: "ambiguous" });
+        return;
       }
     }
 
@@ -171,15 +195,22 @@ async function runScan({ dryRun = false } = {}) {
 
     if (matchedRow) {
       const curInvs = getColValue(matchedRow, "INVOICE NO.", "INVOICE #", "INVOICE");
-      if (curInvs !== combinedInvoices) {
-        modifiedEntries.push({ ...entry, existingRow: matchedRow.__sourceRow });
+      const mergedInvoices = [...new Set(
+        [curInvs, combinedInvoices]
+          .join("\n")
+          .split(/[\r\n,;·]+/)
+          .map(invoice => invoice.trim())
+          .filter(Boolean)
+      )].join("\n");
+      if (curInvs !== mergedInvoices) {
+        modifiedEntries.push({ ...entry, invoice: mergedInvoices, existingRow: matchedRow.__sourceRow });
       }
     } else {
       newEntries.push(entry);
     }
   });
 
-  console.log(`\n[RESULT] Scan complete: ${newEntries.length} new entries to append, ${modifiedEntries.length} entries to update.`);
+  console.log(`\n[RESULT] Scan complete: ${newEntries.length} new entries to append, ${modifiedEntries.length} entries to update, ${skippedRescheduled.length} rescheduled/ambiguous entries skipped.`);
   if (newEntries.length > 0) {
     console.log(`\n[NEW COMBINED ENTRIES (${newEntries.length})]:`);
     newEntries.forEach((e, idx) => console.log(`  ${idx+1}. ${e.customer} (${e.shipDate}) -> Invoices: ${e.invoice.replace(/\n/g, ", ")}`));
@@ -196,8 +227,10 @@ async function runScan({ dryRun = false } = {}) {
     groups: groups.size,
     newCount: newEntries.length,
     modifiedCount: modifiedEntries.length,
+    skippedRescheduledCount: skippedRescheduled.length,
     newEntries,
-    modifiedEntries
+    modifiedEntries,
+    skippedRescheduled
   };
 }
 
