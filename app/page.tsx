@@ -180,9 +180,19 @@ const finished = new Set(["shipped", "delivered", "received", "cancelled", "comp
 const finishedImports = new Set(["delivered", "received", "cancelled", "completed"]);
 
 // Any import whose ETA is before this date is treated as effectively received/delivered/completed
-// and hidden from the "unfinished" Import Schedules table, even if the sheet's Status cell is blank
-// or stale. This does not overwrite the Status column in the source spreadsheet.
-const IMPORT_STALE_CUTOFF = new Date(2026, 6, 1).getTime(); // July 1, 2026
+// and hidden from the "current + upcoming" Import Schedules table, even if the sheet's Status
+// cell is blank or stale. This does not overwrite the Status column in the source spreadsheet.
+//
+// This used to be a fixed literal date, which meant it silently stopped working once "today"
+// caught up to it -- every row eventually aged past the cutoff and the whole table (and the
+// Inbound Schedule calendar it feeds) went empty. It's now a rolling window measured back from
+// today, computed at module load, so it keeps working without needing a manual date bump.
+const IMPORT_STALE_WINDOW_DAYS = 30;
+const IMPORT_STALE_CUTOFF = (() => {
+  const cutoff = startOfToday();
+  cutoff.setDate(cutoff.getDate() - IMPORT_STALE_WINDOW_DAYS);
+  return cutoff.getTime();
+})();
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -1360,7 +1370,7 @@ function ImportSchedules({
       <div className="panel-heading import-heading">
         <div>
           <p className="eyebrow">
-            {selectedInventory ? "ALL UNFINISHED + SELECTED SHIPMENT" : "ALL UNFINISHED · OCEAN / AIR"}
+            {selectedInventory ? "CURRENT + UPCOMING + SELECTED SHIPMENT" : "CURRENT + UPCOMING · OCEAN / AIR"}
           </p>
           <h2 id="import-schedules-heading">Import Schedules</h2>
         </div>
