@@ -465,7 +465,7 @@ function firstDatedValue(...values: string[]) {
   return null;
 }
 
-function sanitizeSecondary(value: string) {
+function lastDateToken(value: string) { const matches = clean(value).match(/\d{1,2}\/\d{1,2}(?:\/\d{2,4})?/g); return matches ? matches[matches.length - 1] : clean(value); } function sanitizeSecondary(value: string) {
   return clean(value)
     .split(/\s*·\s*/)
     .filter((part) => part && !/^imported from\b/i.test(part))
@@ -944,7 +944,7 @@ function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
     );
     if (!hasShipmentDocuments || parcelCarrier(record.shipmentNo)) return [];
 
-    const dated = firstDatedValue(record.deliveryExpected, record.eta, record.etd);
+    const dated = firstDatedValue(record.deliveryExpected); if (!dated) return [];
     const date = dated?.date ?? today;
     const overdue = date.getTime() < today.getTime();
     const eta = dated
@@ -1015,16 +1015,16 @@ function inboundParcelItems(rows: string[][]): ScheduleItem[] {
     const trackingNumber = trackingCandidate(cell(row, 1), cell(row, 10));
     const invoice = cell(row, 2);
     const department = cell(row, 3);
-    const description = cell(row, 4);
-    const etaSource = cell(row, 7) || cell(row, 8);
+    const etaSource = lastDateToken(cell(row, 4));
+    
     const isSectionHeader =
       /TRACKING\s*#?/i.test(cell(row, 1)) ||
-      (!trackingNumber && !invoice && !department && !description && !etaSource);
+      (!trackingNumber && !invoice && !department && !etaSource);
     if (isSectionHeader) return [];
 
     const sourceRow = index + 1;
     const status = normalizeStatus(cell(row, 29));
-    const datedValue = firstDatedValue(etaSource, description);
+    const datedValue = firstDatedValue(etaSource);
     const sourceDate = datedValue?.date ?? today;
     const unfinished = !finished.has(status.toLowerCase());
     const isStale = sourceDate.getTime() < IMPORT_STALE_CUTOFF;
@@ -1047,7 +1047,7 @@ function inboundParcelItems(rows: string[][]): ScheduleItem[] {
         dateText: etaText,
         title: trackingNumber || "Tracking pending",
         reference: trackingNumber || invoice || `${currentCarrier} parcel`,
-        secondary: [department, description].filter(Boolean).join(" · "),
+        secondary: department,
         status,
         sourceSheet: "IMPORTS",
         sourceRow,
