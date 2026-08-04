@@ -1031,7 +1031,13 @@ function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
     );
     if (!hasShipmentDocuments || parcelCarrier(record.shipmentNo)) return [];
 
-    const dated = firstDatedValue(record.deliveryExpected); if (!dated) return [];
+    // Prefer Delivery Expected when present, but most in-transit rows only ever get an ETA/ETD
+    // filled in (Delivery Expected is usually populated only once a shipment is close to or
+    // already received). Without this fallback, unfinished shipments with a real ETA but a
+    // blank Delivery Expected cell were silently dropped, which emptied out the Inbound
+    // Schedule and Import Schedules table.
+    const dated = firstDatedValue(record.deliveryExpected, record.eta, record.etd);
+    if (!dated) return [];
     const date = dated?.date ?? today;
     const overdue = date.getTime() < today.getTime();
     const eta = dated
