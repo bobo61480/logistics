@@ -641,7 +641,7 @@ function dashboardInventoryItems(table: any): InventoryCollections {
       location: value(indexes.location),
       status: value(indexes.status),
     };
-    inbound.push({ ...base, id: `inventory-inbound-${rowIndex}`, quantity: incoming });
+    if (!/^(DELIVERED|RECEIVED|COMPLETED|CANCELLED)$/.test(value(indexes.status).toUpperCase())) inbound.push({ ...base, id: `inventory-inbound-${rowIndex}`, quantity: incoming });
     const onHand = inventoryNumber(value(indexes.onHand));
     if (onHand > 0) inStock.push({ ...base, id: `inventory-stock-${rowIndex}`, quantity: onHand });
   });
@@ -867,6 +867,68 @@ function InventoryPanel({
   );
 }
 
+function LowStockPanel({
+  items,
+  inboundItems,
+  loading,
+}: {
+  items: InventoryItem[];
+  inboundItems: InventoryItem[];
+  loading: boolean;
+}) {
+  const lowStockItems = useMemo(
+    () => items.filter((item) => item.quantity < 200).sort((a, b) => a.quantity - b.quantity),
+    [items],
+  );
+  const incomingShipmentsFor = (item: InventoryItem) =>
+    Array.from(new Set(
+      inboundItems
+        .filter((inbound) => inventoryProductsMatch(inbound, item))
+        .flatMap((inbound) => inventoryShipmentReferences(inbound.shipmentNo)),
+    ));
+  return (
+    <section className="inventory-panel low-stock-panel" aria-label="Low Stock">
+      <div className="panel-heading inventory-heading">
+        <div><p className="eyebrow">QTY UNDER 200 · CURRENT WAREHOUSE ON HAND</p><h2>Low Stock</h2></div>
+        <div className="inventory-total"><strong>{lowStockItems.length}</strong><span>products</span></div>
+      </div>
+      <div className="inventory-table-wrap">
+        <table className="inventory-table">
+          <thead><tr><th>Product name</th><th>SKU #</th><th>UPC #</th><th>Expiration</th><th>Qty</th><th>Location</th><th>Incoming shipment #</th></tr></thead>
+          <tbody>
+            {lowStockItems.map((item) => {
+              const shipments = incomingShipmentsFor(item);
+              return (
+                <tr key={item.id}>
+                  <td><strong>{item.productName || "—"}</strong></td>
+                  <td>{item.sku || "—"}</td>
+                  <td>{item.upc || "—"}</td>
+                  <td>{item.expirationDate || "—"}</td>
+                  <td>{item.quantity.toLocaleString()}</td>
+                  <td>{item.location || "Unassigned"}</td>
+                  <td>
+                    {shipments.length ? (
+                      <span className="inventory-shipment-links">
+                        {shipments.map((shipment) => (
+                          <a href={packingListUrl(shipment)} key={shipment} rel="noreferrer" target="_blank">
+                            {shipment} <span aria-hidden="true">↗</span>
+                          </a>
+                        ))}
+                      </span>
+                    ) : "—"}
+                  </td>
+                </tr>
+              );
+            })}
+            {!loading && lowStockItems.length === 0 && <tr><td className="import-empty" colSpan={7}>No low-stock products currently on hand.</td></tr>}
+            {loading && <tr><td className="import-empty" colSpan={7}>Syncing inventory…</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 async function fetchCsvRows(spreadsheetId: string, gid: number) {
   const url = new URL(`https://docs.google.com/spreadsheets/d/${spreadsheetId}/export`);
   url.searchParams.set("format", "csv");
@@ -907,7 +969,22 @@ type ImportSourceRecord = {
   deliveryExpected: string;
 };
 
+function importsBoundaryRow(rows: string[][]) {
+  const index = rows.findIndex((row) => {
+    const joined = row.map(clean).join("").toUpperCase();
+    return (
+      joined.includes("URGENT") &&
+      joined.includes("COMPLETED") &&
+      joined.includes("ESTIMATED") &&
+      joined.includes("CHANGED") &&
+      joined.includes("미정")
+    );
+  });
+  return index === -1 ? rows.length : index;
+}
+
 function importSourceRecords(rows: string[][]): ImportSourceRecord[] {
+  rows = rows.slice(0, importsBoundaryRow(rows));
   return rows.flatMap((row, index) => {
     const sourceRow = index + 1;
     if (sourceRow <= 2) return [];
@@ -2554,7 +2631,7 @@ export default function Home() {
           showLocation={false}
         />
         <InventoryPanel
-          title="Inbound Products in Stock"
+          title="Products in Stock"
           eyebrow="MATCHING PRODUCTS · CURRENT WAREHOUSE ON HAND"
           items={warehouseStock}
           loading={loading}
@@ -2562,6 +2639,8 @@ export default function Home() {
           showLocation
         />
       </div>
+
+      <LowStockPanel items={warehouseStock} inboundItems={inboundInventory} loading={loading} />
 
       <div className="schedule-stack" aria-label="Separate inbound and outbound schedules">
         <ScheduleBoard
