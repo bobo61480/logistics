@@ -466,8 +466,8 @@ function buildInboundPlanningRow(value, eta, sourceRow) {
 }
 
 /* IMPORTS contains a calendar-style planning grid below the detailed shipment
-   table. Its cells are operational schedule sources, not ordinary table rows,
-   so scan the raw grid and merge the planned dates back into inbound records. */
+   table. The public import board mirrors only the manual SCHEDULED block the
+   team edits there, then stops before the later NEED SCHEDULING backlog. */
 function mapInboundPlanningGrid(table) {
   const rows = table.rows || [];
   const marker = rows.findIndex((row) =>
@@ -484,8 +484,6 @@ function mapInboundPlanningGrid(table) {
     if (date) topDates.set(column, date);
   });
 
-  let phase = "";
-  const phaseDates = new Map();
   const planned = [];
   let inScheduledBlock = false;
   let blankRun = 0;
@@ -495,7 +493,7 @@ function mapInboundPlanningGrid(table) {
     const values = (row.c || []).map((_, column) => rawCell(row, column));
     const hasAnyValue = values.some((value) => clean(value));
     if (PARCEL_SECTIONS.test(first)) break;
-    if (first === "NEED SCHEDULING" || values.some((value) => /^MONTH*/i.test(clean(value)))) break;
+    if (first === "NEED SCHEDULING" || values.some((value) => /^MONTH OF AUGUST$/i.test(clean(value)))) break;
     if (!hasAnyValue) {
       blankRun += 1;
       if (inScheduledBlock && blankRun >= 2) break;
@@ -508,34 +506,10 @@ function mapInboundPlanningGrid(table) {
     (row.c || []).forEach((_, column) => {
       if (column === 0) return;
       const value = rawCell(row, column);
-      const container = clean(value).toUpperCase().match(/\b[A-Z]{4}\d{7}\b/)?.[0] || "";
-      if (!container) return;
-      const shipmentNo = value
-        .replace(new RegExp(`\\s*-?\\s*${container}\\s*$`, "i"), "")
-        .replace(/\s*-\s*$/, "")
-        .trim();
-      const eta = (phase === "needs-scheduling" ? phaseDates.get(column) : "") || topDates.get(column) || "";
-      const tracking = containerTrackingProfile({}, container, "LA / Long Beach");
-      planned.push({
-        mode: "Ocean",
-        eta,
-        shipmentNo: shipmentNo || container,
-        invoice: "",
-        mbl: "",
-        hbl: "",
-        container,
-        carrier: "Ocean freight",
-        trackingUrl: tracking.url,
-        trackingSource: tracking.source,
-        sourceTab: "IMPORTS",
-        sourceRow: 0,
-        sourceStatus: "",
-        origin: "BUSAN",
-        destination: "LA / Long Beach",
-        /* The row state is authoritative. A column heading such as COMPLETED
-           describes the planner lane/date, not every shipment beneath it. */
-        status: classifyStatus(value)
-      });
+      const eta = topDates.get(column) || "";
+      if (!eta || !isManualPlanningItem(value)) return;
+      const sourceRow = Number(table.__sourceStartRow || 1) + rowIndex + 1;
+      planned.push(buildInboundPlanningRow(value, eta, sourceRow));
     });
   }
   return planned;
@@ -976,8 +950,9 @@ async function load() {
     };
     const excludedFn = (source, key) =>
       Boolean(key) && exclusionSet.has(`${tabOf[source] || source.toUpperCase()}|${key}`.toUpperCase());
+
     inboundPlanningRows = mapInboundPlanningGrid(tables[0]);
-    inboundRows = mergeInboundPlanning(mapInbound(im), mapInboundPlanningGrid(tables[0]));
+    inboundRows = mergeInboundPlanning(mapInbound(im), inboundPlanningRows);
     parcelRows = mapParcels(tables[0]);
     mapAllOutbound({ tr, ul, ih, b2, wh, national, shipOut, tjxRoss }, excludedFn);
     if (globalThis.STYLEKOREAN_DATABASE?.preferDatabase && globalThis.StyleKoreanDatabase?.configured()) {
@@ -1176,8 +1151,8 @@ function renderBoard(hostId, rows, dateField, itemHtml) {
   }).join("")}</div>`;
 }
 
-function inboundBoardDetail(r) {   
-    const parts = [];
+function inboundBoardDetail(r) {
+  const parts = [];
   if (r.container) {
     parts.push(r.trackingUrl
       ? `<a class="board-link" href="${esc(r.trackingUrl)}" target="_blank" rel="noopener noreferrer" title="${esc(r.trackingSource || "Container tracking")}">${esc(r.container)} ↗</a>`
@@ -1210,12 +1185,7 @@ function inboundBoardRows() {
 }
 
 function renderBoards() {
-//  renderBoard("inboundBoard", activeInbound(), "eta", (r) =>
- //   `<div class="board-item" style="--c:${r.mode === "Air" ? "var(--c-b2b)" : "var(--c-transfers)"}">
- //     <strong>${esc(r.shipmentNo || r.container || r.mbl || "Shipment")}</strong>
- //     <span>${esc([r.container || r.carrier, r.invoice ? `Invoice # ${r.invoice}` : ""].filter(Boolean).join(" · "))}</span>
- //   </div>`);
-     renderBoard("inboundBoard", inboundBoardRows(), "eta", (r) =>
+  renderBoard("inboundBoard", inboundBoardRows(), "eta", (r) =>
     `<div class="board-item" style="--c:${r.mode === "Air" ? "var(--c-b2b)" : "var(--c-transfers)"}">
       <strong>${esc(r.shipmentNo || r.container || r.mbl || "Shipment")}</strong>
       <span>${inboundBoardDetail(r)}</span>
