@@ -7,3 +7,6 @@ pnpm-lock.yaml
 pnpm-workspace.yaml
 *.log
 .next-stale*
+
+# Prevent accidental version-specifier files (e.g. from mistyped `pip install pkg =1.0.0`)
+/=*
