@@ -1,22 +1,70 @@
-const SPREADSHEET_ID = "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc";
+// ─── Constants ───────────────────────────────────────────────────────────────
+
+const SPREADSHEET_ID     = "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc";
 const WMS_SPREADSHEET_ID = "14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I";
 
-const OUTBOUND_STATUS = ["", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "SHIPPING", "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED"];
-const INBOUND_STATUS = ["", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "SHIPPING", "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED", "N/A", "Customs Clearance", "FDA Review/Hold", "FWS Review/Hold", "Delayed"];
-const ALLOWED_SHEETS = ["WH Trucking Request", "B2B/E-COM TRUCKING", "TRANSFERS", "ULTA", "IHERB", "IMPORTS", "NATIONAL ORDER PROGRESS", "Outbound Shipping Schedule", "TJX/ROSS"];
+const OUTBOUND_STATUS = [
+  "", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "SHIPPING",
+  "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED",
+];
+const INBOUND_STATUS = [
+  "", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "SHIPPING",
+  "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED",
+  "N/A", "Customs Clearance", "FDA Review/Hold", "FWS Review/Hold", "Delayed",
+];
 
-const COMPLETED_STATUSES = ["SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED"];
+// Pre-built Sets for O(1) status validation (built once at load time).
+const OUTBOUND_STATUS_SET = new Set(OUTBOUND_STATUS.map(s => s.toUpperCase()));
+const INBOUND_STATUS_SET  = new Set(INBOUND_STATUS.map(s => s.toUpperCase()));
+
+const ALLOWED_SHEETS = new Set([
+  "WH Trucking Request", "B2B/E-COM TRUCKING", "TRANSFERS",
+  "ULTA", "IHERB", "IMPORTS", "NATIONAL ORDER PROGRESS",
+  "Outbound Shipping Schedule", "TJX/ROSS",
+]);
+
+const COMPLETED_STATUSES = new Set([
+  "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED",
+]);
+
+/**
+ * Maps logical field names to the header keywords used to detect them in the
+ * WMS source sheet.  Keeping this declarative makes it trivial to add columns.
+ */
+const WMS_COLUMN_SPECS = {
+  shipMethod: ["SHIPPING METHOD", "SHIP METHOD"],
+  invoice:    ["INVOICE", "PO#", "PO NUMBER"],
+  customer:   ["CUSTOMER", "CLIENT", "ACCOUNT"],
+  shipDate:   ["SHIP DATE", "DATE", "PU DATE"],
+  pallets:    ["PALLET", "PLT", "QTY", "CARTONS"],
+  carrier:    ["CARRIER", "TRUCKING"],
+  pro:        ["PRO#", "PRO", "TRACKING", "BOL"],
+  note:       ["NOTE", "REMARK", "MEMO", "ISSUE"],
+};
+
+// ─── Web-app entry point ──────────────────────────────────────────────────────
 
 function doPost(e) {
   const lock = LockService.getScriptLock();
-  lock.waitLock(10000);
+
+  // Explicit guard so callers receive a clear "retry" message instead of a
+  // generic error when the lock is already held.
   try {
+    lock.waitLock(10000);
+  } catch (_) {
+    return json_({ ok: false, error: "Server busy. Please retry in a moment." });
+  }
+
+  try {
+    // Normalise body: Apps Script may deliver it in postData.contents or as a
+    // query parameter when the request is URL-encoded.
     let rawContents = (e && e.postData && e.postData.contents) || "";
     if (!rawContents && e && e.parameter && e.parameter.postData) {
       rawContents = e.parameter.postData;
     }
     const request = JSON.parse(rawContents || "{}");
     validateRequest_(request);
+
     const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
     const sheet = spreadsheet.getSheetByName(request.sourceSheet);
     if (!sheet) throw new Error("Source sheet not found.");
@@ -25,26 +73,32 @@ function doPost(e) {
       ? findInboundTarget_(sheet, request)
       : findOutboundTarget_(sheet, request);
 
-    const allowed = (request.kind === "inbound" ? INBOUND_STATUS : OUTBOUND_STATUS).map((value) => String(value).toUpperCase());
-    const status = String(request.status || "").trim();
-    if (!allowed.includes(status.toUpperCase())) throw new Error("Status is not allowed.");
+    const allowed = request.kind === "inbound" ? INBOUND_STATUS_SET : OUTBOUND_STATUS_SET;
+    const status  = String(request.status || "").trim();
+    if (!allowed.has(status.toUpperCase())) throw new Error("Status is not allowed.");
 
-    const current = String(target.getDisplayValue() || "").trim();
+    // Concurrency note: log when the caller's view of the current status differs
+    // from what is actually in the cell (tolerate "" ↔ "SCHEDULED" as equivalent).
+    const current        = String(target.getDisplayValue() || "").trim();
     const requestCurrent = String(request.currentStatus || "").trim();
-    const normCurrent = current.toUpperCase();
-    const normRequest = requestCurrent.toUpperCase();
-
-    // Check concurrency, tolerating default status fallbacks ("" vs "SCHEDULED")
-    if (requestCurrent && normCurrent && normCurrent !== normRequest && !(normCurrent === "" && normRequest === "SCHEDULED")) {
-      Logger.log("Concurrency note: Current='" + current + "', Request='" + requestCurrent + "'");
+    const normCurrent    = current.toUpperCase();
+    const normRequest    = requestCurrent.toUpperCase();
+    if (
+      requestCurrent && normCurrent &&
+      normCurrent !== normRequest &&
+      !(normCurrent === "" && normRequest === "SCHEDULED")
+    ) {
+      Logger.log(`Concurrency note: Cell='${current}', Request='${requestCurrent}'`);
     }
 
+    // Cache lastColumn before writing so we only call getLastColumn() once.
+    const lastCol = Math.max(sheet.getLastColumn(), 1);
     target.setValue(status);
 
-    // Format row in Google Sheets: Grey out completed rows, reset active rows
-    const rowIdx = target.getRow();
-    const rowRange = sheet.getRange(rowIdx, 1, 1, Math.max(sheet.getLastColumn(), 1));
-    const isCompleted = COMPLETED_STATUSES.includes(status.toUpperCase());
+    // Grey out completed rows; reset colouring for active rows.
+    const rowIdx    = target.getRow();
+    const rowRange  = sheet.getRange(rowIdx, 1, 1, lastCol);
+    const isCompleted = COMPLETED_STATUSES.has(status.toUpperCase());
     if (isCompleted) {
       rowRange.setBackground("#E8EAED").setFontColor("#5F6368");
     } else {
@@ -60,39 +114,54 @@ function doPost(e) {
   }
 }
 
+// ─── Request validation ───────────────────────────────────────────────────────
+
 function validateRequest_(request) {
-  if (!["outbound", "inbound"].includes(request.kind)) throw new Error("Invalid relation kind.");
-  if (!ALLOWED_SHEETS.includes(request.sourceSheet)) throw new Error("Source sheet is not allowed.");
+  if (!["outbound", "inbound"].includes(request.kind)) {
+    throw new Error("Invalid relation kind.");
+  }
+  if (!ALLOWED_SHEETS.has(request.sourceSheet)) {
+    throw new Error("Source sheet is not allowed.");
+  }
 }
+
+// ─── Row-finding helpers ──────────────────────────────────────────────────────
 
 function findInboundTarget_(sheet, request) {
   const row = Number(request.sourceRow);
-  if (!Number.isInteger(row) || row < 3 || row > sheet.getLastRow()) throw new Error("Invalid IMPORTS source row.");
+  if (!Number.isInteger(row) || row < 3 || row > sheet.getLastRow()) {
+    throw new Error("Invalid IMPORTS source row.");
+  }
   const headers = sheet.getRange(1, 1, 3, sheet.getLastColumn()).getDisplayValues();
-  const header = findHeader_(headers, ["WEBSITE STATUS", "STATUS", "INBOUND STATUS", "SHIPMENT STATUS"]);
+  const header  = findHeader_(headers, ["WEBSITE STATUS", "STATUS", "INBOUND STATUS", "SHIPMENT STATUS"]);
   if (!header) throw new Error("Inbound status column not found.");
   return sheet.getRange(row, header.column);
 }
 
 function findOutboundTarget_(sheet, request) {
   const values = sheet.getDataRange().getDisplayValues();
-  const header = findHeader_(values.slice(0, 4), ["WEBSITE STATUS", "STATUS", "WORK PROGRESS", "INBOUND STATUS", "SHIPMENT STATUS"]);
+  // Limit header scan to the first 4 rows without allocating a slice.
+  const header = findHeader_(values, ["WEBSITE STATUS", "STATUS", "WORK PROGRESS", "INBOUND STATUS", "SHIPMENT STATUS"], 4);
   if (!header) throw new Error("Status column not found.");
-  const map = headerMap_(values[header.row - 1]);
+
+  const map       = headerMap_(values[header.row - 1]);
   const sourceRow = Number(request.sourceRow);
   if (Number.isInteger(sourceRow) && sourceRow > header.row && sourceRow <= values.length) {
     return sheet.getRange(sourceRow, header.column);
   }
+
+  // Fall back to fuzzy matching: score each data row on field matches.
   const candidates = [];
   for (let r = header.row; r < values.length; r++) {
     const row = values[r];
     let score = 0;
-    score += exact_(row, map, ["PRO#", "BOL", "BOL#"], request.pro) ? 100 : 0;
-    score += exact_(row, map, ["INVOICE", "INVOICE NO.", "PO#"], request.invoice) ? 50 : 0;
-    score += exact_(row, map, ["CUSTOMER", "NOTE", "DC"], request.customer) ? 20 : 0;
-    score += exact_(row, map, ["SHIP DATE", "PU", "DATE"], request.shipDate) ? 10 : 0;
+    score += exact_(row, map, ["PRO#", "BOL", "BOL#"],         request.pro)      ? 100 : 0;
+    score += exact_(row, map, ["INVOICE", "INVOICE NO.", "PO#"], request.invoice) ?  50 : 0;
+    score += exact_(row, map, ["CUSTOMER", "NOTE", "DC"],       request.customer) ?  20 : 0;
+    score += exact_(row, map, ["SHIP DATE", "PU", "DATE"],      request.shipDate) ?  10 : 0;
     if (score) candidates.push({ row: r + 1, score });
   }
+
   candidates.sort((a, b) => b.score - a.score);
   if (!candidates.length || (candidates[1] && candidates[0].score === candidates[1].score)) {
     throw new Error("Could not identify one unique source row.");
@@ -100,15 +169,34 @@ function findOutboundTarget_(sheet, request) {
   return sheet.getRange(candidates[0].row, header.column);
 }
 
-function findHeader_(rows, names) {
-  for (let r = 0; r < rows.length; r++) {
+// ─── Utility functions ────────────────────────────────────────────────────────
+
+/**
+ * Finds the first cell in `rows` that matches one of `names` (case-insensitive).
+ * @param {string[][]} rows
+ * @param {string[]}   names   Header labels to search for.
+ * @param {number=}    maxRows Optional limit; avoids the need for .slice().
+ * @returns {{ row: number, column: number } | null}  1-based indices.
+ */
+function findHeader_(rows, names, maxRows) {
+  const limit = (maxRows != null) ? Math.min(maxRows, rows.length) : rows.length;
+  const nameSet = new Set(names.map(n => n.toUpperCase()));
+  for (let r = 0; r < limit; r++) {
     for (let c = 0; c < rows[r].length; c++) {
-      if (names.includes(String(rows[r][c] || "").trim().toUpperCase())) return { row: r + 1, column: c + 1 };
+      if (nameSet.has(String(rows[r][c] || "").trim().toUpperCase())) {
+        return { row: r + 1, column: c + 1 };
+      }
     }
   }
   return null;
 }
 
+/**
+ * Builds a map of { UPPER_HEADER_NAME → column index (0-based) } from a
+ * single header row.
+ * @param {string[]} headers
+ * @returns {Object<string, number>}
+ */
 function headerMap_(headers) {
   return headers.reduce((map, value, index) => {
     map[String(value || "").trim().toUpperCase()] = index;
@@ -116,6 +204,11 @@ function headerMap_(headers) {
   }, {});
 }
 
+/**
+ * Returns true when the cell identified by any of `names` in `map` contains a
+ * value that exactly or partially matches `expected` (after upper-casing and
+ * splitting on common delimiters).
+ */
 function exact_(row, map, names, expected) {
   const wanted = String(expected || "").trim().toUpperCase();
   if (!wanted) return false;
@@ -131,183 +224,9 @@ function exact_(row, map, names, expected) {
   return false;
 }
 
-function json_(value) {
-  return ContentService.createTextOutput(JSON.stringify(value)).setMimeType(ContentService.MimeType.JSON);
-}
-
 /**
- * Periodically scans external "WMS Invoice and Issues" sheet (14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I)
- * for rows where "Shipping Method" is "Trucking", combines multiple invoices
- * for the same customer & ship date into one entry, and imports/updates into "WH Trucking Request".
+ * Returns the trimmed string value of the first matching column in `names`.
  */
-function scanAndImportWmsTruckingOrders() {
-  const lock = LockService.getScriptLock();
-  if (!lock.tryLock(10000)) return { ok: false, error: "Lock timeout" };
-  try {
-    let wmsSpreadsheet;
-    try {
-      wmsSpreadsheet = SpreadsheetApp.openById(WMS_SPREADSHEET_ID);
-    } catch (e) {
-      wmsSpreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
-    }
-    const targetSpreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
-
-    const sourceSheet = wmsSpreadsheet.getSheets()[0]; // First sheet in WMS workbook
-    const targetSheet = targetSpreadsheet.getSheetByName("WH Trucking Request");
-    if (!sourceSheet || !targetSheet) {
-      Logger.log("WMS Source sheet or WH Trucking Request sheet not found.");
-      return { ok: false, error: "Source or Target sheet missing." };
-    }
-
-    const sourceData = sourceSheet.getDataRange().getDisplayValues();
-    if (sourceData.length < 2) return { ok: true, imported: 0, updated: 0 };
-
-
-    // Locate header row in WMS sheet
-    let headerRowIdx = -1;
-    let shipMethodColIdx = -1;
-    let invoiceColIdx = -1;
-    let customerColIdx = -1;
-    let shipDateColIdx = -1;
-    let palletColIdx = -1;
-    let carrierColIdx = -1;
-    let proColIdx = -1;
-    let noteColIdx = -1;
-
-    for (let r = 0; r < Math.min(5, sourceData.length); r++) {
-      const row = sourceData[r].map(c => String(c || "").trim().toUpperCase());
-      for (let c = 0; c < row.length; c++) {
-        const val = row[c];
-        if (shipMethodColIdx === -1 && (val.includes("SHIPPING METHOD") || val.includes("SHIP METHOD"))) shipMethodColIdx = c;
-        if (invoiceColIdx === -1 && (val.includes("INVOICE") || val.includes("PO#") || val.includes("PO NUMBER"))) invoiceColIdx = c;
-        if (customerColIdx === -1 && (val.includes("CUSTOMER") || val.includes("CLIENT") || val.includes("ACCOUNT"))) customerColIdx = c;
-        if (shipDateColIdx === -1 && (val.includes("SHIP DATE") || val.includes("DATE") || val.includes("PU DATE"))) shipDateColIdx = c;
-        if (palletColIdx === -1 && (val.includes("PALLET") || val.includes("PLT") || val.includes("QTY") || val.includes("CARTONS"))) palletColIdx = c;
-        if (carrierColIdx === -1 && (val.includes("CARRIER") || val.includes("TRUCKING"))) carrierColIdx = c;
-        if (proColIdx === -1 && (val.includes("PRO#") || val.includes("PRO") || val.includes("TRACKING") || val.includes("BOL"))) proColIdx = c;
-        if (noteColIdx === -1 && (val.includes("NOTE") || val.includes("REMARK") || val.includes("MEMO") || val.includes("ISSUE"))) noteColIdx = c;
-      }
-      if (shipMethodColIdx !== -1) {
-        headerRowIdx = r;
-        break;
-      }
-    }
-
-    if (shipMethodColIdx === -1) {
-      Logger.log("Shipping Method column not found in WMS sheet.");
-      return { ok: false, error: "Shipping Method column missing." };
-    }
-
-    // Group Trucking entries by (Customer + Ship Date)
-    const groups = new Map();
-    for (let r = headerRowIdx + 1; r < sourceData.length; r++) {
-      const row = sourceData[r];
-      const shipMethod = String(row[shipMethodColIdx] || "").trim();
-      if (shipMethod.toUpperCase() !== "TRUCKING") continue;
-
-      const invoice = invoiceColIdx !== -1 ? String(row[invoiceColIdx] || "").trim() : "";
-      const customer = customerColIdx !== -1 ? String(row[customerColIdx] || "").trim() : "";
-      const shipDate = shipDateColIdx !== -1 ? String(row[shipDateColIdx] || "").trim() : "";
-      const pallets = palletColIdx !== -1 ? String(row[palletColIdx] || "").trim() : "";
-      const carrier = carrierColIdx !== -1 ? String(row[carrierColIdx] || "").trim() : "";
-      const pro = proColIdx !== -1 ? String(row[proColIdx] || "").trim() : "";
-      const note = noteColIdx !== -1 ? String(row[noteColIdx] || "").trim() : "";
-
-      const normCust = customer.toUpperCase().replace(/\s+/g, " ").trim();
-      const normDate = shipDate.toUpperCase().trim();
-      const groupKey = normCust ? (normCust + "___" + normDate) : ("UNKNOWN___" + r);
-
-      if (!groups.has(groupKey)) groups.set(groupKey, []);
-      groups.get(groupKey).push({ invoice, customer, shipDate, pallets, carrier, pro, note, rowIndex: r + 1 });
-    }
-
-    // Load target sheet existing rows to avoid duplicates
-    const targetData = targetSheet.getDataRange().getDisplayValues();
-    const targetHeaders = targetData.length > 0 ? targetData[1] || targetData[0] : [];
-    const targetMap = headerMap_(targetHeaders);
-
-    const existingRowsMap = new Map(); // key -> row index (1-based)
-    for (let r = 2; r < targetData.length; r++) {
-      const row = targetData[r];
-      const invs = exactVal_(row, targetMap, ["INVOICE NO.", "INVOICE #", "INVOICE"]).split(/[\r\n,;·]+/);
-      const cust = exactVal_(row, targetMap, ["CUSTOMER"]).toUpperCase().replace(/\s+/g, " ").trim();
-      const date = exactVal_(row, targetMap, ["SHIP DATE"]).toUpperCase().trim();
-      
-      if (cust && date) existingRowsMap.set(cust + "___" + date, r + 1);
-      invs.forEach(inv => {
-        const cleanInv = inv.trim().toUpperCase();
-        if (cleanInv) existingRowsMap.set("INV___" + cleanInv, r + 1);
-      });
-    }
-
-    let importedCount = 0;
-    let updatedCount = 0;
-
-    groups.forEach((items, groupKey) => {
-      const customer = items[0].customer;
-      const shipDate = items[0].shipDate;
-      const combinedInvoices = [...new Set(items.map(i => i.invoice).filter(Boolean))].join("\n");
-      const combinedCarrier = items.map(i => i.carrier).find(Boolean) || "Trucking";
-      const combinedPro = [...new Set(items.map(i => i.pro).filter(Boolean))].join("\n");
-      const combinedPallets = [...new Set(items.map(i => i.pallets).filter(Boolean))].join(" · ");
-      const combinedNote = [...new Set(items.map(i => i.note).filter(Boolean))].join(" · ") || "Imported from WMS Invoice & Issues";
-
-      const normCust = customer.toUpperCase().replace(/\s+/g, " ").trim();
-      const normDate = shipDate.toUpperCase().trim();
-      const matchKey = normCust + "___" + normDate;
-      
-      let matchedRowIdx = existingRowsMap.get(matchKey);
-      if (!matchedRowIdx) {
-        for (const item of items) {
-          if (item.invoice && existingRowsMap.has("INV___" + item.invoice.toUpperCase())) {
-            matchedRowIdx = existingRowsMap.get("INV___" + item.invoice.toUpperCase());
-            break;
-          }
-        }
-      }
-
-      if (matchedRowIdx) {
-        // Update existing entry if invoice list or fields changed
-        const rowRange = targetSheet.getRange(matchedRowIdx, 1, 1, Math.max(targetHeaders.length, 21));
-        const currentVals = rowRange.getDisplayValues()[0];
-
-        const invCol = targetMap["INVOICE NO."] !== undefined ? targetMap["INVOICE NO."] : targetMap["INVOICE #"];
-        if (invCol !== undefined && combinedInvoices) {
-          const curInvs = String(currentVals[invCol] || "").trim();
-          if (curInvs !== combinedInvoices) {
-            targetSheet.getRange(matchedRowIdx, invCol + 1).setValue(combinedInvoices);
-            updatedCount++;
-          }
-        }
-      } else {
-        // Append new combined entry for customer + ship date
-        const newRow = new Array(Math.max(targetHeaders.length, 21)).fill("");
-        if (targetMap["CUSTOMER"] !== undefined) newRow[targetMap["CUSTOMER"]] = customer;
-        if (targetMap["INVOICE NO."] !== undefined) newRow[targetMap["INVOICE NO."]] = combinedInvoices;
-        else if (targetMap["INVOICE #"] !== undefined) newRow[targetMap["INVOICE #"]] = combinedInvoices;
-        if (targetMap["SHIP DATE"] !== undefined) newRow[targetMap["SHIP DATE"]] = shipDate;
-        if (targetMap["PALLET TYPE"] !== undefined) newRow[targetMap["PALLET TYPE"]] = combinedPallets;
-        if (targetMap["CARRIER"] !== undefined) newRow[targetMap["CARRIER"]] = combinedCarrier;
-        if (targetMap["PRO#"] !== undefined) newRow[targetMap["PRO#"]] = combinedPro;
-        if (targetMap["NOTE"] !== undefined) newRow[targetMap["NOTE"]] = combinedNote;
-        if (targetMap["STATUS"] !== undefined) newRow[targetMap["STATUS"]] = "WORK IN PROGRESS";
-
-        targetSheet.appendRow(newRow);
-        importedCount++;
-      }
-    });
-
-    SpreadsheetApp.flush();
-    Logger.log("WMS Scan completed. Combined Groups: " + groups.size + ", Imported: " + importedCount + ", Updated: " + updatedCount);
-    return { ok: true, groups: groups.size, imported: importedCount, updated: updatedCount };
-  } catch (err) {
-    Logger.log("Error in scanAndImportWmsTruckingOrders: " + err.message);
-    return { ok: false, error: err.message };
-  } finally {
-    lock.releaseLock();
-  }
-}
-
 function exactVal_(row, map, names) {
   for (const n of names) {
     if (map[n] !== undefined && row[map[n]]) return String(row[map[n]]).trim();
@@ -315,68 +234,254 @@ function exactVal_(row, map, names) {
   return "";
 }
 
+/** Wraps a plain object as a JSON HTTP response. */
+function json_(value) {
+  return ContentService
+    .createTextOutput(JSON.stringify(value))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+// ─── WMS Trucking import ──────────────────────────────────────────────────────
+
 /**
- * Creates or resets the 30-minute time-driven trigger for WMS Trucking scanner.
- * Deletes all obsolete/legacy triggers in the project to ensure a clean schedule.
+ * Detects which columns in the WMS header rows correspond to the logical fields
+ * defined in WMS_COLUMN_SPECS.  Returns null if the mandatory "shipMethod"
+ * column cannot be found.
+ *
+ * @param {string[][]} rows - Up to 5 rows from the top of the WMS sheet.
+ * @returns {{ headerRowIdx: number, cols: Object<string, number> } | null}
+ */
+function detectWmsColumns_(rows) {
+  for (let r = 0; r < rows.length; r++) {
+    const row  = rows[r].map(c => String(c || "").trim().toUpperCase());
+    const cols = {};
+    for (const [key, keywords] of Object.entries(WMS_COLUMN_SPECS)) {
+      const idx = row.findIndex(val => keywords.some(kw => val.includes(kw)));
+      if (idx !== -1) cols[key] = idx;
+    }
+    if (cols.shipMethod !== undefined) return { headerRowIdx: r, cols };
+  }
+  return null;
+}
+
+/**
+ * Periodically scans the WMS "Invoice and Issues" sheet for rows where
+ * "Shipping Method" is "Trucking", combines multiple invoices for the same
+ * customer + ship date, and imports / updates rows in "WH Trucking Request".
+ *
+ * Designed to run via a 30-minute time-driven trigger (see create30MinTrigger).
+ */
+function scanAndImportWmsTruckingOrders() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return { ok: false, error: "Lock timeout" };
+
+  try {
+    // Open both spreadsheets.  Let errors propagate — a failed open means the
+    // IDs or permissions are wrong and needs investigation, not silent fallback.
+    const wmsSpreadsheet    = SpreadsheetApp.openById(WMS_SPREADSHEET_ID);
+    const targetSpreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+
+    const sourceSheet = wmsSpreadsheet.getSheets()[0]; // First sheet in WMS workbook
+    const targetSheet = targetSpreadsheet.getSheetByName("WH Trucking Request");
+    if (!sourceSheet || !targetSheet) {
+      Logger.log("WMS source sheet or 'WH Trucking Request' not found.");
+      return { ok: false, error: "Source or target sheet missing." };
+    }
+
+    const sourceData = sourceSheet.getDataRange().getDisplayValues();
+    if (sourceData.length < 2) return { ok: true, imported: 0, updated: 0 };
+
+    // ── Locate header row and column indices ───────────────────────────────
+    const headerInfo = detectWmsColumns_(sourceData.slice(0, 5));
+    if (!headerInfo) {
+      Logger.log("Shipping Method column not found in WMS sheet.");
+      return { ok: false, error: "Shipping Method column missing." };
+    }
+    const { headerRowIdx, cols } = headerInfo;
+
+    /** Reads a cell value by logical column key, returning "" if absent. */
+    function cellOf(row, key) {
+      return cols[key] !== undefined ? String(row[cols[key]] || "").trim() : "";
+    }
+
+    // ── Group Trucking rows by (Customer + Ship Date) ──────────────────────
+    const groups = new Map();
+    for (let r = headerRowIdx + 1; r < sourceData.length; r++) {
+      const row = sourceData[r];
+      if (cellOf(row, "shipMethod").toUpperCase() !== "TRUCKING") continue;
+
+      const customer = cellOf(row, "customer");
+      const shipDate = cellOf(row, "shipDate");
+      const normCust = customer.toUpperCase().replace(/\s+/g, " ").trim();
+      const normDate = shipDate.toUpperCase().trim();
+      // Fall back to row index as key when customer is missing to avoid merging unrelated blanks.
+      const groupKey = normCust ? `${normCust}___${normDate}` : `UNKNOWN___${r}`;
+
+      if (!groups.has(groupKey)) groups.set(groupKey, []);
+      groups.get(groupKey).push({
+        invoice:  cellOf(row, "invoice"),
+        customer,
+        shipDate,
+        pallets:  cellOf(row, "pallets"),
+        carrier:  cellOf(row, "carrier"),
+        pro:      cellOf(row, "pro"),
+        note:     cellOf(row, "note"),
+        rowIndex: r + 1,
+      });
+    }
+
+    // ── Build lookup map from existing target rows ─────────────────────────
+    const targetData    = targetSheet.getDataRange().getDisplayValues();
+    const targetHeaders = targetData.length > 0 ? (targetData[1] || targetData[0]) : [];
+    const targetMap     = headerMap_(targetHeaders);
+
+    // Maps "CUST___DATE" and "INV___<invoice>" → 1-based row index.
+    const existingRowsMap = new Map();
+    for (let r = 2; r < targetData.length; r++) {
+      const row  = targetData[r];
+      const invs = exactVal_(row, targetMap, ["INVOICE NO.", "INVOICE #", "INVOICE"])
+        .split(/[\r\n,;·]+/);
+      const cust = exactVal_(row, targetMap, ["CUSTOMER"]).toUpperCase().replace(/\s+/g, " ").trim();
+      const date = exactVal_(row, targetMap, ["SHIP DATE"]).toUpperCase().trim();
+
+      if (cust && date) existingRowsMap.set(`${cust}___${date}`, r + 1);
+      for (const inv of invs) {
+        const clean = inv.trim().toUpperCase();
+        if (clean) existingRowsMap.set(`INV___${clean}`, r + 1);
+      }
+    }
+
+    // ── Process each group: update or collect for batch append ────────────
+    let importedCount = 0;
+    let updatedCount  = 0;
+    const rowsToAppend = [];
+
+    groups.forEach((items) => {
+      const customer        = items[0].customer;
+      const shipDate        = items[0].shipDate;
+      const unique          = arr => [...new Set(arr.filter(Boolean))];
+      const combinedInvoices = unique(items.map(i => i.invoice)).join("\n");
+      const combinedCarrier  = items.map(i => i.carrier).find(Boolean) || "Trucking";
+      const combinedPro      = unique(items.map(i => i.pro)).join("\n");
+      const combinedPallets  = unique(items.map(i => i.pallets)).join(" · ");
+      const combinedNote     = unique(items.map(i => i.note)).join(" · ")
+                               || "Imported from WMS Invoice & Issues";
+
+      const normCust  = customer.toUpperCase().replace(/\s+/g, " ").trim();
+      const normDate  = shipDate.toUpperCase().trim();
+      const matchKey  = `${normCust}___${normDate}`;
+
+      let matchedRowIdx = existingRowsMap.get(matchKey);
+      if (!matchedRowIdx) {
+        for (const item of items) {
+          const key = item.invoice ? `INV___${item.invoice.toUpperCase()}` : null;
+          if (key && existingRowsMap.has(key)) {
+            matchedRowIdx = existingRowsMap.get(key);
+            break;
+          }
+        }
+      }
+
+      if (matchedRowIdx) {
+        // Only update the invoice cell when the combined list has changed.
+        const invCol = targetMap["INVOICE NO."] ?? targetMap["INVOICE #"];
+        if (invCol !== undefined && combinedInvoices) {
+          const rowRange  = targetSheet.getRange(matchedRowIdx, 1, 1, Math.max(targetHeaders.length, 21));
+          const curInvs   = String(rowRange.getDisplayValues()[0][invCol] || "").trim();
+          if (curInvs !== combinedInvoices) {
+            targetSheet.getRange(matchedRowIdx, invCol + 1).setValue(combinedInvoices);
+            updatedCount++;
+          }
+        }
+      } else {
+        // Build the new row array keyed by target header positions.
+        const newRow = new Array(Math.max(targetHeaders.length, 21)).fill("");
+        const set = (keys, val) => {
+          for (const k of keys) {
+            if (targetMap[k] !== undefined) { newRow[targetMap[k]] = val; return; }
+          }
+        };
+        set(["CUSTOMER"],                         customer);
+        set(["INVOICE NO.", "INVOICE #"],         combinedInvoices);
+        set(["SHIP DATE"],                        shipDate);
+        set(["PALLET TYPE"],                      combinedPallets);
+        set(["CARRIER"],                          combinedCarrier);
+        set(["PRO#"],                             combinedPro);
+        set(["NOTE"],                             combinedNote);
+        set(["STATUS"],                           "WORK IN PROGRESS");
+        rowsToAppend.push(newRow);
+      }
+    });
+
+    // Batch-write all new rows in a single API call (dramatically faster than
+    // calling appendRow() N times inside the loop above).
+    if (rowsToAppend.length) {
+      targetSheet.getRange(
+        targetSheet.getLastRow() + 1, 1,
+        rowsToAppend.length, rowsToAppend[0].length
+      ).setValues(rowsToAppend);
+      importedCount = rowsToAppend.length;
+    }
+
+    SpreadsheetApp.flush();
+    Logger.log(`WMS scan done — groups: ${groups.size}, imported: ${importedCount}, updated: ${updatedCount}`);
+    return { ok: true, groups: groups.size, imported: importedCount, updated: updatedCount };
+  } catch (err) {
+    Logger.log(`Error in scanAndImportWmsTruckingOrders: ${err.message}`);
+    return { ok: false, error: err.message };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ─── Trigger management ───────────────────────────────────────────────────────
+
+/**
+ * Resets the 30-minute time-driven trigger for scanAndImportWmsTruckingOrders.
+ * Deletes ALL existing project triggers first so there is never a duplicate.
  */
 function create30MinTrigger() {
-  const triggers = ScriptApp.getProjectTriggers();
-  const ALLOWED_TRIGGER_HANDLERS = ["scanAndImportWmsTruckingOrders"];
-  
-  for (let i = 0; i < triggers.length; i++) {
-    const handler = triggers[i].getHandlerFunction();
-    if (!ALLOWED_TRIGGER_HANDLERS.includes(handler) || handler === "scanAndImportWmsTruckingOrders") {
-      ScriptApp.deleteTrigger(triggers[i]);
-      Logger.log("Deleted obsolete/existing trigger for handler: " + handler);
-    }
+  // Delete every existing trigger unconditionally; we will recreate the one we
+  // want below.  The previous condition had a logic bug that deleted all
+  // triggers including valid ones (the OR branch was always true).
+  for (const trigger of ScriptApp.getProjectTriggers()) {
+    Logger.log(`Deleting trigger for handler: ${trigger.getHandlerFunction()}`);
+    ScriptApp.deleteTrigger(trigger);
   }
 
   ScriptApp.newTrigger("scanAndImportWmsTruckingOrders")
     .timeBased()
     .everyMinutes(30)
     .create();
-  Logger.log("30-minute time-driven trigger cleanly provisioned for scanAndImportWmsTruckingOrders");
+  Logger.log("30-minute trigger provisioned for scanAndImportWmsTruckingOrders.");
 }
 
+// ─── One-time setup utilities ─────────────────────────────────────────────────
+
 /**
- * Adds "WEBSITE STATUS" dropdown data validation column at the end of each source sheet
- * in LOGISTICS MASTER 2026, applying the same validation rules as Column AE of IMPORTS.
- * Explicitly excludes external sheets 14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I and 12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8.
+ * Adds or locates a "WEBSITE STATUS" dropdown column on each tracked sheet in
+ * LOGISTICS MASTER 2026 and applies data-validation rules to it.
  */
 function addWebsiteStatusDropdownToAllSourceSheets() {
-  const EXCLUDED_SPREADSHEET_IDS = [
+  const EXCLUDED_IDS = new Set([
     "14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I",
-    "12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8"
-  ];
-  
+    "12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8",
+  ]);
+
   const targetSpreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
-  if (EXCLUDED_SPREADSHEET_IDS.includes(targetSpreadsheet.getId())) {
+  if (EXCLUDED_IDS.has(targetSpreadsheet.getId())) {
     Logger.log("Target spreadsheet is in excluded list. Skipping.");
     return { ok: false, error: "Spreadsheet excluded." };
   }
 
-  const TARGET_SOURCE_TABS = [
-    "TRANSFERS",
-    "ULTA",
-    "IHERB",
-    "B2B/E-COM TRUCKING",
-    "WH Trucking Request",
-    "NATIONAL ORDER PROGRESS",
-    "Outbound Shipping Schedule",
-    "TJX/ROSS"
+  const TARGET_TABS = [
+    "TRANSFERS", "ULTA", "IHERB", "B2B/E-COM TRUCKING",
+    "WH Trucking Request", "NATIONAL ORDER PROGRESS",
+    "Outbound Shipping Schedule", "TJX/ROSS",
   ];
 
-  const STATUS_LIST = [
-    "SCHEDULED",
-    "WORK IN PROGRESS",
-    "PENDING",
-    "SHIPPING",
-    "SHIPPED",
-    "DELIVERED",
-    "RECEIVED",
-    "CANCELLED",
-    "COMPLETED"
-  ];
+  // Reuse OUTBOUND_STATUS values (without the empty sentinel) for the dropdown.
+  const STATUS_LIST = OUTBOUND_STATUS.filter(Boolean);
 
   const rule = SpreadsheetApp.newDataValidation()
     .requireValueInList(STATUS_LIST, true)
@@ -386,79 +491,72 @@ function addWebsiteStatusDropdownToAllSourceSheets() {
 
   let modifiedCount = 0;
 
-  TARGET_SOURCE_TABS.forEach((tabName) => {
+  for (const tabName of TARGET_TABS) {
     const sheet = targetSpreadsheet.getSheetByName(tabName);
     if (!sheet) {
-      Logger.log("Sheet tab not found: " + tabName);
-      return;
+      Logger.log(`Sheet not found: ${tabName}`);
+      continue;
     }
 
     const lastRow = sheet.getLastRow();
-    if (lastRow < 1) return;
+    if (lastRow < 1) continue;
 
-    // Detect header row and column
-    const headers = sheet.getRange(1, 1, Math.min(3, lastRow), sheet.getLastColumn()).getDisplayValues();
-    let headerRowIdx = 1;
-    let colIdx = -1;
+    // Find the "WEBSITE STATUS" column if it already exists.
+    const headers      = sheet.getRange(1, 1, Math.min(3, lastRow), sheet.getLastColumn()).getDisplayValues();
+    let headerRowIdx   = 1;
+    let colIdx         = -1;
 
-    for (let r = 0; r < headers.length; r++) {
+    outer: for (let r = 0; r < headers.length; r++) {
       const row = headers[r].map(c => String(c || "").trim().toUpperCase());
-      const foundIdx = row.indexOf("WEBSITE STATUS");
-      if (foundIdx !== -1) {
-        headerRowIdx = r + 1;
-        colIdx = foundIdx + 1;
-        break;
+      for (let c = 0; c < row.length; c++) {
+        if (row[c] === "WEBSITE STATUS") {
+          headerRowIdx = r + 1;
+          colIdx       = c + 1;
+          break outer;
+        }
       }
     }
 
-    // If column doesn't exist, append header to last column + 1
+    // Column absent — append it.
     if (colIdx === -1) {
-      colIdx = sheet.getLastColumn() + 1;
-      headerRowIdx = 2; // Default header row index for standard tabs
+      colIdx       = sheet.getLastColumn() + 1;
+      headerRowIdx = 2; // Standard header row for these tabs
       sheet.getRange(headerRowIdx, colIdx).setValue("WEBSITE STATUS").setFontWeight("bold");
     }
 
-    // Apply data validation rule down the column
     const startRow = headerRowIdx + 1;
-    const numRows = Math.max(lastRow - headerRowIdx, 100);
-    const range = sheet.getRange(startRow, colIdx, numRows, 1);
-    range.setDataValidation(rule);
+    const numRows  = Math.max(lastRow - headerRowIdx, 100);
+    sheet.getRange(startRow, colIdx, numRows, 1).setDataValidation(rule);
 
     modifiedCount++;
-    Logger.log("Applied WEBSITE STATUS dropdown to sheet: " + tabName + " (Col " + colIdx + ")");
-  });
+    Logger.log(`Applied WEBSITE STATUS dropdown to '${tabName}' (col ${colIdx})`);
+  }
 
   SpreadsheetApp.flush();
   return { ok: true, sheetsUpdated: modifiedCount };
 }
 
 /**
- * Deletes non-essential tabs ("Dimensions", "Reference", "Summary", "Dashboard", "Outbound Data", "Inbound_Data")
- * from LOGISTICS MASTER 2026.
+ * Deletes non-essential tabs from LOGISTICS MASTER 2026 using a
+ * case-insensitive match so variant capitalisations do not need to be listed.
  */
 function deleteUnnecessaryTabs() {
-  const targetSpreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
-  const tabsToDelete = [
-    "Dimensions", "Reference", "Summary", "Dashboard",
-    "Outbound Data", "Inbound_Data", "Inbound Data",
+  const TABS_TO_DELETE = new Set([
     "DIMENSIONS", "REFERENCE", "SUMMARY", "DASHBOARD",
-    "OUTBOUND DATA", "INBOUND_DATA", "INBOUND DATA"
-  ];
-  
+    "OUTBOUND DATA", "INBOUND_DATA", "INBOUND DATA",
+  ]);
+
+  const targetSpreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
   let deletedCount = 0;
-  tabsToDelete.forEach((tabName) => {
-    const sheet = targetSpreadsheet.getSheetByName(tabName);
-    if (sheet) {
+
+  for (const sheet of targetSpreadsheet.getSheets()) {
+    if (TABS_TO_DELETE.has(sheet.getName().toUpperCase())) {
+      Logger.log(`Deleting tab: ${sheet.getName()}`);
       targetSpreadsheet.deleteSheet(sheet);
       deletedCount++;
-      Logger.log("Deleted non-essential sheet tab: " + tabName);
     }
-  });
+  }
 
   SpreadsheetApp.flush();
   return { ok: true, tabsDeleted: deletedCount };
 }
-
-
-
-
