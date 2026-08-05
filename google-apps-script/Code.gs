@@ -1,6 +1,9 @@
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const SPREADSHEET_ID     = "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc";
+/** Main logistics tracking spreadsheet (Logistics Dashboard). */
+const SPREADSHEET_ID = "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc";
+
+/** Warehouse Management System spreadsheet (WMS Operations). */
 const WMS_SPREADSHEET_ID = "14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I";
 
 const OUTBOUND_STATUS = [
