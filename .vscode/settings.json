@@ -1,0 +1,7 @@
+{
+    "workbench.browser.openLocalhostLinks": true,
+    "playwright.pickLocatorCopyToClipboard": true,
+    "playwright.reuseBrowser": false,
+    "playwright.runGlobalSetupOnEachRun": true,
+    "playwright.showTrace": true
+}
