@@ -300,6 +300,7 @@ async function fetchExistingTargetMap() {
 function diffGroups(groups, existingMap) {
   const newEntries      = [];
   const modifiedEntries = [];
+  const skippedRescheduled = [];
 
   groups.forEach((items) => {
     const { customer, shipDate } = items[0];

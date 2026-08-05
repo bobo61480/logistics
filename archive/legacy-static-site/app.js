@@ -54,7 +54,6 @@ const SOURCE_COLORS = {
 };
 
 let inboundRows = [];
-let inboundPlanningRows = [];
 let outboundRows = [];         /* includes finished rows; filtered at render */
 let parcelRows = [];
 let sourceHealth = [];         /* [{tab, ok, rows}] */
@@ -268,10 +267,6 @@ const OFFICIAL_CONTAINER_TRACKING = [
   { carrier: "Hapag-Lloyd", keys: ["HLCU", "HAPAG"], url: (n) => "https://www.hapag-lloyd.com/en/online-business/track/track-by-container-solution.html?container=" + encodeURIComponent(n) },
   { carrier: "SM Line", keys: ["SMLM", "SMCU", "SM LINE"], url: (n) => "https://esvc.smlines.com/smline/CUP_HOM_3301.do?search_type=C&search_name=" + encodeURIComponent(n) }
 ];
-const SHIPMENT_CARRIER_HINTS = [
-  { carrier: "Maersk", patterns: [/\b(?:MCI|ES|OSL)\d+\b/i] },
-  { carrier: "HMM", patterns: [/\bHJ\d+\b/i] }
-];
 const TERMINAL_CONTAINER_TRACKING = [
   { name: "APM Terminals Pier 400", keys: ["APMT", "PIER 400"], url: "https://www.apmterminals.com/en/los-angeles/practical-information/track-and-trace" },
   { name: "Fenix Marine Services", keys: ["FENIX", "FMS TERMINAL"], url: "https://fenixmarineservices.com/" },
@@ -296,16 +291,6 @@ function containerTrackingProfile(row, container, destination = "") {
     profile.keys.some((key) => rowText.includes(key))
   );
   if (official) return { url: official.url(n), source: official.carrier + " official", carrier: official.carrier };
-
-  const shipmentHint = SHIPMENT_CARRIER_HINTS.find((hint) =>
-    hint.patterns.some((pattern) => pattern.test(rowText))
-  );
-  const hintedOfficial = shipmentHint && OFFICIAL_CONTAINER_TRACKING.find((profile) =>
-    profile.carrier === shipmentHint.carrier
-  );
-  if (hintedOfficial) {
-    return { url: hintedOfficial.url(n), source: hintedOfficial.carrier + " official", carrier: hintedOfficial.carrier };
-  }
 
   const terminal = TERMINAL_CONTAINER_TRACKING.find((profile) =>
     profile.keys.some((key) => rowText.includes(key))
@@ -424,50 +409,9 @@ function planningDate(value) {
   return fmtDate(`${match[1]}/${match[2]}${match[3] ? "/" + match[3] : ""}`);
 }
 
-function isManualPlanningItem(value) {
-  const text = clean(value);
-  if (!text) return false;
-  if (/^(SCHEDULED|NEED SCHEDULING|MONTH OF AUGUST|URGENT|COMPLETED|ESTIMATED\s*\/\s*CHANGED|미정|AIR|ARRIVAL)$/i.test(text)) return false;
-  if (/^AS OF\b/i.test(text)) return false;
-  if (/^\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?(?:\s*-\s*ARRIVAL)?$/i.test(text)) return false;
-  if (/^\d{4,6}$/.test(text)) return false;
-  return true;
-}
-
-function buildInboundPlanningRow(value, eta, sourceRow) {
-  const text = clean(value);
-  const container = text.toUpperCase().match(/\b[A-Z]{4}\d{7}\b/)?.[0] || "";
-  const shipmentNo = container
-    ? text
-      .replace(new RegExp(`\\s*-?\\s*${container}\\s*$`, "i"), "")
-      .replace(/\s*-\s*$/, "")
-      .trim() || container
-    : text;
-  const isAir = !container && /(AIR|^JSL|^KYL|^MBX|USMM)/i.test(text);
-  const tracking = container ? containerTrackingProfile({ SHIPMENT: text }, container, "LA / Long Beach") : { url: "", source: "" };
-  return {
-    mode: isAir ? "Air" : "Ocean",
-    eta,
-    shipmentNo,
-    invoice: "",
-    mbl: "",
-    hbl: "",
-    container,
-    carrier: container ? "Ocean freight" : "Air freight",
-    trackingUrl: tracking.url,
-    trackingSource: tracking.source,
-    sourceTab: "IMPORTS",
-    sourceRow,
-    sourceStatus: "",
-    origin: "BUSAN",
-    destination: "LA / Long Beach",
-    status: "Scheduled"
-  };
-}
-
 /* IMPORTS contains a calendar-style planning grid below the detailed shipment
-   table. The public import board mirrors only the manual SCHEDULED block the
-   team edits there, then stops before the later NEED SCHEDULING backlog. */
+   table. Its cells are operational schedule sources, not ordinary table rows,
+   so scan the raw grid and merge the planned dates back into inbound records. */
 function mapInboundPlanningGrid(table) {
   const rows = table.rows || [];
   const marker = rows.findIndex((row) =>
@@ -484,32 +428,53 @@ function mapInboundPlanningGrid(table) {
     if (date) topDates.set(column, date);
   });
 
+  let phase = "";
+  const phaseDates = new Map();
   const planned = [];
-  let inScheduledBlock = false;
-  let blankRun = 0;
   for (let rowIndex = marker + 2; rowIndex < rows.length; rowIndex++) {
     const row = rows[rowIndex];
     const first = rawCell(row, 0).toUpperCase();
-    const values = (row.c || []).map((_, column) => rawCell(row, column));
-    const hasAnyValue = values.some((value) => clean(value));
     if (PARCEL_SECTIONS.test(first)) break;
-    if (first === "NEED SCHEDULING" || values.some((value) => /^MONTH OF AUGUST$/i.test(clean(value)))) break;
-    if (!hasAnyValue) {
-      blankRun += 1;
-      if (inScheduledBlock && blankRun >= 2) break;
-      continue;
+    if (first === "SCHEDULED") phase = "scheduled";
+    if (first === "NEED SCHEDULING") {
+      phase = "needs-scheduling";
+      (row.c || []).forEach((_, column) => {
+        const date = planningDate(rawCell(row, column));
+        if (date) phaseDates.set(column, date);
+      });
     }
-    blankRun = 0;
-    if (first === "SCHEDULED") inScheduledBlock = true;
-    if (!inScheduledBlock) continue;
+    if (!phase) continue;
 
     (row.c || []).forEach((_, column) => {
-      if (column === 0) return;
       const value = rawCell(row, column);
-      const eta = topDates.get(column) || "";
-      if (!eta || !isManualPlanningItem(value)) return;
-      const sourceRow = Number(table.__sourceStartRow || 1) + rowIndex + 1;
-      planned.push(buildInboundPlanningRow(value, eta, sourceRow));
+      const container = clean(value).toUpperCase().match(/\b[A-Z]{4}\d{7}\b/)?.[0] || "";
+      if (!container) return;
+      const shipmentNo = value
+        .replace(new RegExp(`\\s*-?\\s*${container}\\s*$`, "i"), "")
+        .replace(/\s*-\s*$/, "")
+        .trim();
+      const eta = (phase === "needs-scheduling" ? phaseDates.get(column) : "") || topDates.get(column) || "";
+      const tracking = containerTrackingProfile({}, container, "LA / Long Beach");
+      planned.push({
+        mode: "Ocean",
+        eta,
+        shipmentNo: shipmentNo || container,
+        invoice: "",
+        mbl: "",
+        hbl: "",
+        container,
+        carrier: "Ocean freight",
+        trackingUrl: tracking.url,
+        trackingSource: tracking.source,
+        sourceTab: "IMPORTS",
+        sourceRow: 0,
+        sourceStatus: "",
+        origin: "BUSAN",
+        destination: "LA / Long Beach",
+        /* The row state is authoritative. A column heading such as COMPLETED
+           describes the planner lane/date, not every shipment beneath it. */
+        status: classifyStatus(value)
+      });
     });
   }
   return planned;
@@ -951,8 +916,7 @@ async function load() {
     const excludedFn = (source, key) =>
       Boolean(key) && exclusionSet.has(`${tabOf[source] || source.toUpperCase()}|${key}`.toUpperCase());
 
-    inboundPlanningRows = mapInboundPlanningGrid(tables[0]);
-    inboundRows = mergeInboundPlanning(mapInbound(im), inboundPlanningRows);
+    inboundRows = mergeInboundPlanning(mapInbound(im), mapInboundPlanningGrid(tables[0]));
     parcelRows = mapParcels(tables[0]);
     mapAllOutbound({ tr, ul, ih, b2, wh, national, shipOut, tjxRoss }, excludedFn);
     if (globalThis.STYLEKOREAN_DATABASE?.preferDatabase && globalThis.StyleKoreanDatabase?.configured()) {
@@ -1151,44 +1115,11 @@ function renderBoard(hostId, rows, dateField, itemHtml) {
   }).join("")}</div>`;
 }
 
-function inboundBoardDetail(r) {
-  const parts = [];
-  if (r.container) {
-    parts.push(r.trackingUrl
-      ? `<a class="board-link" href="${esc(r.trackingUrl)}" target="_blank" rel="noopener noreferrer" title="${esc(r.trackingSource || "Container tracking")}">${esc(r.container)} ↗</a>`
-      : esc(r.container));
-  } else if (r.carrier) {
-    parts.push(esc(r.carrier));
-  }
-  if (r.invoice) parts.push(`Invoice # ${esc(r.invoice)}`);
-  return parts.join(" · ");
-}
-
-function inboundBoardRows() {
-  const detailedByContainer = new Map(
-    inboundRows
-      .filter((row) => row.container)
-      .map((row) => [clean(row.container).toUpperCase(), row])
-  );
-  return inboundPlanningRows.map((row) => {
-    const detailed = detailedByContainer.get(clean(row.container).toUpperCase());
-    if (!detailed) return row;
-    return {
-      ...row,
-      carrier: detailed.carrier || row.carrier,
-      mbl: detailed.mbl || row.mbl,
-      hbl: detailed.hbl || row.hbl,
-      trackingUrl: detailed.trackingUrl || row.trackingUrl,
-      trackingSource: detailed.trackingSource || row.trackingSource
-    };
-  });
-}
-
 function renderBoards() {
-  renderBoard("inboundBoard", inboundBoardRows(), "eta", (r) =>
+  renderBoard("inboundBoard", activeInbound(), "eta", (r) =>
     `<div class="board-item" style="--c:${r.mode === "Air" ? "var(--c-b2b)" : "var(--c-transfers)"}">
       <strong>${esc(r.shipmentNo || r.container || r.mbl || "Shipment")}</strong>
-      <span>${inboundBoardDetail(r)}</span>
+      <span>${esc([r.container || r.carrier, r.invoice ? `Invoice # ${r.invoice}` : ""].filter(Boolean).join(" · "))}</span>
     </div>`);
   renderBoard("outboundBoard", activeOutbound(), "shipDate", (r) =>
     `<div class="board-item" style="--c:${srcColor(r.source)}">
@@ -1503,24 +1434,7 @@ function debounce(fn, ms) {
   return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
 }
 
-function setupCollapsiblePanel(buttonId, bodyId) {
-  const button = $(buttonId);
-  const body = $(bodyId);
-  if (!button || !body) return;
-  const sync = () => {
-    const expanded = !body.hidden;
-    button.setAttribute("aria-expanded", String(expanded));
-    button.textContent = expanded ? "Hide details" : "Show details";
-  };
-  button.addEventListener("click", () => {
-    body.hidden = !body.hidden;
-    sync();
-  });
-  sync();
-}
-
 document.addEventListener("DOMContentLoaded", () => {
-  setupCollapsiblePanel("toggleIntegration", "sourceHubBody");
   $("refresh").addEventListener("click", () => load());
   $("outSearch").addEventListener("input", debounce(renderOutbound, 120));
   $("srcFilter").addEventListener("change", renderOutbound);

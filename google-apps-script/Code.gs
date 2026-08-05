@@ -16,6 +16,7 @@ const INBOUND_STATUS = [
   "N/A", "Customs Clearance", "FDA Review/Hold", "FWS Review/Hold", "Delayed",
 ];
 
+<<<<<<< HEAD
 // Pre-built Sets for O(1) status validation (built once at load time).
 const OUTBOUND_STATUS_SET = new Set(OUTBOUND_STATUS.map(s => s.toUpperCase()));
 const INBOUND_STATUS_SET  = new Set(INBOUND_STATUS.map(s => s.toUpperCase()));
@@ -46,6 +47,12 @@ const WMS_COLUMN_SPECS = {
 };
 
 // ─── Web-app entry point ──────────────────────────────────────────────────────
+=======
+const COMPLETED_STATUSES = ["SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED"];
+const INVENTORY_TRANSFER_STATUSES = ["DELIVERED", "RECEIVED", "COMPLETED"];
+const SKW_INBOUND_SHEET = "SKW_Inbound";
+const SKW_STOCK_SHEET = "SKW_Stock";
+>>>>>>> c01631ba5f4c7212516cbd0b2421d06155b61b5d
 
 function doPost(e) {
   const lock = LockService.getScriptLock();
@@ -84,6 +91,7 @@ function doPost(e) {
     // from what is actually in the cell (tolerate "" ↔ "SCHEDULED" as equivalent).
     const current        = String(target.getDisplayValue() || "").trim();
     const requestCurrent = String(request.currentStatus || "").trim();
+<<<<<<< HEAD
     const normCurrent    = current.toUpperCase();
     const normRequest    = requestCurrent.toUpperCase();
     if (
@@ -92,16 +100,37 @@ function doPost(e) {
       !(normCurrent === "" && normRequest === "SCHEDULED")
     ) {
       Logger.log(`Concurrency note: Cell='${current}', Request='${requestCurrent}'`);
+=======
+    const normCurrent = current.toUpperCase();
+    const normRequest = requestCurrent.toUpperCase();
+
+    // Prevent stale browser state from overwriting a newer workbook value.
+    const scheduledFallback = (!normCurrent && normRequest === "SCHEDULED") || (normCurrent === "SCHEDULED" && !normRequest);
+    if (requestCurrent && normCurrent !== normRequest && !scheduledFallback) {
+      throw new Error("Status changed in Google Sheets. Refresh and try again.");
+>>>>>>> c01631ba5f4c7212516cbd0b2421d06155b61b5d
     }
 
     // Cache lastColumn before writing so we only call getLastColumn() once.
     const lastCol = Math.max(sheet.getLastColumn(), 1);
     target.setValue(status);
 
+<<<<<<< HEAD
     // Grey out completed rows; reset colouring for active rows.
     const rowIdx    = target.getRow();
     const rowRange  = sheet.getRange(rowIdx, 1, 1, lastCol);
     const isCompleted = COMPLETED_STATUSES.has(status.toUpperCase());
+=======
+    let inventoryTransfer = null;
+    if (request.kind === "inbound" && INVENTORY_TRANSFER_STATUSES.includes(status.toUpperCase())) {
+      inventoryTransfer = transferInboundInventory_(spreadsheet, request);
+    }
+
+    // Format row in Google Sheets: Grey out completed rows, reset active rows
+    const rowIdx = target.getRow();
+    const rowRange = sheet.getRange(rowIdx, 1, 1, Math.max(sheet.getLastColumn(), 1));
+    const isCompleted = COMPLETED_STATUSES.includes(status.toUpperCase());
+>>>>>>> c01631ba5f4c7212516cbd0b2421d06155b61b5d
     if (isCompleted) {
       rowRange.setBackground("#E8EAED").setFontColor("#5F6368");
     } else {
@@ -109,7 +138,7 @@ function doPost(e) {
     }
 
     SpreadsheetApp.flush();
-    return json_({ ok: true, sheet: sheet.getName(), row: rowIdx, status, isCompleted });
+    return json_({ ok: true, sheet: sheet.getName(), row: rowIdx, status, isCompleted, inventoryTransfer });
   } catch (error) {
     return json_({ ok: false, error: String(error.message || error) });
   } finally {
@@ -230,6 +259,202 @@ function exact_(row, map, names, expected) {
 /**
  * Returns the trimmed string value of the first matching column in `names`.
  */
+<<<<<<< HEAD
+=======
+function scanAndImportWmsTruckingOrders() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return { ok: false, error: "Lock timeout" };
+  try {
+    let wmsSpreadsheet;
+    try {
+      wmsSpreadsheet = SpreadsheetApp.openById(WMS_SPREADSHEET_ID);
+    } catch (e) {
+      wmsSpreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+    }
+    const targetSpreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+
+    const sourceSheet = wmsSpreadsheet.getSheets()[0]; // First sheet in WMS workbook
+    const targetSheet = targetSpreadsheet.getSheetByName("WH Trucking Request");
+    if (!sourceSheet || !targetSheet) {
+      Logger.log("WMS Source sheet or WH Trucking Request sheet not found.");
+      return { ok: false, error: "Source or Target sheet missing." };
+    }
+
+    const sourceData = sourceSheet.getDataRange().getDisplayValues();
+    if (sourceData.length < 2) return { ok: true, imported: 0, updated: 0 };
+
+
+    // Locate header row in WMS sheet
+    let headerRowIdx = -1;
+    let shipMethodColIdx = -1;
+    let invoiceColIdx = -1;
+    let customerColIdx = -1;
+    let shipDateColIdx = -1;
+    let palletColIdx = -1;
+    let carrierColIdx = -1;
+    let proColIdx = -1;
+    let noteColIdx = -1;
+
+    for (let r = 0; r < Math.min(5, sourceData.length); r++) {
+      const row = sourceData[r].map(c => String(c || "").trim().toUpperCase());
+      for (let c = 0; c < row.length; c++) {
+        const val = row[c];
+        if (shipMethodColIdx === -1 && (val.includes("SHIPPING METHOD") || val.includes("SHIP METHOD"))) shipMethodColIdx = c;
+        if (invoiceColIdx === -1 && (val.includes("INVOICE") || val.includes("PO#") || val.includes("PO NUMBER"))) invoiceColIdx = c;
+        if (customerColIdx === -1 && (val.includes("CUSTOMER") || val.includes("CLIENT") || val.includes("ACCOUNT"))) customerColIdx = c;
+        if (shipDateColIdx === -1 && (val.includes("SHIP DATE") || val.includes("DATE") || val.includes("PU DATE"))) shipDateColIdx = c;
+        if (palletColIdx === -1 && (val.includes("PALLET") || val.includes("PLT") || val.includes("QTY") || val.includes("CARTONS"))) palletColIdx = c;
+        if (carrierColIdx === -1 && (val.includes("CARRIER") || val.includes("TRUCKING"))) carrierColIdx = c;
+        if (proColIdx === -1 && (val.includes("PRO#") || val.includes("PRO") || val.includes("TRACKING") || val.includes("BOL"))) proColIdx = c;
+        if (noteColIdx === -1 && (val.includes("NOTE") || val.includes("REMARK") || val.includes("MEMO") || val.includes("ISSUE"))) noteColIdx = c;
+      }
+      if (shipMethodColIdx !== -1) {
+        headerRowIdx = r;
+        break;
+      }
+    }
+
+    if (shipMethodColIdx === -1) {
+      Logger.log("Shipping Method column not found in WMS sheet.");
+      return { ok: false, error: "Shipping Method column missing." };
+    }
+
+    // Group Trucking entries by (Customer + Ship Date)
+    const groups = new Map();
+    for (let r = headerRowIdx + 1; r < sourceData.length; r++) {
+      const row = sourceData[r];
+      const shipMethod = String(row[shipMethodColIdx] || "").trim();
+      if (!/\bTRUCK(?:ING)?\b/i.test(shipMethod)) continue;
+
+      const invoice = invoiceColIdx !== -1 ? String(row[invoiceColIdx] || "").trim() : "";
+      const customer = customerColIdx !== -1 ? String(row[customerColIdx] || "").trim() : "";
+      const shipDate = shipDateColIdx !== -1 ? String(row[shipDateColIdx] || "").trim() : "";
+      const pallets = palletColIdx !== -1 ? String(row[palletColIdx] || "").trim() : "";
+      const carrier = carrierColIdx !== -1 ? String(row[carrierColIdx] || "").trim() : "";
+      const pro = proColIdx !== -1 ? String(row[proColIdx] || "").trim() : "";
+      const note = noteColIdx !== -1 ? String(row[noteColIdx] || "").trim() : "";
+
+      const normCust = customer.toUpperCase().replace(/\s+/g, " ").trim();
+      const normDate = normalizeWmsShipDate_(shipDate);
+      const groupKey = normCust ? (normCust + "___" + normDate) : ("UNKNOWN___" + r);
+
+      if (!groups.has(groupKey)) groups.set(groupKey, []);
+      groups.get(groupKey).push({ invoice, customer, shipDate, pallets, carrier, pro, note, rowIndex: r + 1 });
+    }
+
+    // Load target sheet existing rows to avoid duplicates
+    const targetData = targetSheet.getDataRange().getDisplayValues();
+    const targetHeaders = targetData.length > 0 ? targetData[1] || targetData[0] : [];
+    const targetMap = headerMap_(targetHeaders);
+
+    const existingRowsMap = new Map(); // key -> row index (1-based)
+    const existingInvoiceRowsMap = new Map(); // invoice -> row indices
+    for (let r = 2; r < targetData.length; r++) {
+      const row = targetData[r];
+      const invs = exactVal_(row, targetMap, ["INVOICE NO.", "INVOICE #", "INVOICE"]).split(/[\r\n,;·]+/);
+      const cust = exactVal_(row, targetMap, ["CUSTOMER"]).toUpperCase().replace(/\s+/g, " ").trim();
+      const date = normalizeWmsShipDate_(exactVal_(row, targetMap, ["SHIP DATE"]));
+      
+      if (cust && date) existingRowsMap.set(cust + "___" + date, r + 1);
+      invs.forEach(function(inv) {
+        const cleanInv = inv.trim().toUpperCase();
+        if (!cleanInv) return;
+        if (!existingInvoiceRowsMap.has(cleanInv)) existingInvoiceRowsMap.set(cleanInv, new Set());
+        existingInvoiceRowsMap.get(cleanInv).add(r + 1);
+      });
+    }
+
+    let importedCount = 0;
+    let updatedCount = 0;
+    let skippedRescheduledCount = 0;
+
+    groups.forEach((items, groupKey) => {
+      const customer = items[0].customer;
+      const shipDate = items[0].shipDate;
+      const combinedInvoices = [...new Set(items.map(i => i.invoice).filter(Boolean))].join("\n");
+      const combinedCarrier = items.map(i => i.carrier).find(Boolean) || "Trucking";
+      const combinedPro = [...new Set(items.map(i => i.pro).filter(Boolean))].join("\n");
+      const combinedPallets = [...new Set(items.map(i => i.pallets).filter(Boolean))].join(" · ");
+      const combinedNote = [...new Set(items.map(i => i.note).filter(Boolean))].join(" · ") || "Imported from WMS Invoice & Issues";
+
+      const normCust = customer.toUpperCase().replace(/\s+/g, " ").trim();
+      const normDate = normalizeWmsShipDate_(shipDate);
+      const matchKey = normCust + "___" + normDate;
+      
+      let matchedRowIdx = existingRowsMap.get(matchKey);
+      if (!matchedRowIdx) {
+        const invoiceMatches = new Set();
+        items.forEach(function(item) {
+          const rows = existingInvoiceRowsMap.get(String(item.invoice || "").trim().toUpperCase());
+          if (rows) rows.forEach(function(rowNumber) { invoiceMatches.add(rowNumber); });
+        });
+        if (invoiceMatches.size === 1) {
+          const candidateRow = Number([...invoiceMatches][0]);
+          const candidateDate = normalizeWmsShipDate_(
+            exactVal_(targetData[candidateRow - 1], targetMap, ["SHIP DATE"])
+          );
+          if (candidateDate === normDate) {
+            matchedRowIdx = candidateRow;
+          } else {
+            skippedRescheduledCount++;
+            return;
+          }
+        } else if (invoiceMatches.size > 1) {
+          skippedRescheduledCount++;
+          return;
+        }
+      }
+
+      if (matchedRowIdx) {
+        // Update existing entry if invoice list or fields changed
+        const rowRange = targetSheet.getRange(matchedRowIdx, 1, 1, Math.max(targetHeaders.length, 21));
+        const currentVals = rowRange.getDisplayValues()[0];
+
+        const invCol = targetMap["INVOICE NO."] !== undefined ? targetMap["INVOICE NO."] : targetMap["INVOICE #"];
+        if (invCol !== undefined && combinedInvoices) {
+          const curInvs = String(currentVals[invCol] || "").trim();
+          const mergedInvoices = [...new Set(
+            [curInvs, combinedInvoices]
+              .join("\n")
+              .split(/[\r\n,;·]+/)
+              .map(function(invoice) { return invoice.trim(); })
+              .filter(Boolean)
+          )].join("\n");
+          if (curInvs !== mergedInvoices) {
+            targetSheet.getRange(matchedRowIdx, invCol + 1).setValue(mergedInvoices);
+            updatedCount++;
+          }
+        }
+      } else {
+        // Append new combined entry for customer + ship date
+        const newRow = new Array(Math.max(targetHeaders.length, 21)).fill("");
+        if (targetMap["CUSTOMER"] !== undefined) newRow[targetMap["CUSTOMER"]] = customer;
+        if (targetMap["INVOICE NO."] !== undefined) newRow[targetMap["INVOICE NO."]] = combinedInvoices;
+        else if (targetMap["INVOICE #"] !== undefined) newRow[targetMap["INVOICE #"]] = combinedInvoices;
+        if (targetMap["SHIP DATE"] !== undefined) newRow[targetMap["SHIP DATE"]] = shipDate;
+        if (targetMap["PALLET TYPE"] !== undefined) newRow[targetMap["PALLET TYPE"]] = combinedPallets;
+        if (targetMap["CARRIER"] !== undefined) newRow[targetMap["CARRIER"]] = combinedCarrier;
+        if (targetMap["PRO#"] !== undefined) newRow[targetMap["PRO#"]] = combinedPro;
+        if (targetMap["NOTE"] !== undefined) newRow[targetMap["NOTE"]] = combinedNote;
+        if (targetMap["STATUS"] !== undefined) newRow[targetMap["STATUS"]] = "WORK IN PROGRESS";
+
+        targetSheet.appendRow(newRow);
+        importedCount++;
+      }
+    });
+
+    SpreadsheetApp.flush();
+    Logger.log("WMS Scan completed. Combined Groups: " + groups.size + ", Imported: " + importedCount + ", Updated: " + updatedCount + ", Rescheduled skipped: " + skippedRescheduledCount);
+    return { ok: true, groups: groups.size, imported: importedCount, updated: updatedCount, skippedRescheduled: skippedRescheduledCount };
+  } catch (err) {
+    Logger.log("Error in scanAndImportWmsTruckingOrders: " + err.message);
+    return { ok: false, error: err.message };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+>>>>>>> c01631ba5f4c7212516cbd0b2421d06155b61b5d
 function exactVal_(row, map, names) {
   for (const n of names) {
     if (map[n] !== undefined && row[map[n]]) return String(row[map[n]]).trim();
@@ -237,6 +462,7 @@ function exactVal_(row, map, names) {
   return "";
 }
 
+<<<<<<< HEAD
 /** Wraps a plain object as a JSON HTTP response. */
 function json_(value) {
   return ContentService
@@ -245,6 +471,106 @@ function json_(value) {
 }
 
 // ─── WMS Trucking import ──────────────────────────────────────────────────────
+=======
+function normalizeWmsShipDate_(value) {
+  const text = String(value || "").trim();
+  const match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (!match) return text.toUpperCase();
+  let year = Number(match[3]);
+  if (year < 100) year += 2000;
+  return [year, String(Number(match[1])).padStart(2, "0"), String(Number(match[2])).padStart(2, "0")].join("-");
+}
+
+/**
+ * Atomically posts matching SKW_Inbound product rows into SKW_Stock. Stock_Posted
+ * and the composite Source_IB_ID make repeated completed-status requests idempotent.
+ */
+function transferInboundInventory_(spreadsheet, request) {
+  const inbound = spreadsheet.getSheetByName(SKW_INBOUND_SHEET);
+  const stock = spreadsheet.getSheetByName(SKW_STOCK_SHEET);
+  if (!inbound || !stock) throw new Error("SKW inventory backend tabs are missing.");
+  if (inbound.getLastRow() < 2) return { movedRows: 0, quantity: 0 };
+
+  const values = inbound.getDataRange().getDisplayValues();
+  const map = headerMap_(values[0]);
+  ["IB_ID", "SKU", "PRODUCT_DESCRIPTION", "QTY_EA", "STATUS", "STOCK_POSTED"].forEach(function(header) {
+    if (map[header] === undefined) throw new Error(SKW_INBOUND_SHEET + " is missing " + header + ".");
+  });
+  const references = [request.shipmentNo, request.invoice, request.container, request.mbl, request.hbl]
+    .flatMap(referenceTokens_)
+    .filter(Boolean);
+  if (!references.length) throw new Error("Inventory transfer requires a shipment reference.");
+
+  const rows = [];
+  for (let index = 1; index < values.length; index++) {
+    const row = values[index];
+    const posted = String(row[map["STOCK_POSTED"]] || "").trim().toUpperCase();
+    if (/^(TRUE|YES|POSTED|1)$/.test(posted)) continue;
+    const candidates = [row[map["IB_ID"]], row[map["PO_NUMBER"]], row[map["SOURCE_MSG_ID"]]]
+      .flatMap(referenceTokens_)
+      .filter(Boolean);
+    if (references.some(function(reference) { return candidates.some(function(candidate) { return referencesMatch_(reference, candidate); }); })) {
+      rows.push({ rowNumber: index + 1, values: row });
+    }
+  }
+  if (!rows.length) return { movedRows: 0, quantity: 0 };
+
+  const stockValues = stock.getDataRange().getDisplayValues();
+  const stockMap = headerMap_(stockValues[0]);
+  ["SKU", "UPC", "PRODUCT_DESCRIPTION", "BATCH_NO", "EXPIRY_DATE", "QTY_EA", "LOCATION", "SOURCE_IB_ID", "RECEIVED_AT", "UPDATED_AT"].forEach(function(header) {
+    if (stockMap[header] === undefined) throw new Error(SKW_STOCK_SHEET + " is missing " + header + ".");
+  });
+  const postedKeys = new Set(stockValues.slice(1).map(function(row) {
+    return String(row[stockMap["SOURCE_IB_ID"]] || "").trim().toUpperCase();
+  }).filter(Boolean));
+
+  let totalQuantity = 0;
+  let movedRows = 0;
+  const now = new Date();
+  rows.forEach(function(record) {
+    const row = record.values;
+    const ibId = row[map["IB_ID"]] || request.shipmentNo || request.invoice || "";
+    const sku = row[map["SKU"]] || "";
+    const upc = row[map["UPC"]] || "";
+    const product = row[map["PRODUCT_DESCRIPTION"]] || "";
+    const batch = row[map["BATCH_NO"]] || "";
+    const expiration = row[map["EXPIRY_DATE"]] || "";
+    const quantity = Number(String(row[map["QTY_EA"]] || "0").replace(/,/g, "")) || 0;
+    if (quantity <= 0) return;
+    const location = row[map["LOCATION"]] || "UNASSIGNED";
+    const sourceKey = [ibId, sku || upc, batch, expiration]
+      .map(function(value) { return String(value || "").trim().toUpperCase(); })
+      .join("::");
+    if (postedKeys.has(sourceKey)) {
+      inbound.getRange(record.rowNumber, map["STOCK_POSTED"] + 1).setValue(true);
+      return;
+    }
+    stock.appendRow([sku, upc, product, batch, expiration, quantity, location, sourceKey, now, now]);
+    postedKeys.add(sourceKey);
+    if (map["RECEIVED_DATE"] !== undefined) inbound.getRange(record.rowNumber, map["RECEIVED_DATE"] + 1).setValue(now);
+    inbound.getRange(record.rowNumber, map["STATUS"] + 1).setValue("Received");
+    inbound.getRange(record.rowNumber, map["STOCK_POSTED"] + 1).setValue(true);
+    totalQuantity += quantity;
+    movedRows++;
+  });
+  return { movedRows, quantity: totalQuantity };
+}
+
+function referenceTokens_(value) {
+  return String(value || "")
+    .split(/[\r\n,;|]+/)
+    .map(function(token) { return token.trim().toUpperCase(); })
+    .filter(Boolean);
+}
+
+function referencesMatch_(left, right) {
+  const a = String(left || "").replace(/[^A-Z0-9]/g, "");
+  const b = String(right || "").replace(/[^A-Z0-9]/g, "");
+  if (!a || !b) return false;
+  if (a === b) return true;
+  return Math.min(a.length, b.length) >= 5 && (a.includes(b) || b.includes(a));
+}
+>>>>>>> c01631ba5f4c7212516cbd0b2421d06155b61b5d
 
 /**
  * Detects which columns in the WMS header rows correspond to the logical fields
@@ -444,19 +770,33 @@ function scanAndImportWmsTruckingOrders() {
  * Deletes ALL existing project triggers first so there is never a duplicate.
  */
 function create30MinTrigger() {
+<<<<<<< HEAD
   // Delete every existing trigger unconditionally; we will recreate the one we
   // want below.  The previous condition had a logic bug that deleted all
   // triggers including valid ones (the OR branch was always true).
   for (const trigger of ScriptApp.getProjectTriggers()) {
     Logger.log(`Deleting trigger for handler: ${trigger.getHandlerFunction()}`);
     ScriptApp.deleteTrigger(trigger);
+=======
+  const triggers = ScriptApp.getProjectTriggers();
+  for (let i = 0; i < triggers.length; i++) {
+    const handler = triggers[i].getHandlerFunction();
+    if (handler === "scanAndImportWmsTruckingOrders") {
+      ScriptApp.deleteTrigger(triggers[i]);
+      Logger.log("Deleted existing trigger for handler: " + handler);
+    }
+>>>>>>> c01631ba5f4c7212516cbd0b2421d06155b61b5d
   }
 
   ScriptApp.newTrigger("scanAndImportWmsTruckingOrders")
     .timeBased()
     .everyMinutes(30)
     .create();
+<<<<<<< HEAD
   Logger.log("30-minute trigger provisioned for scanAndImportWmsTruckingOrders.");
+=======
+  Logger.log("30-minute WMS trigger provisioned without changing Gmail or inventory triggers.");
+>>>>>>> c01631ba5f4c7212516cbd0b2421d06155b61b5d
 }
 
 // ─── One-time setup utilities ─────────────────────────────────────────────────
