@@ -193,7 +193,7 @@ export default function InventoryPanels() {
           </div>
           <div className="import-totals">
             <span>LOTS <b>{stock.length}</b></span>
-            <strong>{stock.reduce((t, r) => t + (Number(r.qty) || 0), 0).toLocaleString()}</strong>
+            <strong>{stock.reduce((t: number, r: { qty: any; }) => t + (Number(r.qty) || 0), 0).toLocaleString()}</strong>
           </div>
         </div>
         {table(stock, true, "No stock posted yet — items appear when inbounds are marked Received")}
