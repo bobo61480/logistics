@@ -427,7 +427,7 @@ function planningDate(value) {
 function isManualPlanningItem(value) {
   const text = clean(value);
   if (!text) return false;
-  if (/^(SCHEDULED|NEED SCHEDULING|MONTH OF AUGUST|URGENT|COMPLETED|ESTIMATED\s*\/\s*CHANGED|미정|AIR|ARRIVAL)$/i.test(text)) return false;
+  if (/^(SCHEDULED|NEED SCHEDULING|MONTH OF \w+|URGENT|COMPLETED|ESTIMATED\s*\/\s*CHANGED|미정|AIR|ARRIVAL)$/i.test(text)) return false;
   if (/^AS OF\b/i.test(text)) return false;
   if (/^\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?(?:\s*-\s*ARRIVAL)?$/i.test(text)) return false;
   if (/^\d{4,6}$/.test(text)) return false;
@@ -493,7 +493,7 @@ function mapInboundPlanningGrid(table) {
     const values = (row.c || []).map((_, column) => rawCell(row, column));
     const hasAnyValue = values.some((value) => clean(value));
     if (PARCEL_SECTIONS.test(first)) break;
-    if (first === "NEED SCHEDULING" || values.some((value) => /^MONTH OF AUGUST$/i.test(clean(value)))) break;
+    if (first === "NEED SCHEDULING" || values.some((value) => /^MONTH OF \w+$/i.test(clean(value)))) break;
     if (!hasAnyValue) {
       blankRun += 1;
       if (inScheduledBlock && blankRun >= 2) break;
