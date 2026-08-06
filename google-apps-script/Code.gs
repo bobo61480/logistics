@@ -287,6 +287,8 @@
         const row = values[index];
         const posted = String(row[map["STOCK_POSTED"]] || "").trim().toUpperCase();
         if (/^(TRUE|YES|POSTED|1)$/.test(posted)) continue;
+        const rowStatus = String(row[map["STATUS"]] || "").trim().toUpperCase();
+        if (COMPLETED_STATUSES.has(rowStatus)) continue;
         const candidates = [row[map["IB_ID"]], row[map["PO_NUMBER"]], row[map["SOURCE_MSG_ID"]]]
           .flatMap(referenceTokens_)
           .filter(Boolean);
@@ -349,7 +351,11 @@
       const b = String(right || "").replace(/[^A-Z0-9]/g, "");
       if (!a || !b) return false;
       if (a === b) return true;
-      return Math.min(a.length, b.length) >= 5 && (a.includes(b) || b.includes(a));
+      const shorter = Math.min(a.length, b.length);
+      const longer  = Math.max(a.length, b.length);
+      if (shorter < 8) return false;
+      if (shorter / longer < 0.6) return false;
+      return a.includes(b) || b.includes(a);
     }
 
     // ─── WMS Trucking import ──────────────────────────────────────────────────────
