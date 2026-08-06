@@ -548,25 +548,26 @@
     // ─── Trigger management ───────────────────────────────────────────────────────
 
     /**
-    * Resets the 30-minute time-driven trigger for scanAndImportWmsTruckingOrders.
-    * Deletes ALL existing project triggers first so there is never a duplicate.
+    * @deprecated Use setupAllTriggers() in Triggers.gs instead — it provisions
+    * all time-driven jobs (Gmail, WMS, inventory, redeploy) from one manifest.
+    * Keeping this wrapper so existing bookmarks or run-history entries still work.
     */
     function create30MinTrigger() {
-      // Only delete the scanAndImportWmsTruckingOrders trigger; leave Gmail and
-      // inventory triggers (managed by setupAllTriggers in Triggers.gs) untouched.
+      if (typeof setupAllTriggers === "function") {
+        Logger.log("Delegating to setupAllTriggers() in Triggers.gs (canonical trigger manager).");
+        return setupAllTriggers();
+      }
       const triggers = ScriptApp.getProjectTriggers();
       for (let i = 0; i < triggers.length; i++) {
         if (triggers[i].getHandlerFunction() === "scanAndImportWmsTruckingOrders") {
           ScriptApp.deleteTrigger(triggers[i]);
-          Logger.log(`Deleted trigger for handler: scanAndImportWmsTruckingOrders`);
         }
       }
-
       ScriptApp.newTrigger("scanAndImportWmsTruckingOrders")
         .timeBased()
         .everyMinutes(30)
         .create();
-      Logger.log("30-minute WMS trigger provisioned without changing Gmail or inventory triggers.");
+      Logger.log("Standalone WMS trigger provisioned (Triggers.gs not available).");
     }
 
     // ─── One-time setup utilities ─────────────────────────────────────────────────
