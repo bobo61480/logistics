@@ -179,6 +179,19 @@ const INBOUND_STATUS_OPTIONS = [
 const finished = new Set(["shipped", "delivered", "received", "cancelled", "completed"]);
 const finishedImports = new Set(["delivered", "received", "cancelled", "completed"]);
 
+// Defined here (before IMPORT_STALE_CUTOFF) so the IIFE below has no forward-reference
+// dependency on the later startOfToday declaration.
+function startOfToday() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+  }).formatToParts(new Date());
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return new Date(Number(value.year), Number(value.month) - 1, Number(value.day));
+}
+
 // Any import whose ETA is before this date is treated as effectively received/delivered/completed
 // and hidden from the "current + upcoming" Import Schedules table, even if the sheet's Status
 // cell is blank or stale. This does not overwrite the Status column in the source spreadsheet.
@@ -306,17 +319,6 @@ function dayKey(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(
     date.getDate(),
   ).padStart(2, "0")}`;
-}
-
-function startOfToday() {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Los_Angeles",
-    year: "numeric",
-    month: "numeric",
-    day: "numeric",
-  }).formatToParts(new Date());
-  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return new Date(Number(value.year), Number(value.month) - 1, Number(value.day));
 }
 
 function statusClass(status: string) {
@@ -475,7 +477,12 @@ function firstDatedValue(...values: string[]) {
   return null;
 }
 
-function lastDateToken(value: string) { const matches = clean(value).match(/\d{1,2}\/\d{1,2}(?:\/\d{2,4})?/g); return matches ? matches[matches.length - 1] : clean(value); } function sanitizeSecondary(value: string) {
+function lastDateToken(value: string) {
+  const matches = clean(value).match(/\d{1,2}\/\d{1,2}(?:\/\d{2,4})?/g);
+  return matches ? matches[matches.length - 1] : clean(value);
+}
+
+function sanitizeSecondary(value: string) {
   return clean(value)
     .split(/\s*·\s*/)
     .filter((part) => part && !/^imported from\b/i.test(part))
@@ -1038,11 +1045,9 @@ function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
     // Schedule and Import Schedules table.
     const dated = firstDatedValue(record.deliveryExpected, record.eta, record.etd);
     if (!dated) return [];
-    const date = dated?.date ?? today;
+    const date = dated.date;
     const overdue = date.getTime() < today.getTime();
-    const eta = dated
-      ? `${dated.text}${overdue ? " · OVERDUE" : ""}`
-      : "ETA pending";
+    const eta = `${dated.text}${overdue ? " · OVERDUE" : ""}`;
     const mode = resolvedInboundMode(
       "",
       record.shipmentNo,
@@ -2275,6 +2280,7 @@ export default function Home() {
       }
     };
     const timer = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
       load();
       setNextRefreshAt(new Date(Date.now() + AUTO_REFRESH_MS));
     }, AUTO_REFRESH_MS);
