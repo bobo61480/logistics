@@ -1,0 +1,2 @@
+> git pull --tags origin main
+fatal: unable to access 'https://github.com/bobo61480/logistics.git/': Failed to connect to github.com:443 after 4 ms: Could not connect to server
