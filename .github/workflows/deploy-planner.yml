@@ -1,5 +1,9 @@
 # StyleKorean Logistics Planner — Next.js static export → GitHub Pages
 # Repo setting required once: Settings → Pages → Source = "GitHub Actions".
+#
+# Also deploys google-apps-script/ to the live Apps Script project via clasp
+# whenever .gs files change.  Requires one secret in Settings → Secrets:
+#   CLASP_ACCESS_TOKEN  — JSON content of ~/.clasprc.json after `clasp login`
 name: Deploy Planner to GitHub Pages
 
 on:
@@ -17,6 +21,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  deploy-apps-script:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Only run when .gs files or the manifest changed (or on manual trigger).
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      contains(toJson(github.event.commits.*.modified), '.gs') ||
+      contains(toJson(github.event.commits.*.modified), 'appsscript.json')
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Install clasp
+        run: npm install -g @google/clasp
+
+      - name: Restore clasp credentials
+        # CLASP_ACCESS_TOKEN must be set in repo secrets (Settings → Secrets → Actions).
+        # Value is the full JSON content of ~/.clasprc.json after running `clasp login` locally.
+        run: echo '${{ secrets.CLASP_ACCESS_TOKEN }}' > ~/.clasprc.json
+
+      - name: Push to Apps Script
+        # clasp reads .clasp.json at repo root (rootDir = google-apps-script)
+        run: clasp push --force
+
   build-and-deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 15
