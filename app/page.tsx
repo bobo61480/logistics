@@ -19,10 +19,15 @@ const SALES_SNAPSHOT = {
   wmsYtd: 15_591_074.08,
 };
 // Deployed from google-apps-script/Code.gs (doPost), bound to LOGISTICS MASTER 2026.
+// 2026-08-07: repointed to a fresh deployment of the sheet-bound Apps Script project
+// after discovering the previous /exec URL (...MjDl) was pinned to an unrelated,
+// pre-migration legacy project (function surface: getMasterWorkbook/buildKPIs/etc,
+// none of which exist in this repo) that could never be fixed by editing this repo's
+// Code.gs. See DEPLOYMENT_NOTE.md for the full trail.
 // VERIFY: confirm this /exec URL is the CURRENT deployment of google-apps-script/Code.gs --
 // if you redeploy that script, Apps Script gives you a new URL and this must be updated too.
 const WRITE_ENDPOINT =
-  "https://script.google.com/a/macros/stylekoreanus.com/s/AKfycbwyVnU2jvOtMFXuY7KtX_8-hHXYVLrc6R2Dr_6akdDaTGQPc8duSo7tpguIuk00MjDl/exec";
+  "https://script.google.com/macros/s/AKfycbz770kmpwqMTA-h-lzeLARgVnDh_VDjh-70OOKk_yE-iXJTmzAsVXUtln17QTOURO1R/exec";
 const AUTO_REFRESH_MS = 30 * 60 * 1000;
 
 type Direction = "inbound" | "outbound";
