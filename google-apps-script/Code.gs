@@ -322,18 +322,47 @@ function scanAndImportWmsTruckingOrders() {
     let proColIdx = -1;
     let noteColIdx = -1;
 
+    // Header-cell length guard: this sheet has a merged instructional cell
+    // ("MAKE SURE THE INVOICE SHIP DATE AND SHIPPING METHOD IS UPDATED! Customer
+    // Name") that contains the literal substrings "SHIPPING METHOD" and "SHIP
+    // DATE" inside its instructions, so naive substring matching locked
+    // shipMethodColIdx onto the Customer Name column instead of the real
+    // SHIPPING METHOD column -- every row's shipping-method check then read a
+    // customer name, never matched "TRUCKING", and every row was silently
+    // skipped (nothing ever imported). Real headers here are all short, so
+    // excluding implausibly long cells from shipMethod/date detection fixes
+    // it without touching customer detection, which legitimately needs to
+    // match this same messy cell.
+    const MAX_HEADER_CELL_LEN = 40;
+
     for (let r = 0; r < Math.min(5, sourceData.length); r++) {
       const row = sourceData[r].map(c => String(c || "").trim().toUpperCase());
       for (let c = 0; c < row.length; c++) {
         const val = row[c];
-        if (shipMethodColIdx === -1 && (val.includes("SHIPPING METHOD") || val.includes("SHIP METHOD"))) shipMethodColIdx = c;
+        const looksLikeRealHeader = val.length > 0 && val.length <= MAX_HEADER_CELL_LEN;
+        if (shipMethodColIdx === -1 && looksLikeRealHeader && (val.includes("SHIPPING METHOD") || val.includes("SHIP METHOD"))) shipMethodColIdx = c;
         if (invoiceColIdx === -1 && (val.includes("INVOICE") || val.includes("PO#") || val.includes("PO NUMBER"))) invoiceColIdx = c;
         if (customerColIdx === -1 && (val.includes("CUSTOMER") || val.includes("CLIENT") || val.includes("ACCOUNT"))) customerColIdx = c;
-        if (shipDateColIdx === -1 && (val.includes("SHIP DATE") || val.includes("DATE") || val.includes("PU DATE"))) shipDateColIdx = c;
+        // "Ship out Date"/"Ship Date"/"PU Date" are checked ahead of the bare
+        // "DATE" fallback so a generic Date/Invoice-Date column earlier in the
+        // row can't steal this before the real ship-date column is reached.
+        if (shipDateColIdx === -1 && looksLikeRealHeader && (val.includes("SHIP OUT DATE") || val.includes("SHIP DATE") || val.includes("PU DATE"))) shipDateColIdx = c;
         if (palletColIdx === -1 && (val.includes("PALLET") || val.includes("PLT") || val.includes("QTY") || val.includes("CARTONS"))) palletColIdx = c;
         if (carrierColIdx === -1 && (val.includes("CARRIER") || val.includes("TRUCKING"))) carrierColIdx = c;
         if (proColIdx === -1 && (val.includes("PRO#") || val.includes("PRO") || val.includes("TRACKING") || val.includes("BOL"))) proColIdx = c;
         if (noteColIdx === -1 && (val.includes("NOTE") || val.includes("REMARK") || val.includes("MEMO") || val.includes("ISSUE"))) noteColIdx = c;
+      }
+      // Second pass for shipDateColIdx: only fall back to a bare "DATE" match
+      // if no "Ship out Date"/"Ship Date"/"PU Date" phrase was found anywhere
+      // in this header row.
+      if (shipDateColIdx === -1) {
+        for (let c = 0; c < row.length; c++) {
+          const val = row[c];
+          if (val.length > 0 && val.length <= MAX_HEADER_CELL_LEN && val.includes("DATE")) {
+            shipDateColIdx = c;
+            break;
+          }
+        }
       }
       if (shipMethodColIdx !== -1) {
         headerRowIdx = r;
@@ -371,11 +400,17 @@ function scanAndImportWmsTruckingOrders() {
 
     // Load target sheet existing rows to avoid duplicates
     const targetData = targetSheet.getDataRange().getDisplayValues();
-    const targetHeaders = targetData.length > 0 ? targetData[1] || targetData[0] : [];
+    // WH Trucking Request has a single header row (row 1: CUSTOMER, INVOICE NO.,
+    // ADDRESS, SHIP DATE, ...) -- verified directly against the live sheet.
+    // `targetData[1] || targetData[0]` used row 2 as the header whenever it was
+    // non-empty, which it always is (it's real data), so every targetMap[...]
+    // lookup below silently failed and new rows were appended with every field
+    // blank except the ones this function fills in from the WMS side.
+    const targetHeaders = targetData.length > 0 ? targetData[0] : [];
     const targetMap = headerMap_(targetHeaders);
 
     const existingRowsMap = new Map(); // key -> row index (1-based)
-    for (let r = 2; r < targetData.length; r++) {
+    for (let r = 1; r < targetData.length; r++) {
       const row = targetData[r];
       const invs = exactVal_(row, targetMap, ["INVOICE NO.", "INVOICE #", "INVOICE"]).split(/[\r\n,;·]+/);
       const cust = exactVal_(row, targetMap, ["CUSTOMER"]).toUpperCase().replace(/\s+/g, " ").trim();
