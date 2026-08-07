@@ -1018,11 +1018,11 @@ function importSourceRecords(rows: string[][]): ImportSourceRecord[] {
         mbl,
         hbl,
         container: cell(row, 7),
-        vessel: cell(row, 14),
-        status: cell(row, 29),
-        etd: cell(row, 15),
-        eta: cell(row, 16),
-        deliveryExpected: cell(row, 18),
+        vessel: cell(row, 12),
+        status: cell(row, 27),
+        etd: cell(row, 13),
+        eta: cell(row, 14),
+        deliveryExpected: cell(row, 16),
       },
     ];
   });
@@ -1121,7 +1121,9 @@ function inboundParcelItems(rows: string[][]): ScheduleItem[] {
     if (isSectionHeader) return [];
 
     const sourceRow = index + 1;
-    const status = normalizeStatus(cell(row, 29));
+    // WEBSITE STATUS is column AB (index 27) on IMPORTS; AD/29 lands on the small-parcel
+    // section's "BRAND" header block, which silently returned blank statuses.
+    const status = normalizeStatus(cell(row, 27));
     const datedValue = firstDatedValue(etaSource);
     const sourceDate = datedValue?.date ?? today;
     const unfinished = !finished.has(status.toLowerCase());
@@ -1821,10 +1823,13 @@ async function postStatus(item: ScheduleItem, status: string) {
     try {
       let persisted = "";
       if (item.sourceSheet === "IMPORTS") {
+        // WEBSITE STATUS lives in column AB (index 27) on the IMPORTS tab — AD is
+        // "CONTAINER RAW (SYSTEM)". Reading the wrong column here made every status
+        // write look unconfirmed even when the Apps Script backend saved it correctly.
         const table = await fetchTable(
           SHEET_ID,
           1497250700,
-          `AD${sourceRow}:AD${sourceRow}`,
+          `AB${sourceRow}:AB${sourceRow}`,
           0,
         );
         persisted = cell(table.rows?.[0], 0);
