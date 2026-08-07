@@ -33,6 +33,14 @@ const ALLOWED_SHEETS = ["WH Trucking Request", "B2B/E-COM TRUCKING", "TRANSFERS"
 
 const COMPLETED_STATUSES = ["SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED"];
 
+// Required by transferInboundInventory_ -- restored from the pre-2026-08-07 version
+// of this file after it was dropped during a source reconciliation. See
+// DEPLOYMENT_NOTE.md. Do not remove without confirming SKW_Inbound -> SKW_Stock
+// auto-transfer is no longer needed.
+const INVENTORY_TRANSFER_STATUSES = ["DELIVERED", "RECEIVED", "COMPLETED"];
+const SKW_INBOUND_SHEET = "SKW_Inbound";
+const SKW_STOCK_SHEET = "SKW_Stock";
+
 function doPost(e) {
   const lock = LockService.getScriptLock();
   let haveLock = false;
@@ -76,6 +84,11 @@ function doPost(e) {
 
     target.setValue(status);
 
+    let inventoryTransfer = null;
+    if (request.kind === "inbound" && INVENTORY_TRANSFER_STATUSES.includes(status.toUpperCase())) {
+      inventoryTransfer = transferInboundInventory_(spreadsheet, request);
+    }
+
     // Format row in Google Sheets: Grey out completed rows, reset active rows
     const rowIdx = target.getRow();
     const rowRange = sheet.getRange(rowIdx, 1, 1, Math.max(sheet.getLastColumn(), 1));
@@ -87,7 +100,7 @@ function doPost(e) {
     }
 
     SpreadsheetApp.flush();
-    return json_({ ok: true, sheet: sheet.getName(), row: rowIdx, status, isCompleted });
+    return json_({ ok: true, sheet: sheet.getName(), row: rowIdx, status, isCompleted, inventoryTransfer });
   } catch (error) {
     return json_({ ok: false, error: String(error.message || error) });
   } finally {
@@ -168,6 +181,106 @@ function exact_(row, map, names, expected) {
 
 function json_(value) {
   return ContentService.createTextOutput(JSON.stringify(value)).setMimeType(ContentService.MimeType.JSON);
+}
+
+// ─── Inventory transfer (SKW_Inbound -> SKW_Stock) ─────────────────────────────
+// Restored 2026-08-07 after being dropped during a Code.gs source reconciliation.
+// See DEPLOYMENT_NOTE.md.
+
+/**
+ * Atomically posts matching SKW_Inbound product rows into SKW_Stock. Stock_Posted
+ * and the composite Source_IB_ID make repeated completed-status requests idempotent.
+ */
+function transferInboundInventory_(spreadsheet, request) {
+  const inbound = spreadsheet.getSheetByName(SKW_INBOUND_SHEET);
+  const stock = spreadsheet.getSheetByName(SKW_STOCK_SHEET);
+  if (!inbound || !stock) throw new Error("SKW inventory backend tabs are missing.");
+  if (inbound.getLastRow() < 2) return { movedRows: 0, quantity: 0 };
+
+  const values = inbound.getDataRange().getDisplayValues();
+  const map = headerMap_(values[0]);
+  ["IB_ID", "SKU", "PRODUCT_DESCRIPTION", "QTY_EA", "STATUS", "STOCK_POSTED"].forEach(function (header) {
+    if (map[header] === undefined) throw new Error(SKW_INBOUND_SHEET + " is missing " + header + ".");
+  });
+  const references = [request.shipmentNo, request.invoice, request.container, request.mbl, request.hbl]
+    .flatMap(referenceTokens_)
+    .filter(Boolean);
+  if (!references.length) throw new Error("Inventory transfer requires a shipment reference.");
+
+  const rows = [];
+  for (let index = 1; index < values.length; index++) {
+    const row = values[index];
+    const posted = String(row[map["STOCK_POSTED"]] || "").trim().toUpperCase();
+    if (/^(TRUE|YES|POSTED|1)$/.test(posted)) continue;
+    const rowStatus = String(row[map["STATUS"]] || "").trim().toUpperCase();
+    if (COMPLETED_STATUSES.includes(rowStatus)) continue;
+    const candidates = [row[map["IB_ID"]], row[map["PO_NUMBER"]], row[map["SOURCE_MSG_ID"]]]
+      .flatMap(referenceTokens_)
+      .filter(Boolean);
+    if (references.some(function (reference) { return candidates.some(function (candidate) { return referencesMatch_(reference, candidate); }); })) {
+      rows.push({ rowNumber: index + 1, values: row });
+    }
+  }
+  if (!rows.length) return { movedRows: 0, quantity: 0 };
+
+  const stockValues = stock.getDataRange().getDisplayValues();
+  const stockMap = headerMap_(stockValues[0]);
+  ["SKU", "UPC", "PRODUCT_DESCRIPTION", "BATCH_NO", "EXPIRY_DATE", "QTY_EA", "LOCATION", "SOURCE_IB_ID", "RECEIVED_AT", "UPDATED_AT"].forEach(function (header) {
+    if (stockMap[header] === undefined) throw new Error(SKW_STOCK_SHEET + " is missing " + header + ".");
+  });
+  const postedKeys = new Set(stockValues.slice(1).map(function (row) {
+    return String(row[stockMap["SOURCE_IB_ID"]] || "").trim().toUpperCase();
+  }).filter(Boolean));
+
+  let totalQuantity = 0;
+  let movedRows = 0;
+  const now = new Date();
+  rows.forEach(function (record) {
+    const row = record.values;
+    const ibId = row[map["IB_ID"]] || request.shipmentNo || request.invoice || "";
+    const sku = row[map["SKU"]] || "";
+    const upc = row[map["UPC"]] || "";
+    const product = row[map["PRODUCT_DESCRIPTION"]] || "";
+    const batch = row[map["BATCH_NO"]] || "";
+    const expiration = row[map["EXPIRY_DATE"]] || "";
+    const quantity = Number(String(row[map["QTY_EA"]] || "0").replace(/,/g, "")) || 0;
+    if (quantity <= 0) return;
+    const location = row[map["LOCATION"]] || "UNASSIGNED";
+    const sourceKey = [ibId, sku || upc, batch, expiration]
+      .map(function (value) { return String(value || "").trim().toUpperCase(); })
+      .join("::");
+    if (postedKeys.has(sourceKey)) {
+      inbound.getRange(record.rowNumber, map["STOCK_POSTED"] + 1).setValue(true);
+      return;
+    }
+    stock.appendRow([sku, upc, product, batch, expiration, quantity, location, sourceKey, now, now]);
+    postedKeys.add(sourceKey);
+    if (map["RECEIVED_DATE"] !== undefined) inbound.getRange(record.rowNumber, map["RECEIVED_DATE"] + 1).setValue(now);
+    inbound.getRange(record.rowNumber, map["STATUS"] + 1).setValue("Received");
+    inbound.getRange(record.rowNumber, map["STOCK_POSTED"] + 1).setValue(true);
+    totalQuantity += quantity;
+    movedRows++;
+  });
+  return { movedRows, quantity: totalQuantity };
+}
+
+function referenceTokens_(value) {
+  return String(value || "")
+    .split(/[\r\n,;|]+/)
+    .map(function (token) { return token.trim().toUpperCase(); })
+    .filter(Boolean);
+}
+
+function referencesMatch_(left, right) {
+  const a = String(left || "").replace(/[^A-Z0-9]/g, "");
+  const b = String(right || "").replace(/[^A-Z0-9]/g, "");
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const shorter = Math.min(a.length, b.length);
+  const longer = Math.max(a.length, b.length);
+  if (shorter < 8) return false;
+  if (shorter / longer < 0.6) return false;
+  return a.includes(b) || b.includes(a);
 }
 
 /**

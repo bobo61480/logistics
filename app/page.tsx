@@ -1248,88 +1248,6 @@ function resolvedInboundMode(
   return clean(reportedMode) || "Ocean";
 }
 
-function inboundItems(table: any, importsRows: string[][]): ScheduleItem[] {
-  const imports = importSourceRecords(importsRows);
-  return (table.rows ?? []).flatMap((row: any, index: number) => {
-    const eta = cell(row, 12);
-    const expectedDelivery = cell(row, 14);
-    const shipmentNo = cell(row, 1);
-    const invoiceValue = cell(row, 3);
-    const mbl = cell(row, 4);
-    const hbl = cell(row, 5);
-    const importSource = resolveImportSource(
-      imports,
-      shipmentNo,
-      invoiceValue,
-      mbl,
-      hbl,
-    );
-    const importsSourceRow = importSource?.sourceRow;
-    const container = cell(row, 6) || importSource?.container || "";
-    const reportedMode = cell(row, 0);
-    const vessel = cell(row, 10) || importSource?.vessel || "";
-    const mode = resolvedInboundMode(reportedMode, shipmentNo, mbl, hbl, container, vessel);
-    const smallParcelCarrier = parcelCarrier([mode, shipmentNo].join(" "));
-    const isSmallParcel = Boolean(smallParcelCarrier);
-    if (isSmallParcel) return [];
-    const datedValue = firstDatedValue(expectedDelivery, eta);
-    if (
-      !datedValue ||
-      !importsSourceRow ||
-      (!shipmentNo && !container)
-    ) {
-      return [];
-    }
-    const { date, text: dateText } = datedValue;
-    const sourceRow = importsSourceRow;
-    const status = normalizeStatus(importSource?.status || cell(row, 16));
-    const folderUrl = INBOUND_DOCUMENT_LINKS[shipmentNo] ?? importsCellUrl(sourceRow, "B");
-    const carrierKey = [cell(row, 0), cell(row, 4), cell(row, 5), cell(row, 10), shipmentNo]
-      .filter(Boolean)
-      .join(" ");
-    const invoice = correctedInboundInvoice(shipmentNo, invoiceValue);
-    const trackingNumber = container;
-    return [
-      {
-        id: `inbound-${sourceRow}-${index}`,
-        direction: "inbound",
-        date,
-        dateText,
-        title: shipmentNo || container,
-        reference: trackingNumber || invoice || "Inbound shipment",
-        secondary: [cell(row, 0), cell(row, 10)].filter(Boolean).join(" · "),
-        status,
-        sourceSheet: "IMPORTS",
-        sourceRow,
-        sourceUrl: SHEET_URL,
-        editable: true,
-        shipmentNo,
-        shipmentUrl: folderUrl,
-        container,
-        containerUrl: officialTrackingUrl(
-          trackingNumber,
-          `${carrierKey} ${smallParcelCarrier}`,
-          importsCellUrl(sourceRow, "H"),
-        ),
-        mbl,
-        hbl,
-        invoice,
-        invoiceUrl: invoiceFileUrl(splitValues(invoice)[0] ?? ""),
-        mode,
-        vessel,
-        pod: /^OSL/i.test(shipmentNo) ? "LGB" : "LAX",
-        eta: expectedDelivery || eta,
-        carrier: "",
-        trackingNumber: "",
-        pro: "",
-        isSmallParcel: false,
-        shippingMethod: mode,
-        sourceType: mode === "Ocean" ? "Ocean" : "Air",
-      },
-    ];
-  });
-}
-
 function ImportSchedules({
   items,
   loading,
@@ -1495,7 +1413,12 @@ type OutboundSourceRecord = {
 function outboundSourceRecords(rows: string[][]): OutboundSourceRecord[] {
   return rows.flatMap((row, index) => {
     const sourceRow = index + 1;
-    if (sourceRow < 4) return [];
+    // Outbound Shipping Schedule now has a single header row (row 1) -- verified
+    // against the live sheet, which lists every field (CUSTOMER, INVOICE NO.,
+    // CARRIER, STATUS, WEBSITE STATUS, etc.) in row 1 alone. The old `< 4` cutoff
+    // was silently dropping the first two real shipment rows as if they were
+    // leftover header rows from a previous (3-row) header layout.
+    if (sourceRow < 2) return [];
     const customer = cell(row, 0);
     const invoice = cell(row, 1);
     const shipDate = cell(row, 3);
@@ -1541,7 +1464,8 @@ function resolveOutboundSource(records: OutboundSourceRecord[], item: ScheduleIt
 function outboundItems(rows: string[][]): ScheduleItem[] {
   return rows.flatMap((row, index) => {
     const sourceRow = index + 1;
-    if (sourceRow < 4) return [];
+    // See matching note in outboundSourceRecords -- only row 1 is a real header now.
+    if (sourceRow < 2) return [];
     const customer = cell(row, 0);
     const invoice = cell(row, 1);
     const shipDate = cell(row, 3);
@@ -1636,7 +1560,11 @@ function salesOutboundItems(table: any): ScheduleItem[] {
     const isSmallParcel = Boolean(carrier) && !/truck/i.test(shippingMethod);
     const isTrucking = /\btruck(?:ing)?\b/i.test(shippingMethod);
     if (!date || !customer || (!isSmallParcel && !isTrucking)) return [];
-    const sourceRow = index + 3;
+    // Verified against the live sheet: fetchTable(SALES_SHEET_ID, 0, "A2:AF4200", 1)
+    // returns table.rows[0] as sheet row 2 (headers=1 uses the sheet's real row 1
+    // regardless of the A2 range start), so the source row is index + 2, not + 3 --
+    // the old off-by-one pointed every "view source row" link one row too far down.
+    const sourceRow = index + 2;
     const issue = cell(row, 7);
     const status = /yes|issue|hold|pending/i.test(issue) ? "Pending" : "Scheduled";
     const trackingNumber = isSmallParcel
