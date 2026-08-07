@@ -41,3 +41,38 @@ the WRITE_ENDPOINT `/exec` URL used by `app/page.tsx`.
 
 `backup/Code.gs` is now known-stale relative to this version and should not
 be used as a reference; kept only for history.
+
+---
+
+## Update — 2026-08-07 (later same day)
+
+Deployment ID `AKfycbwyVnU2jvOtMFXuY7KtX_8-hHXYVLrc6R2Dr_6akdDaTGQPc8duSo7tpguIuk00MjDl`
+above was itself a dead end: it turned out to be pinned to a *third*, unrelated
+legacy Apps Script project (function surface `getMasterWorkbook`/`buildKPIs`/
+`refreshDashboard`/etc — none of which exist anywhere in this repo). No amount
+of redeploying from the correct project could ever update that URL.
+
+`WRITE_ENDPOINT` in `app/page.tsx` now points at a fresh deployment of the
+actual sheet-bound project (Extensions → Apps Script from LOGISTICS MASTER
+2026): `AKfycbz770kmpwqMTA-h-lzeLARgVnDh_VDjh-70OOKk_yE-iXJTmzAsVXUtln17QTOURO1R`.
+
+The `deploy-apps-script` job in `.github/workflows/deploy-planner.yml` now
+runs `clasp deploy --deploymentId <that same ID>` after `clasp push`, so
+future `.gs` changes update the *live* deployment automatically instead of
+only updating the editor's source (which is what caused this whole
+afternoon's confusion — `clasp push` / manual paste-in only ever touched the
+editor, never the frozen deployment snapshot). Requires the `CLASP_ACCESS_TOKEN`
+repo secret to be set (JSON content of `~/.clasprc.json` after `clasp login`).
+
+If the deployment is ever swapped for a new one, update BOTH
+`WRITE_ENDPOINT` in `app/page.tsx` and `WRITE_ENDPOINT_DEPLOYMENT_ID` in the
+workflow — they must stay in sync or this loop repeats.
+
+Also restored in this pass: `transferInboundInventory_` (SKW_Inbound ->
+SKW_Stock auto-transfer on Delivered/Received/Completed) was missing from
+the version pasted from the editor earlier today. Re-added along with its
+`referenceTokens_`/`referencesMatch_` helpers and the
+`INVENTORY_TRANSFER_STATUSES`/`SKW_INBOUND_SHEET`/`SKW_STOCK_SHEET` constants.
+This still needs to be manually synced into the live editor once (paste the
+current `google-apps-script/Code.gs`, then deploy) before the automated
+`clasp deploy` step takes over going forward.
