@@ -6,5 +6,17 @@
     "google.datacloud.executeCellToolForNotebookMCP": true,
     "google.datacloud.executeCellToolConsent": true,
     "google.datacloud.composer.region": "us-west2",
-    "google.datacloud.composer.project": "logistics-5609"
+    "google.datacloud.composer.project": "logistics-5609",
+    "tasks.tasks": [
+        {
+            "type": "typescript",
+            "tsconfig": "tsconfig.json",
+            "problemMatcher": [
+                "$tsc"
+            ],
+            "group": "build",
+            "label": "tsc: build - tsconfig.json"
+        }
+    ],
+    "chat.sessionSync.enabled": true
 }
