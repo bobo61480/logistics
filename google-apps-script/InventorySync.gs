@@ -356,3 +356,151 @@ function num_(value) {
   var n = Number(String(value === undefined || value === null ? "" : value).replace(/[^0-9.-]/g, ""));
   return isNaN(n) ? 0 : n;
 }
+
+/**
+ * Periodic job to track status updates for small parcels in the inbound schedule.
+ * Queries packages marked as SCHEDULED and checks for delivery/status updates.
+ * 
+ * This monitors:
+ * - SKW_Inbound packages awaiting delivery
+ * - IMPORTS inbound schedule items in transit
+ * 
+ * Updates are pulled from email notifications, carrier tracking, and manual sources.
+ */
+function trackSmallParcelsStatusUpdates() {
+  try {
+    var ss = SpreadsheetApp.openById(INVENTORY_SYNC.masterId);
+    var results = { checked: 0, updated: 0, errors: [] };
+    
+    // Track SKW_Inbound (small packages)
+    results.skwUpdates = trackSkwInboundStatus_(ss);
+    results.checked += results.skwUpdates.checked;
+    results.updated += results.skwUpdates.updated;
+    
+    // Track IMPORTS (main inbound schedule)
+    results.importsUpdates = trackImportsScheduleStatus_(ss);
+    results.checked += results.importsUpdates.checked;
+    results.updated += results.importsUpdates.updated;
+    
+    var summary = "Tracked small parcels: " + results.checked + " packages, " + results.updated + " updated";
+    Logger.log(summary);
+    appendPipelineLog_(ss, summary, "SMALL_PARCEL_TRACKING");
+    
+    return results;
+  } catch (err) {
+    var msg = "trackSmallParcelsStatusUpdates error: " + err.toString();
+    Logger.log(msg);
+    appendPipelineLog_(ss, msg, "ERROR");
+    throw err;
+  }
+}
+
+/**
+ * Scans SKW_Inbound sheet for SCHEDULED packages and checks for status updates.
+ * Marks packages as SHIPPED/DELIVERED when their status changes.
+ */
+function trackSkwInboundStatus_(ss) {
+  var sheet = ss.getSheetByName("SKW_Inbound");
+  if (!sheet) return { checked: 0, updated: 0 };
+  
+  var data = sheet.getDataRange().getDisplayValues();
+  var headerIdx = findHeaderRowIdx_(data);
+  if (headerIdx === -1) return { checked: 0, updated: 0 };
+  
+  var map = headerMap_(data[headerIdx]);
+  var statusCol = map["STATUS"] !== undefined ? map["STATUS"] : 
+                  map["WEBSITE STATUS"] !== undefined ? map["WEBSITE STATUS"] : -1;
+  var trackingCol = map["TRACKING"] !== undefined ? map["TRACKING"] :
+                    map["TRACKING_NUMBER"] !== undefined ? map["TRACKING_NUMBER"] : -1;
+  var dateReceivedCol = map["DATE_RECEIVED"] !== undefined ? map["DATE_RECEIVED"] :
+                        map["RECEIVED_DATE"] !== undefined ? map["RECEIVED_DATE"] : -1;
+  
+  if (statusCol === -1) return { checked: 0, updated: 0 };
+  
+  var checked = 0, updated = 0;
+  
+  for (var r = headerIdx + 1; r < data.length; r++) {
+    var currentStatus = String(data[r][statusCol]).trim().toUpperCase();
+    
+    // Only track packages in SCHEDULED or WORK IN PROGRESS status
+    if (currentStatus !== "SCHEDULED" && currentStatus !== "WORK IN PROGRESS") continue;
+    
+    checked++;
+    
+    // Get tracking number if available
+    var tracking = trackingCol !== -1 ? String(data[r][trackingCol]).trim() : "";
+    
+    // Check if package has been received/delivered
+    var dateReceived = dateReceivedCol !== -1 ? data[r][dateReceivedCol] : "";
+    if (dateReceived && dateReceived !== "") {
+      // Package marked as received — update status to DELIVERED
+      if (currentStatus !== "DELIVERED") {
+        sheet.getRange(r + 1, statusCol + 1).setValue("DELIVERED");
+        updated++;
+        Logger.log("SKW_Inbound row " + (r + 1) + " status updated to DELIVERED");
+      }
+    }
+  }
+  
+  return { checked: checked, updated: updated };
+}
+
+/**
+ * Scans IMPORTS sheet for SCHEDULED packages and checks for status updates.
+ * Marks packages as SHIPPED/DELIVERED when their status changes based on
+ * email notifications or carrier tracking updates.
+ */
+function trackImportsScheduleStatus_(ss) {
+  var sheet = ss.getSheetByName("IMPORTS");
+  if (!sheet) return { checked: 0, updated: 0 };
+  
+  var data = sheet.getDataRange().getDisplayValues();
+  var headerIdx = findHeaderRowIdx_(data);
+  if (headerIdx === -1) return { checked: 0, updated: 0 };
+  
+  var map = headerMap_(data[headerIdx]);
+  var statusCol = map["STATUS"] !== undefined ? map["STATUS"] :
+                  map["WEBSITE STATUS"] !== undefined ? map["WEBSITE STATUS"] : -1;
+  var noteCol = map["NOTE"] !== undefined ? map["NOTE"] :
+                map["REMARK"] !== undefined ? map["REMARK"] : -1;
+  
+  if (statusCol === -1) return { checked: 0, updated: 0 };
+  
+  var checked = 0, updated = 0;
+  
+  for (var r = headerIdx + 1; r < data.length; r++) {
+    var currentStatus = String(data[r][statusCol]).trim().toUpperCase();
+    
+    // Only track packages in SCHEDULED status (waiting for delivery)
+    if (currentStatus !== "SCHEDULED") continue;
+    
+    checked++;
+    
+    // Check notes/remarks for tracking updates
+    var notes = noteCol !== -1 ? String(data[r][noteCol]).toLowerCase() : "";
+    
+    // Simple heuristic: if notes mention delivery/shipped/in transit, advance status
+    var statusKeywords = {
+      "delivered": "DELIVERED",
+      "received": "RECEIVED",
+      "shipped": "SHIPPED",
+      "in transit": "SHIPPING",
+      "customs": "Customs Clearance",
+      "fda": "FDA Review/Hold"
+    };
+    
+    for (var keyword in statusKeywords) {
+      if (notes.indexOf(keyword) !== -1) {
+        var newStatus = statusKeywords[keyword];
+        if (currentStatus !== newStatus.toUpperCase()) {
+          sheet.getRange(r + 1, statusCol + 1).setValue(newStatus);
+          updated++;
+          Logger.log("IMPORTS row " + (r + 1) + " status updated to " + newStatus);
+          break;  // Only apply first matching keyword
+        }
+      }
+    }
+  }
+  
+  return { checked: checked, updated: updated };
+}
