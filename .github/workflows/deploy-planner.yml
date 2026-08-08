@@ -4,6 +4,16 @@
 # Also deploys google-apps-script/ to the live Apps Script project via clasp
 # whenever .gs files change.  Requires one secret in Settings → Secrets:
 #   CLASP_ACCESS_TOKEN  — JSON content of ~/.clasprc.json after `clasp login`
+#
+# IMPORTANT: `clasp push` only syncs source code into the Apps Script editor —
+# it does NOT move the live /exec URL forward on its own (Apps Script pins
+# deployments to a frozen version snapshot). Without the "Update the live
+# deployment" step below, every push would silently update code nobody is
+# actually running, which is exactly the trap that caused a full afternoon of
+# "why doesn't my status write back" debugging on 2026-08-07 — see
+# DEPLOYMENT_NOTE.md. That step re-points the EXISTING deployment ID (kept in
+# WRITE_ENDPOINT_DEPLOYMENT_ID below) at the newly-pushed code, so
+# WRITE_ENDPOINT in app/page.tsx never has to change.
 name: Deploy Planner to GitHub Pages
 
 on:
@@ -20,6 +30,13 @@ concurrency:
   group: pages
   cancel-in-progress: true
 
+env:
+  # The deployment ID embedded in WRITE_ENDPOINT (app/page.tsx). If you ever
+  # create a *new* deployment instead of updating this one, you must update
+  # BOTH this value and WRITE_ENDPOINT together, or the dashboard and the
+  # auto-deploy job will silently point at two different deployments again.
+  WRITE_ENDPOINT_DEPLOYMENT_ID: AKfycbz770kmpwqMTA-h-lzeLARgVnDh_VDjh-70OOKk_yE-iXJTmzAsVXUtln17QTOURO1R
+
 jobs:
   deploy-apps-script:
     runs-on: ubuntu-latest
@@ -30,11 +47,11 @@ jobs:
       contains(toJson(github.event.commits.*.modified), '.gs') ||
       contains(toJson(github.event.commits.*.modified), 'appsscript.json')
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '22.13.0'
 
       - name: Install clasp
         run: npm install -g @google/clasp
@@ -48,6 +65,16 @@ jobs:
         # clasp reads .clasp.json at repo root (rootDir = google-apps-script)
         run: clasp push --force
 
+      - name: Update the live deployment
+        # Creates a new version snapshot AND re-points the existing deployment
+        # (same /exec URL) at it in one step. Without --deploymentId, `clasp
+        # deploy` would create a brand-new deployment with a different URL,
+        # which app/page.tsx's WRITE_ENDPOINT would then be pointing past.
+        run: |
+          clasp deploy \
+            --deploymentId "$WRITE_ENDPOINT_DEPLOYMENT_ID" \
+            --description "Auto-deploy from GitHub Actions ($GITHUB_SHA)"
+
   build-and-deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -55,11 +82,11 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '22.13.0'
 
       - name: Install dependencies
         run: npm install --no-audit --no-fund
@@ -72,12 +99,12 @@ jobs:
           test -f out/index.html || { echo "::error::out/index.html missing — export failed"; exit 1; }
           test -f out/CNAME || { echo "::error::out/CNAME missing — custom domain would detach"; exit 1; }
 
-      - uses: actions/configure-pages@v6
+      - uses: actions/configure-pages@v5
 
-      - uses: actions/upload-pages-artifact@v5
+      - uses: actions/upload-pages-artifact@v3
         with:
           path: out
 
       - name: Deploy
         id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@v4
