@@ -14,7 +14,7 @@ type CarrierKpi = {
   shipmentPercent: number;
 };
 
-function parseCsv(text: string) {
+export function parseCsv(text: string) {
   const rows: string[][] = [];
   let row: string[] = [];
   let value = "";
@@ -53,7 +53,7 @@ function parseCsv(text: string) {
   return rows;
 }
 
-function dateCode(value: string) {
+export function dateCode(value: string) {
   const match = value.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
   if (!match) return 0;
   let year = Number(match[3]);
@@ -61,7 +61,7 @@ function dateCode(value: string) {
   return year * 10_000 + Number(match[1]) * 100 + Number(match[2]);
 }
 
-function freightDateCode(value: string, today: ReturnType<typeof pacificDateParts>) {
+export function freightDateCode(value: string, today: ReturnType<typeof pacificDateParts>) {
   const full = dateCode(value);
   if (full) return full;
   const match = value.trim().match(/^(\d{1,2})\/(\d{1,2})$/);
@@ -73,7 +73,7 @@ function freightDateCode(value: string, today: ReturnType<typeof pacificDatePart
   return year * 10_000 + month * 100 + day;
 }
 
-function amount(value: string, allowSuffix: boolean) {
+export function amount(value: string, allowSuffix: boolean) {
   const text = value.trim().toUpperCase().replace(/[$,\s]/g, "");
   const match = text.match(allowSuffix ? /^(-?\d+(?:\.\d+)?)([KMB])?$/ : /^(-?\d+(?:\.\d+)?)$/);
   if (!match) return null;
@@ -89,24 +89,24 @@ function amount(value: string, allowSuffix: boolean) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function freightAmount(value: string) {
+export function freightAmount(value: string) {
   const text = value.trim().toUpperCase().replace(/\bUSD\b/g, "").trim();
   if (!text || /[A-Z]/.test(text) || !/^[\s$,\d().-]+$/.test(text)) return 0;
   const parsed = amount(text.replace(/[()]/g, ""), true) ?? 0;
   return parsed > 0 && parsed <= 250_000 ? parsed : 0;
 }
 
-function loadType(value: string) {
+export function loadType(value: string) {
   const text = value.trim();
   if (/\bFTL\b|FULL\s*TRUCK|TRUCKLOAD/i.test(text)) return "FTL" as const;
   return Number(text.match(/\d+/)?.[0] ?? 0) >= 10 ? ("FTL" as const) : ("LTL" as const);
 }
 
-function isNewJerseyDestination(destination: string) {
+export function isNewJerseyDestination(destination: string) {
   return /\b(?:NJ|NEW JERSEY)\b/i.test(destination.trim());
 }
 
-function distanceBand(destination: string) {
+export function distanceBand(destination: string) {
   const text = destination.trim().toUpperCase();
   if (!text) return "unknown" as const;
   const localCity =
@@ -128,7 +128,7 @@ function distanceBand(destination: string) {
   return "unknown" as const;
 }
 
-function pacificDateParts() {
+export function pacificDateParts() {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Los_Angeles",
     year: "numeric",

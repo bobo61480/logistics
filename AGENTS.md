@@ -10,9 +10,29 @@ Live site: `stylekorean.dpdns.org`
 npm run typecheck   # TypeScript check — run after any .ts/.tsx change
 npm run build       # Full static export (out/) — catches layout/render errors
 npm run dev         # Local dev server at localhost:3000
+npm test            # Unit tests (vitest) — lib/sales-kpis.ts parsers & KPI math
+npm run test:e2e    # Playwright e2e — builds out/ and drives it in Chromium
 ```
 
-Run `typecheck` before every commit. The project uses `"strict": true`.
+Run `typecheck` and `npm test` before every commit. The project uses `"strict": true`.
+
+## Tests
+
+- **Unit** (`tests/`, vitest): cover the CSV/date/money parsers and the full
+  `computeLiveKpis` pipeline in `lib/sales-kpis.ts` against fixture workbooks
+  with a frozen clock. Helpers there are exported specifically so tests can
+  reach them.
+- **E2E** (`e2e/`, Playwright): serve the real static export
+  (`e2e/static-server.mjs`) and intercept ALL `docs.google.com` /
+  `script.google.com` traffic with fixtures — tests never touch live
+  workbooks. Covers first render + KPI cards, the status-write round trip
+  (POST payload, confirmation re-read, finished-row removal), and the
+  failure banner. In sandboxes with a pre-installed Chromium, run with
+  `PLAYWRIGHT_CHROMIUM_EXECUTABLE=/opt/pw-browsers/chromium`; CI uses
+  `npx playwright install chromium`.
+- CI: `.github/workflows/tests.yml` runs both suites on PRs and main;
+  the Pages deploy in `deploy-planner.yml` is additionally gated on the
+  unit suite.
 
 ## Architecture
 
