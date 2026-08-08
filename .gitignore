@@ -18,6 +18,10 @@ pnpm-workspace.yaml
 bob-task-*.json
 git-error-*.txt
 
+# Playwright output
+test-results/
+playwright-report/
+
 # OS artifacts
 .DS_Store
 Thumbs.db

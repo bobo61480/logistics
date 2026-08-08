@@ -91,6 +91,10 @@ jobs:
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
+      - name: Unit tests
+        # Gate the Pages deploy on the KPI/parser unit suite (fast, no browser).
+        run: npm test
+
       - name: Build static export
         run: npx next build
 
