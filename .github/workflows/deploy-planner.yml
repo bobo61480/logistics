@@ -47,11 +47,11 @@ jobs:
       contains(toJson(github.event.commits.*.modified), '.gs') ||
       contains(toJson(github.event.commits.*.modified), 'appsscript.json')
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '22.13.0'
 
       - name: Install clasp
         run: npm install -g @google/clasp
@@ -82,11 +82,11 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '22.13.0'
 
       - name: Install dependencies
         run: npm install --no-audit --no-fund
@@ -99,12 +99,12 @@ jobs:
           test -f out/index.html || { echo "::error::out/index.html missing — export failed"; exit 1; }
           test -f out/CNAME || { echo "::error::out/CNAME missing — custom domain would detach"; exit 1; }
 
-      - uses: actions/configure-pages@v6
+      - uses: actions/configure-pages@v5
 
-      - uses: actions/upload-pages-artifact@v5
+      - uses: actions/upload-pages-artifact@v3
         with:
           path: out
 
       - name: Deploy
         id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@v4
