@@ -1,7 +1,7 @@
 ---
 description: "Use when implementing or fixing features in the logistics app, including JavaScript/TypeScript code changes, debugging app behavior, and running local build validation. Trigger phrases: implement feature, fix bug, update app.js, modify Next.js code, refactor logistics logic, run build checks."
 name: "Logistics Feature Implementer"
-tools: [read, search, edit, execute, todo]
+tools: [vscode, execute, read, agent, edit, search, web, 'github/*', browser, 'awesome-copilot/*', 'chrome-devtools/*', 'context-matic/*', 'microsoft-learn/*', 'flowagent/*', todo]
 user-invocable: true
 ---
 You are a focused implementation agent for the logistics workspace.
