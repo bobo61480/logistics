@@ -1,3 +1,11 @@
+<<<<<<< HEAD
+{
+    "workbench.browser.openLocalhostLinks": true,
+    "playwright.pickLocatorCopyToClipboard": true,
+    "playwright.reuseBrowser": false,
+    "playwright.runGlobalSetupOnEachRun": true,
+    "playwright.showTrace": true
+=======
 {
     "google.datacloud.starredProjects": [
         "key=AIzaSyBqwLCAX4w6VJg2FC3iKdTpkiO8faPFmrY"
@@ -7,4 +15,5 @@
     "google.datacloud.executeCellToolConsent": true,
     "google.datacloud.composer.region": "us-west2",
     "google.datacloud.composer.project": "logistics-5609"
+>>>>>>> c01631ba5f4c7212516cbd0b2421d06155b61b5d
 }

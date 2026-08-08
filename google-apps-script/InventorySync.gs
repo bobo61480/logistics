@@ -150,10 +150,12 @@ function readWmsContainerLog_() {
  * Aggregates the allocation workbook: per SKU, confirmed inbound quantity,
  * remaining-to-receive (잔여수량), and channel allocation summary.
  * Tab names are treated as shipment identifiers.
+ * Skips tabs whose shipment is already delivered/completed in IMPORTS.
  * Respects the script run budget; sets partial=true when it had to stop early.
  */
 function readAllocationIncoming_(startedAt) {
   var CHANNELS = ["CAWH", "IHERB", "HQ IHERB PO", "NATIONAL", "BK", "US_OFFICIAL", "MOIDA", "NY"];
+  var completedShipments = getCompletedImportShipments_();
   var ss = SpreadsheetApp.openById(INVENTORY_SYNC.allocationId);
   var sheets = ss.getSheets();
   var bySku = {};
@@ -165,6 +167,7 @@ function readAllocationIncoming_(startedAt) {
     var sheet = sheets[s];
     if (sheet.getLastRow() < 2 || sheet.getLastColumn() < 4) continue;
     if (sheet.getLastColumn() > 40) continue; // skip the wide per-shipment tracker tab
+    if (completedShipments.has(sheet.getName().trim().toUpperCase())) continue;
 
     var data = sheet.getRange(1, 1, Math.min(sheet.getLastRow(), 300), Math.min(sheet.getLastColumn(), 16)).getDisplayValues();
     // Header can be on row 1 or 2; require SKU + Cnfm Qty to treat the tab as an allocation sheet.
@@ -208,6 +211,41 @@ function readAllocationIncoming_(startedAt) {
 function channelQty_(value) {
   var m = String(value || "").match(/([\d,]+)/);
   return m ? num_(m[1]) : 0;
+}
+
+var TERMINAL_STATUSES_ = new Set(["SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED"]);
+
+/**
+ * Reads the IMPORTS sheet and returns a Set of upper-cased shipment
+ * identifiers (차수 codes, shipment #, container #) whose status is
+ * already in a terminal state. Used to exclude finished shipments from
+ * allocation and enrichment processing.
+ */
+function getCompletedImportShipments_() {
+  var result = new Set();
+  try {
+    var ss = SpreadsheetApp.openById(INVENTORY_SYNC.masterId);
+    var sheet = ss.getSheetByName(INVENTORY_SYNC.importsTab);
+    if (!sheet || sheet.getLastRow() < 2) return result;
+    var data = sheet.getDataRange().getDisplayValues();
+    var headerIdx = findHeaderRowIdx_(data);
+    var map = headerMap_(data[headerIdx]);
+    var statusCol = map["WEBSITE STATUS"] !== undefined ? map["WEBSITE STATUS"]
+                  : (map["STATUS"] !== undefined ? map["STATUS"]
+                  : (map["SHIPMENT STATUS"] !== undefined ? map["SHIPMENT STATUS"] : null));
+    if (statusCol === null) return result;
+    var idCols = ["SHIPMENT #", "SHIPMENT NO", "SHIPMENT NO.", "차수", "CONTAINER", "CONTAINER #", "CONTAINER NO"];
+    var idIndices = idCols.map(function(name) { return map[name]; }).filter(function(v) { return v !== undefined; });
+    for (var r = headerIdx + 1; r < data.length; r++) {
+      var status = String(data[r][statusCol] || "").trim().toUpperCase();
+      if (!TERMINAL_STATUSES_.has(status)) continue;
+      for (var c = 0; c < idIndices.length; c++) {
+        var val = String(data[r][idIndices[c]] || "").trim().toUpperCase();
+        if (val) result.add(val);
+      }
+    }
+  } catch (e) { /* non-fatal: if IMPORTS is unreadable, process all tabs */ }
+  return result;
 }
 
 /* ------------------------------------------------------------------ */
@@ -332,8 +370,16 @@ function enrichImportsFromContainerLog() {
   var map = headerMap_(data[headerIdx]);
   var noteCol = map["NOTE"] !== undefined ? map["NOTE"] : (map["REMARK"] !== undefined ? map["REMARK"] : null);
 
+  var statusCol = map["WEBSITE STATUS"] !== undefined ? map["WEBSITE STATUS"]
+                : (map["STATUS"] !== undefined ? map["STATUS"]
+                : (map["SHIPMENT STATUS"] !== undefined ? map["SHIPMENT STATUS"] : null));
+
   var updated = 0;
   for (var r = headerIdx + 1; r < data.length; r++) {
+    if (statusCol !== null) {
+      var rowStatus = String(data[r][statusCol] || "").trim().toUpperCase();
+      if (TERMINAL_STATUSES_.has(rowStatus)) continue;
+    }
     var rowText = data[r].join(" ").toUpperCase();
     for (var i = 0; i < containers.rows.length; i++) {
       var c = containers.rows[i];

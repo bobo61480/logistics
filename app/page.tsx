@@ -19,10 +19,15 @@ const SALES_SNAPSHOT = {
   wmsYtd: 15_591_074.08,
 };
 // Deployed from google-apps-script/Code.gs (doPost), bound to LOGISTICS MASTER 2026.
+// 2026-08-07: repointed to a fresh deployment of the sheet-bound Apps Script project
+// after discovering the previous /exec URL (...MjDl) was pinned to an unrelated,
+// pre-migration legacy project (function surface: getMasterWorkbook/buildKPIs/etc,
+// none of which exist in this repo) that could never be fixed by editing this repo's
+// Code.gs. See DEPLOYMENT_NOTE.md for the full trail.
 // VERIFY: confirm this /exec URL is the CURRENT deployment of google-apps-script/Code.gs --
 // if you redeploy that script, Apps Script gives you a new URL and this must be updated too.
 const WRITE_ENDPOINT =
-  "https://script.google.com/a/macros/stylekoreanus.com/s/AKfycbwyVnU2jvOtMFXuY7KtX_8-hHXYVLrc6R2Dr_6akdDaTGQPc8duSo7tpguIuk00MjDl/exec";
+  "https://script.google.com/macros/s/AKfycbz770kmpwqMTA-h-lzeLARgVnDh_VDjh-70OOKk_yE-iXJTmzAsVXUtln17QTOURO1R/exec";
 const AUTO_REFRESH_MS = 30 * 60 * 1000;
 
 type Direction = "inbound" | "outbound";
@@ -179,6 +184,19 @@ const INBOUND_STATUS_OPTIONS = [
 const finished = new Set(["shipped", "delivered", "received", "cancelled", "completed"]);
 const finishedImports = new Set(["delivered", "received", "cancelled", "completed"]);
 
+// Defined here (before IMPORT_STALE_CUTOFF) so the IIFE below has no forward-reference
+// dependency on the later startOfToday declaration.
+function startOfToday() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+  }).formatToParts(new Date());
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return new Date(Number(value.year), Number(value.month) - 1, Number(value.day));
+}
+
 // Any import whose ETA is before this date is treated as effectively received/delivered/completed
 // and hidden from the "current + upcoming" Import Schedules table, even if the sheet's Status
 // cell is blank or stale. This does not overwrite the Status column in the source spreadsheet.
@@ -306,17 +324,6 @@ function dayKey(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(
     date.getDate(),
   ).padStart(2, "0")}`;
-}
-
-function startOfToday() {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Los_Angeles",
-    year: "numeric",
-    month: "numeric",
-    day: "numeric",
-  }).formatToParts(new Date());
-  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return new Date(Number(value.year), Number(value.month) - 1, Number(value.day));
 }
 
 function statusClass(status: string) {
@@ -475,7 +482,12 @@ function firstDatedValue(...values: string[]) {
   return null;
 }
 
-function lastDateToken(value: string) { const matches = clean(value).match(/\d{1,2}\/\d{1,2}(?:\/\d{2,4})?/g); return matches ? matches[matches.length - 1] : clean(value); } function sanitizeSecondary(value: string) {
+function lastDateToken(value: string) {
+  const matches = clean(value).match(/\d{1,2}\/\d{1,2}(?:\/\d{2,4})?/g);
+  return matches ? matches[matches.length - 1] : clean(value);
+}
+
+function sanitizeSecondary(value: string) {
   return clean(value)
     .split(/\s*·\s*/)
     .filter((part) => part && !/^imported from\b/i.test(part))
@@ -1011,11 +1023,11 @@ function importSourceRecords(rows: string[][]): ImportSourceRecord[] {
         mbl,
         hbl,
         container: cell(row, 7),
-        vessel: cell(row, 14),
-        status: cell(row, 29),
-        etd: cell(row, 15),
-        eta: cell(row, 16),
-        deliveryExpected: cell(row, 18),
+        vessel: cell(row, 12),
+        status: cell(row, 27),
+        etd: cell(row, 13),
+        eta: cell(row, 14),
+        deliveryExpected: cell(row, 16),
       },
     ];
   });
@@ -1038,11 +1050,9 @@ function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
     // Schedule and Import Schedules table.
     const dated = firstDatedValue(record.deliveryExpected, record.eta, record.etd);
     if (!dated) return [];
-    const date = dated?.date ?? today;
+    const date = dated.date;
     const overdue = date.getTime() < today.getTime();
-    const eta = dated
-      ? `${dated.text}${overdue ? " · OVERDUE" : ""}`
-      : "ETA pending";
+    const eta = `${dated.text}${overdue ? " · OVERDUE" : ""}`;
     const mode = resolvedInboundMode(
       "",
       record.shipmentNo,
@@ -1116,7 +1126,9 @@ function inboundParcelItems(rows: string[][]): ScheduleItem[] {
     if (isSectionHeader) return [];
 
     const sourceRow = index + 1;
-    const status = normalizeStatus(cell(row, 29));
+    // WEBSITE STATUS is column AB (index 27) on IMPORTS; AD/29 lands on the small-parcel
+    // section's "BRAND" header block, which silently returned blank statuses.
+    const status = normalizeStatus(cell(row, 27));
     const datedValue = firstDatedValue(etaSource);
     const sourceDate = datedValue?.date ?? today;
     const unfinished = !finished.has(status.toLowerCase());
@@ -1234,88 +1246,6 @@ function resolvedInboundMode(
   }
   if (isOceanScac || /\bOCEAN\b/i.test(reportedMode)) return "Ocean";
   return clean(reportedMode) || "Ocean";
-}
-
-function inboundItems(table: any, importsRows: string[][]): ScheduleItem[] {
-  const imports = importSourceRecords(importsRows);
-  return (table.rows ?? []).flatMap((row: any, index: number) => {
-    const eta = cell(row, 12);
-    const expectedDelivery = cell(row, 14);
-    const shipmentNo = cell(row, 1);
-    const invoiceValue = cell(row, 3);
-    const mbl = cell(row, 4);
-    const hbl = cell(row, 5);
-    const importSource = resolveImportSource(
-      imports,
-      shipmentNo,
-      invoiceValue,
-      mbl,
-      hbl,
-    );
-    const importsSourceRow = importSource?.sourceRow;
-    const container = cell(row, 6) || importSource?.container || "";
-    const reportedMode = cell(row, 0);
-    const vessel = cell(row, 10) || importSource?.vessel || "";
-    const mode = resolvedInboundMode(reportedMode, shipmentNo, mbl, hbl, container, vessel);
-    const smallParcelCarrier = parcelCarrier([mode, shipmentNo].join(" "));
-    const isSmallParcel = Boolean(smallParcelCarrier);
-    if (isSmallParcel) return [];
-    const datedValue = firstDatedValue(expectedDelivery, eta);
-    if (
-      !datedValue ||
-      !importsSourceRow ||
-      (!shipmentNo && !container)
-    ) {
-      return [];
-    }
-    const { date, text: dateText } = datedValue;
-    const sourceRow = importsSourceRow;
-    const status = normalizeStatus(importSource?.status || cell(row, 16));
-    const folderUrl = INBOUND_DOCUMENT_LINKS[shipmentNo] ?? importsCellUrl(sourceRow, "B");
-    const carrierKey = [cell(row, 0), cell(row, 4), cell(row, 5), cell(row, 10), shipmentNo]
-      .filter(Boolean)
-      .join(" ");
-    const invoice = correctedInboundInvoice(shipmentNo, invoiceValue);
-    const trackingNumber = container;
-    return [
-      {
-        id: `inbound-${sourceRow}-${index}`,
-        direction: "inbound",
-        date,
-        dateText,
-        title: shipmentNo || container,
-        reference: trackingNumber || invoice || "Inbound shipment",
-        secondary: [cell(row, 0), cell(row, 10)].filter(Boolean).join(" · "),
-        status,
-        sourceSheet: "IMPORTS",
-        sourceRow,
-        sourceUrl: SHEET_URL,
-        editable: true,
-        shipmentNo,
-        shipmentUrl: folderUrl,
-        container,
-        containerUrl: officialTrackingUrl(
-          trackingNumber,
-          `${carrierKey} ${smallParcelCarrier}`,
-          importsCellUrl(sourceRow, "H"),
-        ),
-        mbl,
-        hbl,
-        invoice,
-        invoiceUrl: invoiceFileUrl(splitValues(invoice)[0] ?? ""),
-        mode,
-        vessel,
-        pod: /^OSL/i.test(shipmentNo) ? "LGB" : "LAX",
-        eta: expectedDelivery || eta,
-        carrier: "",
-        trackingNumber: "",
-        pro: "",
-        isSmallParcel: false,
-        shippingMethod: mode,
-        sourceType: mode === "Ocean" ? "Ocean" : "Air",
-      },
-    ];
-  });
 }
 
 function ImportSchedules({
@@ -1483,7 +1413,12 @@ type OutboundSourceRecord = {
 function outboundSourceRecords(rows: string[][]): OutboundSourceRecord[] {
   return rows.flatMap((row, index) => {
     const sourceRow = index + 1;
-    if (sourceRow < 4) return [];
+    // Outbound Shipping Schedule now has a single header row (row 1) -- verified
+    // against the live sheet, which lists every field (CUSTOMER, INVOICE NO.,
+    // CARRIER, STATUS, WEBSITE STATUS, etc.) in row 1 alone. The old `< 4` cutoff
+    // was silently dropping the first two real shipment rows as if they were
+    // leftover header rows from a previous (3-row) header layout.
+    if (sourceRow < 2) return [];
     const customer = cell(row, 0);
     const invoice = cell(row, 1);
     const shipDate = cell(row, 3);
@@ -1529,7 +1464,8 @@ function resolveOutboundSource(records: OutboundSourceRecord[], item: ScheduleIt
 function outboundItems(rows: string[][]): ScheduleItem[] {
   return rows.flatMap((row, index) => {
     const sourceRow = index + 1;
-    if (sourceRow < 4) return [];
+    // See matching note in outboundSourceRecords -- only row 1 is a real header now.
+    if (sourceRow < 2) return [];
     const customer = cell(row, 0);
     const invoice = cell(row, 1);
     const shipDate = cell(row, 3);
@@ -1624,7 +1560,11 @@ function salesOutboundItems(table: any): ScheduleItem[] {
     const isSmallParcel = Boolean(carrier) && !/truck/i.test(shippingMethod);
     const isTrucking = /\btruck(?:ing)?\b/i.test(shippingMethod);
     if (!date || !customer || (!isSmallParcel && !isTrucking)) return [];
-    const sourceRow = index + 3;
+    // Verified against the live sheet: fetchTable(SALES_SHEET_ID, 0, "A2:AF4200", 1)
+    // returns table.rows[0] as sheet row 2 (headers=1 uses the sheet's real row 1
+    // regardless of the A2 range start), so the source row is index + 2, not + 3 --
+    // the old off-by-one pointed every "view source row" link one row too far down.
+    const sourceRow = index + 2;
     const issue = cell(row, 7);
     const status = /yes|issue|hold|pending/i.test(issue) ? "Pending" : "Scheduled";
     const trackingNumber = isSmallParcel
@@ -1816,10 +1756,13 @@ async function postStatus(item: ScheduleItem, status: string) {
     try {
       let persisted = "";
       if (item.sourceSheet === "IMPORTS") {
+        // WEBSITE STATUS lives in column AB (index 27) on the IMPORTS tab — AD is
+        // "CONTAINER RAW (SYSTEM)". Reading the wrong column here made every status
+        // write look unconfirmed even when the Apps Script backend saved it correctly.
         const table = await fetchTable(
           SHEET_ID,
           1497250700,
-          `AD${sourceRow}:AD${sourceRow}`,
+          `AB${sourceRow}:AB${sourceRow}`,
           0,
         );
         persisted = cell(table.rows?.[0], 0);
@@ -2275,6 +2218,7 @@ export default function Home() {
       }
     };
     const timer = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
       load();
       setNextRefreshAt(new Date(Date.now() + AUTO_REFRESH_MS));
     }, AUTO_REFRESH_MS);
