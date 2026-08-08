@@ -69,7 +69,7 @@ function freightDateCode(value: string, today: ReturnType<typeof pacificDatePart
   const month = Number(match[1]);
   const day = Number(match[2]);
   const hasOccurredThisYear = month < today.month || (month === today.month && day <= today.day);
-  const year = hasOccurredThisYear ? today.year : today.year - 1;
+  const year = hasOccurredThisYear ? today.year : today.year + 1;
   return year * 10_000 + month * 100 + day;
 }
 

@@ -10,3 +10,15 @@ pnpm-workspace.yaml
 
 # Prevent accidental version-specifier files (e.g. from mistyped `pip install pkg =1.0.0`)
 /=*
+
+# clasp OAuth credentials (stored in home dir, never in repo)
+.clasprc.json
+
+# Ephemeral task / agent output (large, session-specific)
+bob-task-*.json
+git-error-*.txt
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+desktop.ini

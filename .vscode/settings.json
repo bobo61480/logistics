@@ -1,22 +1,15 @@
 {
+    "workbench.browser.openLocalhostLinks": true,
+    "playwright.pickLocatorCopyToClipboard": true,
+    "playwright.reuseBrowser": false,
+    "playwright.runGlobalSetupOnEachRun": true,
+    "playwright.showTrace": true,
     "google.datacloud.starredProjects": [
-        "key=AIzaSyBqwLCAX4w6VJg2FC3iKdTpkiO8faPFmrY"
+        "key=AIzaSyBqwLCAX4w6VJg2FC3iKdaTpkiO8faPFmrY"
     ],
     "google.datacloud.expandMenus": true,
     "google.datacloud.executeCellToolForNotebookMCP": true,
     "google.datacloud.executeCellToolConsent": true,
     "google.datacloud.composer.region": "us-west2",
-    "google.datacloud.composer.project": "logistics-5609",
-    "tasks.tasks": [
-        {
-            "type": "typescript",
-            "tsconfig": "tsconfig.json",
-            "problemMatcher": [
-                "$tsc"
-            ],
-            "group": "build",
-            "label": "tsc: build - tsconfig.json"
-        }
-    ],
-    "chat.sessionSync.enabled": true
+    "google.datacloud.composer.project": "logistics-5609"
 }
