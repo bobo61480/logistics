@@ -28,7 +28,7 @@ const SALES_SNAPSHOT = {
 // if you redeploy that script, Apps Script gives you a new URL and this must be updated too.
 const WRITE_ENDPOINT =
   "https://script.google.com/macros/s/AKfycbz770kmpwqMTA-h-lzeLARgVnDh_VDjh-70OOKk_yE-iXJTmzAsVXUtln17QTOURO1R/exec";
-const AUTO_REFRESH_MS = 30 * 60 * 1000;
+const AUTO_REFRESH_MS = 15 * 60 * 1000;
 
 type Direction = "inbound" | "outbound";
 type OutboundDepartment = "Wholesale" | "B2B/E-Com" | "Nationals" | "MBX" | "NJ";
@@ -2744,7 +2744,7 @@ export default function Home() {
 
       <footer>
         <p><strong>SK</strong> STYLEKOREAN LOGISTICS · COMPANY OPERATIONS</p>
-        <p className="mono">AUTO-REFRESH 30 MIN · STATUS EDITS SYNC TO SOURCE ROWS</p>
+        <p className="mono">AUTO-REFRESH 15 MIN · STATUS EDITS SYNC TO SOURCE ROWS</p>
       </footer>
 
       {notice && <div className="toast" role="status">{notice}</div>}
