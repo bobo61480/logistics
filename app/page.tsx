@@ -12,6 +12,9 @@ const NATIONAL_SHEET_ID = "12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8";
 const NATIONAL_SHEET_URL = `https://docs.google.com/spreadsheets/d/${NATIONAL_SHEET_ID}/edit?gid=99300389#gid=99300389`;
 const SALES_SHEET_ID = "14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I";
 const SALES_SHEET_URL = `https://docs.google.com/spreadsheets/d/${SALES_SHEET_ID}/edit?gid=0#gid=0`;
+const FULFILLMENT_SALES_URL = "https://sk-b2b-mobile.github.io/fulfillment/sales.html";
+const FULFILLMENT_API_URL =
+  "https://script.google.com/macros/s/AKfycbykK9DWjem9ORHxfR_mpdZl5DVh-en0D6JpCdIuel305QmfqxoNU_NqSnjkhFk401hI/exec";
 const SALES_SNAPSHOT = {
   nationalsMtd: 2_209_375.46,
   nationalsYtd: 6_244_884.52,
@@ -19,11 +22,16 @@ const SALES_SNAPSHOT = {
   wmsYtd: 15_591_074.08,
 };
 // Deployed from google-apps-script/Code.gs (doPost), bound to LOGISTICS MASTER 2026.
+// 2026-08-07: repointed to a fresh deployment of the sheet-bound Apps Script project
+// after discovering the previous /exec URL (...MjDl) was pinned to an unrelated,
+// pre-migration legacy project (function surface: getMasterWorkbook/buildKPIs/etc,
+// none of which exist in this repo) that could never be fixed by editing this repo's
+// Code.gs. See DEPLOYMENT_NOTE.md for the full trail.
 // VERIFY: confirm this /exec URL is the CURRENT deployment of google-apps-script/Code.gs --
 // if you redeploy that script, Apps Script gives you a new URL and this must be updated too.
 const WRITE_ENDPOINT =
-  "https://script.google.com/a/macros/stylekoreanus.com/s/AKfycbwyVnU2jvOtMFXuY7KtX_8-hHXYVLrc6R2Dr_6akdDaTGQPc8duSo7tpguIuk00MjDl/exec";
-const AUTO_REFRESH_MS = 30 * 60 * 1000;
+  "https://script.google.com/macros/s/AKfycbz770kmpwqMTA-h-lzeLARgVnDh_VDjh-70OOKk_yE-iXJTmzAsVXUtln17QTOURO1R/exec";
+const AUTO_REFRESH_MS = 15 * 60 * 1000;
 
 type Direction = "inbound" | "outbound";
 type OutboundDepartment = "Wholesale" | "B2B/E-Com" | "Nationals" | "MBX" | "NJ";
@@ -61,10 +69,12 @@ type ScheduleItem = {
   vessel?: string;
   pod?: string;
   eta?: string;
+  deliveryExpected?: string;
   isSmallParcel?: boolean;
   shippingMethod?: string;
   sourceType?: string;
   department?: OutboundDepartment;
+  fulfillment?: FulfillmentTkJob;
 };
 
 type KpiSnapshot = {
@@ -112,6 +122,29 @@ type InventoryCollections = {
   inStock: InventoryItem[];
 };
 
+type FulfillmentTkJob = {
+  invoice?: unknown;
+  remarks?: unknown;
+  shipDate?: unknown;
+  method?: unknown;
+  amount?: unknown;
+  inspection?: unknown;
+  inspEnd?: unknown;
+  movedToPacking?: unknown;
+  dimsCount?: unknown;
+  dimIncludedIn?: unknown;
+  pickStart?: unknown;
+  pickComplete?: unknown;
+  status?: unknown;
+  pickAnomaly?: unknown;
+  [key: string]: unknown;
+};
+
+type FulfillmentTkLoad = {
+  jobs: FulfillmentTkJob[];
+  error: string;
+};
+
 const EMPTY_KPIS: KpiSnapshot = {
   shippingMtd: 0,
   shippingYtd: 0,
@@ -136,6 +169,7 @@ const EMPTY_KPIS: KpiSnapshot = {
 
 const SOURCE_LEGEND = [
   "Wholesale",
+  "Fulfillment TK",
   "Ocean",
   "Air",
   "UPS (Parcel)",
@@ -179,20 +213,32 @@ const INBOUND_STATUS_OPTIONS = [
 const finished = new Set(["shipped", "delivered", "received", "cancelled", "completed"]);
 const finishedImports = new Set(["delivered", "received", "cancelled", "completed"]);
 
+// Defined here (before IMPORT_STALE_CUTOFF) so the IIFE below has no forward-reference
+// dependency on the later startOfToday declaration.
+function startOfToday() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+  }).formatToParts(new Date());
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return new Date(Number(value.year), Number(value.month) - 1, Number(value.day));
+}
+
 // Any import whose ETA is before this date is treated as effectively received/delivered/completed
 // and hidden from the "current + upcoming" Import Schedules table, even if the sheet's Status
 // cell is blank or stale. This does not overwrite the Status column in the source spreadsheet.
 //
 // This used to be a fixed literal date, which meant it silently stopped working once "today"
 // caught up to it -- every row eventually aged past the cutoff and the whole table (and the
-// Inbound Schedule calendar it feeds) went empty. It's now a rolling window measured back from
-// today, computed at module load, so it keeps working without needing a manual date bump.
-const IMPORT_STALE_WINDOW_DAYS = 30;
-const IMPORT_STALE_CUTOFF = (() => {
-  const cutoff = startOfToday();
-  cutoff.setDate(cutoff.getDate() - IMPORT_STALE_WINDOW_DAYS);
-  return cutoff.getTime();
-})();
+// Inbound Schedule calendar it feeds) went empty. The cutoff is now the explicit July 1, 2026
+// operational boundary, while source status determines whether a July+ shipment is still current.
+// Operational import history starts July 1, 2026. Keep every non-terminal import
+// from that point forward visible until its source status says it is done.
+// This is intentionally not a rolling window: an overdue Pending/Scheduled import
+// must remain visible instead of silently aging out of the current Import Schedule.
+const IMPORT_STALE_CUTOFF = new Date(2026, 6, 1).getTime();
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -308,17 +354,6 @@ function dayKey(date: Date) {
   ).padStart(2, "0")}`;
 }
 
-function startOfToday() {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Los_Angeles",
-    year: "numeric",
-    month: "numeric",
-    day: "numeric",
-  }).formatToParts(new Date());
-  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return new Date(Number(value.year), Number(value.month) - 1, Number(value.day));
-}
-
 function statusClass(status: string) {
   const value = status.toLowerCase();
   if (/delay|hold|review|pending/.test(value)) return "status warning";
@@ -404,6 +439,7 @@ function sourceClass(value: string) {
   if (normalized === "ocean") return "source-ocean";
   if (normalized === "air") return "source-air";
   if (normalized === "wholesale") return "source-wholesale";
+  if (normalized === "fulfillment tk") return "source-fulfillment-tk";
   if (normalized.includes("ups") && normalized.includes("freight")) return "source-ups-freight";
   if (normalized.includes("fedex") && normalized.includes("freight")) return "source-fedex-freight";
   if (normalized.includes("dhl") && normalized.includes("freight")) return "source-dhl-freight";
@@ -475,7 +511,12 @@ function firstDatedValue(...values: string[]) {
   return null;
 }
 
-function lastDateToken(value: string) { const matches = clean(value).match(/\d{1,2}\/\d{1,2}(?:\/\d{2,4})?/g); return matches ? matches[matches.length - 1] : clean(value); } function sanitizeSecondary(value: string) {
+function lastDateToken(value: string) {
+  const matches = clean(value).match(/\d{1,2}\/\d{1,2}(?:\/\d{2,4})?/g);
+  return matches ? matches[matches.length - 1] : clean(value);
+}
+
+function sanitizeSecondary(value: string) {
   return clean(value)
     .split(/\s*·\s*/)
     .filter((part) => part && !/^imported from\b/i.test(part))
@@ -532,6 +573,14 @@ function scheduleMatchesInventoryShipment(item: ScheduleItem, selected: Inventor
     .flatMap((value) => inventoryShipmentReferences(value ?? ""))
     .map(normalizedShipmentCode)
     .some((value) => selectedCodes.has(value));
+}
+
+function inventoryForActiveImports(item: InventoryItem, activeCodes: Set<string>) {
+  const activeReferences = inventoryShipmentReferences(item.shipmentNo).filter((reference) =>
+    activeCodes.has(normalizedShipmentCode(reference)),
+  );
+  if (!activeReferences.length) return null;
+  return { ...item, shipmentNo: activeReferences.join(", ") };
 }
 
 function packingListUrl(shipment: string) {
@@ -598,6 +647,107 @@ async function fetchOptionalSheet(sheetName: string, range: string) {
   } catch {
     return null;
   }
+}
+
+function parseFulfillmentDate(value: unknown) {
+  const text = clean(value);
+  const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (iso) return new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
+  return parseDate(text);
+}
+
+function fulfillmentBool(value: unknown) {
+  return value === true || /^(TRUE|YES|1)$/i.test(clean(value));
+}
+
+function fulfillmentTkStatus(job: FulfillmentTkJob) {
+  const inspection = clean(job.inspection);
+  if (/ISSUE|HOLD|ERROR|MISMATCH/i.test(inspection) || fulfillmentBool(job.pickAnomaly)) {
+    return "Pending";
+  }
+  const hasProgress = Boolean(
+    clean(job.pickStart) ||
+      fulfillmentBool(job.pickComplete) ||
+      inspection ||
+      fulfillmentBool(job.movedToPacking) ||
+      Number(job.dimsCount || 0) > 0,
+  );
+  return hasProgress ? "Work in Progress" : "Scheduled";
+}
+
+async function fetchFulfillmentTkJobs(): Promise<FulfillmentTkLoad> {
+  try {
+    const url = new URL(FULFILLMENT_API_URL);
+    url.searchParams.set("op", "getSalesOverview");
+    url.searchParams.set("t", String(Date.now()));
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) throw new Error(`Fulfillment read failed (${response.status}).`);
+    const payload = await response.json();
+    if (payload?.ok === false) throw new Error(clean(payload.error) || "Fulfillment source rejected the request.");
+    const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
+    return {
+      jobs: jobs.filter((job: FulfillmentTkJob) => clean(job.method).toUpperCase() === "TK"),
+      error: "",
+    };
+  } catch (error) {
+    return {
+      jobs: [],
+      error: error instanceof Error ? error.message : "Fulfillment TK source could not be loaded.",
+    };
+  }
+}
+
+function fulfillmentTkItems(jobs: FulfillmentTkJob[]): ScheduleItem[] {
+  return jobs.flatMap((job, index) => {
+    const shipDate = clean(job.shipDate);
+    const date = parseFulfillmentDate(shipDate);
+    if (!date) return [];
+    const invoice = clean(job.invoice);
+    const customer = clean(job.remarks) || "TK Fulfillment";
+    const amount = parseMoney(clean(job.amount));
+    const inspection = clean(job.inspection);
+    const dimsCount = Number(job.dimsCount || 0) || 0;
+    const pickLabel = fulfillmentBool(job.pickComplete)
+      ? "Picking complete"
+      : clean(job.pickStart)
+        ? "Picking active"
+        : "Picking waiting";
+    const secondary = [
+      "FULFILLMENT TK",
+      pickLabel,
+      inspection ? `Inspection: ${inspection}` : "",
+      fulfillmentBool(job.movedToPacking) ? "Moved to packing" : "",
+      dimsCount ? `Dims: ${dimsCount}` : "",
+      amount ? `Amount: ${moneyWithCents(amount)}` : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    return [
+      {
+        id: `fulfillment-tk-${normalizedIdentifier(invoice) || index}`,
+        direction: "outbound" as const,
+        date,
+        dateText: shipDate,
+        title: customer,
+        reference: invoice || "TK fulfillment order",
+        secondary,
+        status: fulfillmentTkStatus(job),
+        sourceSheet: "SK Fulfillment Sales · TK",
+        sourceRow: index + 1,
+        sourceUrl: FULFILLMENT_SALES_URL,
+        editable: false,
+        customer,
+        customerNo: customer,
+        invoice,
+        carrier: "TK",
+        shipDate,
+        shippingMethod: "Trucking",
+        sourceType: "Fulfillment TK",
+        department: "B2B/E-Com" as const,
+        fulfillment: job,
+      },
+    ];
+  });
 }
 
 function inventoryHeader(value: unknown) {
@@ -776,7 +926,7 @@ function InventoryPanel({
       .includes(needle));
   }, [inventoryQuery, items]);
   const displayedItems = useMemo(() => {
-    if (!selectedItem || !showLocation) return filteredItems.slice(0, 250);
+    if (!selectedItem) return filteredItems.slice(0, 250);
     const selectedMatches = items.filter((item) => inventoryProductsMatch(item, selectedItem));
     const visibleById = new Map(
       [...selectedMatches, ...filteredItems].map((item) => [item.id, item]),
@@ -789,13 +939,14 @@ function InventoryPanel({
       .slice(0, 250);
   }, [filteredItems, items, selectedItem, showLocation]);
   useEffect(() => {
-    if (!selectedItem || !showLocation) return;
+    if (!selectedItem) return;
     const frame = window.requestAnimationFrame(() => {
       const wrap = tableWrapRef.current;
       const matchedRow = wrap?.querySelector<HTMLTableRowElement>("tr.inventory-match");
       if (!wrap || !matchedRow) return;
       const targetTop = matchedRow.offsetTop - (wrap.clientHeight - matchedRow.offsetHeight) / 2;
       wrap.scrollTo({ top: Math.max(0, targetTop), behavior: "smooth" });
+      matchedRow.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(frame);
   }, [displayedItems, selectedItem, showLocation]);
@@ -821,8 +972,8 @@ function InventoryPanel({
           <thead><tr><th>Product name</th><th>SKU #</th><th>UPC #</th><th>Expiration</th>{!showLocation && <th>Pallet #</th>}<th>Qty</th>{showLocation && <th>Location</th>}</tr></thead>
           <tbody>
             {displayedItems.map((item) => {
-              const selected = selectable && selectedItem?.id === item.id;
-              const matching = !selectable && Boolean(selectedItem && inventoryProductsMatch(item, selectedItem));
+              const selected = selectedItem?.id === item.id;
+              const matching = Boolean(selectedItem && inventoryProductsMatch(item, selectedItem));
               return <tr
                 aria-label={selectable ? `Select ${item.productName || item.sku || item.upc}` : undefined}
                 aria-selected={selected || matching || undefined}
@@ -881,15 +1032,39 @@ function LowStockPanel({
   items,
   inboundItems,
   loading,
+  selectedItem,
+  onSelect,
 }: {
   items: InventoryItem[];
   inboundItems: InventoryItem[];
   loading: boolean;
+  selectedItem: InventoryItem | null;
+  onSelect?: (item: InventoryItem) => void;
 }) {
   const lowStockItems = useMemo(
     () => items.filter((item) => item.quantity < 200).sort((a, b) => a.quantity - b.quantity),
     [items],
   );
+  const tableWrapRef = useRef<HTMLDivElement>(null);
+  const displayedLowStockItems = useMemo(() => {
+    if (!selectedItem) return lowStockItems;
+    return [...lowStockItems].sort((left, right) =>
+      Number(inventoryProductsMatch(right, selectedItem)) -
+      Number(inventoryProductsMatch(left, selectedItem)),
+    );
+  }, [lowStockItems, selectedItem]);
+  useEffect(() => {
+    if (!selectedItem) return;
+    const frame = window.requestAnimationFrame(() => {
+      const wrap = tableWrapRef.current;
+      const matchedRow = wrap?.querySelector<HTMLTableRowElement>("tr.inventory-match");
+      if (!wrap || !matchedRow) return;
+      const targetTop = matchedRow.offsetTop - (wrap.clientHeight - matchedRow.offsetHeight) / 2;
+      wrap.scrollTo({ top: Math.max(0, targetTop), behavior: "smooth" });
+      matchedRow.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [displayedLowStockItems, selectedItem]);
   const incomingShipmentsFor = (item: InventoryItem) =>
     Array.from(new Set(
       inboundItems
@@ -902,14 +1077,33 @@ function LowStockPanel({
         <div><p className="eyebrow">QTY UNDER 200 · CURRENT WAREHOUSE ON HAND</p><h2>Low Stock</h2></div>
         <div className="inventory-total"><strong>{lowStockItems.length}</strong><span>products</span></div>
       </div>
-      <div className="inventory-table-wrap">
+      <div className="inventory-table-wrap" ref={tableWrapRef}>
         <table className="inventory-table">
           <thead><tr><th>Product name</th><th>SKU #</th><th>UPC #</th><th>Expiration</th><th>Qty</th><th>Location</th><th>Incoming shipment #</th></tr></thead>
           <tbody>
-            {lowStockItems.map((item) => {
+            {displayedLowStockItems.map((item) => {
               const shipments = incomingShipmentsFor(item);
               return (
-                <tr key={item.id}>
+                <tr
+                  key={item.id}
+                  aria-label={`Select ${item.productName || item.sku || item.upc}`}
+                  aria-selected={Boolean(selectedItem && inventoryProductsMatch(item, selectedItem)) || undefined}
+                  className={[
+                    "inventory-selectable",
+                    selectedItem?.id === item.id ? "inventory-selected" : "",
+                    selectedItem && inventoryProductsMatch(item, selectedItem) ? "inventory-match" : "",
+                  ].filter(Boolean).join(" ")}
+                  data-product-key={normalizedIdentifier(item.sku || item.upc || item.productName)}
+                  onClick={() => onSelect?.(item)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onSelect?.(item);
+                    }
+                  }}
+                  role="button"
+                  tabIndex={0}
+                >
                   <td><strong>{item.productName || "—"}</strong></td>
                   <td>{item.sku || "—"}</td>
                   <td>{item.upc || "—"}</td>
@@ -979,17 +1173,13 @@ type ImportSourceRecord = {
   deliveryExpected: string;
 };
 
+function importSectionMarkerIndex(rows: string[][], marker: string) {
+  const wanted = clean(marker).toUpperCase();
+  return rows.findIndex((row) => clean(cell(row, 0)).toUpperCase() === wanted);
+}
+
 function importsBoundaryRow(rows: string[][]) {
-  const index = rows.findIndex((row) => {
-    const joined = row.map(clean).join("").toUpperCase();
-    return (
-      joined.includes("URGENT") &&
-      joined.includes("COMPLETED") &&
-      joined.includes("ESTIMATED") &&
-      joined.includes("CHANGED") &&
-      joined.includes("미정")
-    );
-  });
+  const index = importSectionMarkerIndex(rows, "SCHEDULING");
   return index === -1 ? rows.length : index;
 }
 
@@ -1011,11 +1201,11 @@ function importSourceRecords(rows: string[][]): ImportSourceRecord[] {
         mbl,
         hbl,
         container: cell(row, 7),
-        vessel: cell(row, 14),
-        status: cell(row, 29),
-        etd: cell(row, 15),
-        eta: cell(row, 16),
-        deliveryExpected: cell(row, 18),
+        vessel: cell(row, 12),
+        status: cell(row, 27),
+        etd: cell(row, 13),
+        eta: cell(row, 14),
+        deliveryExpected: cell(row, 16),
       },
     ];
   });
@@ -1026,23 +1216,21 @@ function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
 
   return importSourceRecords(importsRows).flatMap((record) => {
     const status = normalizeStatus(record.status);
-    const hasShipmentDocuments = Boolean(
-      record.shipmentNo && (record.invoice || record.mbl || record.hbl || record.container),
-    );
-    if (!hasShipmentDocuments || parcelCarrier(record.shipmentNo)) return [];
+    const hasShipmentIdentity = Boolean(record.shipmentNo);
+    const shipmentLabel = clean(record.shipmentNo).toUpperCase();
+    const planningRow = /^(?:AS OF\b|SCHEDULING\b|SCHEDULED\b|NEED SCHEDULING\b|MONTH OF\b|URGENT\b|COMPLETED\b|ESTIMATED\b)/.test(shipmentLabel);
+    // Current imports can have incomplete documents, but planning-grid labels can never
+    // become shipment rows even when neighboring cells look like dates or identifiers.
+    if (!hasShipmentIdentity || planningRow || parcelCarrier(record.shipmentNo)) return [];
 
-    // Prefer Delivery Expected when present, but most in-transit rows only ever get an ETA/ETD
-    // filled in (Delivery Expected is usually populated only once a shipment is close to or
-    // already received). Without this fallback, unfinished shipments with a real ETA but a
-    // blank Delivery Expected cell were silently dropped, which emptied out the Inbound
-    // Schedule and Import Schedules table.
-    const dated = firstDatedValue(record.deliveryExpected, record.eta, record.etd);
+    // Import Schedule is authoritative from IMPORTS column O (ETA) only.
+    // Delivery Expected belongs to receiving/trucking planning and ETD is an origin date;
+    // neither may move a shipment into a different inbound ETA slot.
+    const dated = firstDatedValue(record.eta);
     if (!dated) return [];
-    const date = dated?.date ?? today;
+    const date = dated.date;
     const overdue = date.getTime() < today.getTime();
-    const eta = dated
-      ? `${dated.text}${overdue ? " · OVERDUE" : ""}`
-      : "ETA pending";
+    const eta = `${dated.text}${overdue ? " · OVERDUE" : ""}`;
     const mode = resolvedInboundMode(
       "",
       record.shipmentNo,
@@ -1084,6 +1272,7 @@ function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
       vessel: record.vessel,
       pod: /^OSL/i.test(record.shipmentNo) ? "LGB" : "LAX",
       eta,
+      deliveryExpected: record.deliveryExpected,
       isSmallParcel: false,
       shippingMethod: mode,
       sourceType: mode,
@@ -1094,8 +1283,11 @@ function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
 function inboundParcelItems(rows: string[][]): ScheduleItem[] {
   let currentCarrier = "";
   const today = startOfToday();
+  const parcelsMarkerIndex = importSectionMarkerIndex(rows, "PARCELS");
+  if (parcelsMarkerIndex === -1) return [];
 
-  return rows.flatMap((row, index) => {
+  return rows.slice(parcelsMarkerIndex + 1).flatMap((row, offset) => {
+    const index = parcelsMarkerIndex + 1 + offset;
     const firstColumn = cell(row, 0);
     const sectionCarrier = parcelCarrier(firstColumn);
     if (sectionCarrier) {
@@ -1116,7 +1308,9 @@ function inboundParcelItems(rows: string[][]): ScheduleItem[] {
     if (isSectionHeader) return [];
 
     const sourceRow = index + 1;
-    const status = normalizeStatus(cell(row, 29));
+    // WEBSITE STATUS is column AB (index 27) on IMPORTS; AD/29 lands on the small-parcel
+    // section's "BRAND" header block, which silently returned blank statuses.
+    const status = normalizeStatus(cell(row, 27));
     const datedValue = firstDatedValue(etaSource);
     const sourceDate = datedValue?.date ?? today;
     const unfinished = !finished.has(status.toLowerCase());
@@ -1234,88 +1428,6 @@ function resolvedInboundMode(
   }
   if (isOceanScac || /\bOCEAN\b/i.test(reportedMode)) return "Ocean";
   return clean(reportedMode) || "Ocean";
-}
-
-function inboundItems(table: any, importsRows: string[][]): ScheduleItem[] {
-  const imports = importSourceRecords(importsRows);
-  return (table.rows ?? []).flatMap((row: any, index: number) => {
-    const eta = cell(row, 12);
-    const expectedDelivery = cell(row, 14);
-    const shipmentNo = cell(row, 1);
-    const invoiceValue = cell(row, 3);
-    const mbl = cell(row, 4);
-    const hbl = cell(row, 5);
-    const importSource = resolveImportSource(
-      imports,
-      shipmentNo,
-      invoiceValue,
-      mbl,
-      hbl,
-    );
-    const importsSourceRow = importSource?.sourceRow;
-    const container = cell(row, 6) || importSource?.container || "";
-    const reportedMode = cell(row, 0);
-    const vessel = cell(row, 10) || importSource?.vessel || "";
-    const mode = resolvedInboundMode(reportedMode, shipmentNo, mbl, hbl, container, vessel);
-    const smallParcelCarrier = parcelCarrier([mode, shipmentNo].join(" "));
-    const isSmallParcel = Boolean(smallParcelCarrier);
-    if (isSmallParcel) return [];
-    const datedValue = firstDatedValue(expectedDelivery, eta);
-    if (
-      !datedValue ||
-      !importsSourceRow ||
-      (!shipmentNo && !container)
-    ) {
-      return [];
-    }
-    const { date, text: dateText } = datedValue;
-    const sourceRow = importsSourceRow;
-    const status = normalizeStatus(importSource?.status || cell(row, 16));
-    const folderUrl = INBOUND_DOCUMENT_LINKS[shipmentNo] ?? importsCellUrl(sourceRow, "B");
-    const carrierKey = [cell(row, 0), cell(row, 4), cell(row, 5), cell(row, 10), shipmentNo]
-      .filter(Boolean)
-      .join(" ");
-    const invoice = correctedInboundInvoice(shipmentNo, invoiceValue);
-    const trackingNumber = container;
-    return [
-      {
-        id: `inbound-${sourceRow}-${index}`,
-        direction: "inbound",
-        date,
-        dateText,
-        title: shipmentNo || container,
-        reference: trackingNumber || invoice || "Inbound shipment",
-        secondary: [cell(row, 0), cell(row, 10)].filter(Boolean).join(" · "),
-        status,
-        sourceSheet: "IMPORTS",
-        sourceRow,
-        sourceUrl: SHEET_URL,
-        editable: true,
-        shipmentNo,
-        shipmentUrl: folderUrl,
-        container,
-        containerUrl: officialTrackingUrl(
-          trackingNumber,
-          `${carrierKey} ${smallParcelCarrier}`,
-          importsCellUrl(sourceRow, "H"),
-        ),
-        mbl,
-        hbl,
-        invoice,
-        invoiceUrl: invoiceFileUrl(splitValues(invoice)[0] ?? ""),
-        mode,
-        vessel,
-        pod: /^OSL/i.test(shipmentNo) ? "LGB" : "LAX",
-        eta: expectedDelivery || eta,
-        carrier: "",
-        trackingNumber: "",
-        pro: "",
-        isSmallParcel: false,
-        shippingMethod: mode,
-        sourceType: mode === "Ocean" ? "Ocean" : "Air",
-      },
-    ];
-  });
 }
 
 function ImportSchedules({
@@ -1483,7 +1595,12 @@ type OutboundSourceRecord = {
 function outboundSourceRecords(rows: string[][]): OutboundSourceRecord[] {
   return rows.flatMap((row, index) => {
     const sourceRow = index + 1;
-    if (sourceRow < 4) return [];
+    // Outbound Shipping Schedule now has a single header row (row 1) -- verified
+    // against the live sheet, which lists every field (CUSTOMER, INVOICE NO.,
+    // CARRIER, STATUS, WEBSITE STATUS, etc.) in row 1 alone. The old `< 4` cutoff
+    // was silently dropping the first two real shipment rows as if they were
+    // leftover header rows from a previous (3-row) header layout.
+    if (sourceRow < 2) return [];
     const customer = cell(row, 0);
     const invoice = cell(row, 1);
     const shipDate = cell(row, 3);
@@ -1529,7 +1646,8 @@ function resolveOutboundSource(records: OutboundSourceRecord[], item: ScheduleIt
 function outboundItems(rows: string[][]): ScheduleItem[] {
   return rows.flatMap((row, index) => {
     const sourceRow = index + 1;
-    if (sourceRow < 4) return [];
+    // See matching note in outboundSourceRecords -- only row 1 is a real header now.
+    if (sourceRow < 2) return [];
     const customer = cell(row, 0);
     const invoice = cell(row, 1);
     const shipDate = cell(row, 3);
@@ -1624,7 +1742,11 @@ function salesOutboundItems(table: any): ScheduleItem[] {
     const isSmallParcel = Boolean(carrier) && !/truck/i.test(shippingMethod);
     const isTrucking = /\btruck(?:ing)?\b/i.test(shippingMethod);
     if (!date || !customer || (!isSmallParcel && !isTrucking)) return [];
-    const sourceRow = index + 3;
+    // Verified against the live sheet: fetchTable(SALES_SHEET_ID, 0, "A2:AF4200", 1)
+    // returns table.rows[0] as sheet row 2 (headers=1 uses the sheet's real row 1
+    // regardless of the A2 range start), so the source row is index + 2, not + 3 --
+    // the old off-by-one pointed every "view source row" link one row too far down.
+    const sourceRow = index + 2;
     const issue = cell(row, 7);
     const status = /yes|issue|hold|pending/i.test(issue) ? "Pending" : "Scheduled";
     const trackingNumber = isSmallParcel
@@ -1787,6 +1909,8 @@ async function postStatus(item: ScheduleItem, status: string) {
     mbl: item.mbl ?? "",
     hbl: item.hbl ?? "",
     pro: item.pro ?? "",
+    trackingNumber: item.trackingNumber ?? "",
+    isSmallParcel: Boolean(item.isSmallParcel),
     invoice: item.invoice ?? "",
     customer: item.customer ?? "",
     shipDate: item.shipDate ?? "",
@@ -1816,10 +1940,13 @@ async function postStatus(item: ScheduleItem, status: string) {
     try {
       let persisted = "";
       if (item.sourceSheet === "IMPORTS") {
+        // WEBSITE STATUS lives in column AB (index 27) on the IMPORTS tab — AD is
+        // "CONTAINER RAW (SYSTEM)". Reading the wrong column here made every status
+        // write look unconfirmed even when the Apps Script backend saved it correctly.
         const table = await fetchTable(
           SHEET_ID,
           1497250700,
-          `AD${sourceRow}:AD${sourceRow}`,
+          `AB${sourceRow}:AB${sourceRow}`,
           0,
         );
         persisted = cell(table.rows?.[0], 0);
@@ -2197,6 +2324,8 @@ export default function Home() {
   const [inboundInventory, setInboundInventory] = useState<InventoryItem[]>([]);
   const [warehouseStock, setWarehouseStock] = useState<InventoryItem[]>([]);
   const [selectedInventory, setSelectedInventory] = useState<InventoryItem | null>(null);
+  const [fulfillmentTkJobs, setFulfillmentTkJobs] = useState<FulfillmentTkJob[]>([]);
+  const [fulfillmentTkError, setFulfillmentTkError] = useState("");
   const loadInFlight = useRef(false);
   const lastRefreshAt = useRef(0);
 
@@ -2220,6 +2349,7 @@ export default function Home() {
         outbound,
         nationalOutbound,
         salesOutbound,
+        fulfillmentTk,
         liveKpis,
         inventoryDashboardTable,
         skwInboundTable,
@@ -2229,24 +2359,46 @@ export default function Home() {
         fetchCsvRows(SHEET_ID, 20260708),
         fetchTable(NATIONAL_SHEET_ID, 99300389, "A1:U3500", 1),
         fetchTable(SALES_SHEET_ID, 0, "A2:AF4200", 1),
+        fetchFulfillmentTkJobs(),
         fetchLiveKpis(),
         fetchOptionalSheet("INVENTORY", "A1:O6500"),
         fetchOptionalSheet("SKW_Inbound", "A1:R2500"),
         fetchOptionalSheet("SKW_Stock", "A1:J2500"),
       ]);
+      setFulfillmentTkJobs(fulfillmentTk.jobs);
+      setFulfillmentTkError(fulfillmentTk.error);
+      const importItems = pendingImportItems(imports);
+      const activeImportItems = importItems.filter((item) =>
+        item.date.getTime() >= IMPORT_STALE_CUTOFF &&
+        !finishedImports.has(item.status.toLowerCase()),
+      );
       setItems(consolidateTruckingItems([
-        ...pendingImportItems(imports),
+        ...importItems,
         ...inboundParcelItems(imports),
         ...outboundItems(outbound),
         ...nationalOutboundItems(nationalOutbound),
         ...salesOutboundItems(salesOutbound),
+        ...fulfillmentTkItems(fulfillmentTk.jobs),
       ]));
       setKpis(liveKpis);
       const dashboardInventory = dashboardInventoryItems(inventoryDashboardTable);
-      setInboundInventory(uniqueInventoryItems([
+      const activeImportCodes = new Set(
+        activeImportItems
+          .flatMap((item) => [item.shipmentNo, item.title])
+          .flatMap((value) => inventoryShipmentReferences(value ?? ""))
+          .map(normalizedShipmentCode)
+          .filter(Boolean),
+      );
+      // Reduce each source row to active shipment references before deduplication. This prevents
+      // received/history codes such as old HJ/ES rounds from surviving on a mixed allocation row.
+      const currentInboundInventory = [
         ...dashboardInventory.inbound,
         ...skwInboundItems(skwInboundTable),
-      ], true));
+      ].flatMap((inventoryItem) => {
+        const projected = inventoryForActiveImports(inventoryItem, activeImportCodes);
+        return projected ? [projected] : [];
+      });
+      setInboundInventory(uniqueInventoryItems(currentInboundInventory, true));
       setWarehouseStock(uniqueInventoryItems([
         ...dashboardInventory.inStock,
         ...skwStockItems(skwStockTable),
@@ -2275,6 +2427,7 @@ export default function Home() {
       }
     };
     const timer = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
       load();
       setNextRefreshAt(new Date(Date.now() + AUTO_REFRESH_MS));
     }, AUTO_REFRESH_MS);
@@ -2333,10 +2486,37 @@ export default function Home() {
     [visibleItems],
   );
 
-  const inboundScheduleVisibleItems = useMemo(
-    () => inboundVisibleItems.filter((item) => !item.isSmallParcel),
-    [inboundVisibleItems],
-  );
+  const inboundScheduleVisibleItems = useMemo(() => {
+    const first = days[0].getTime();
+    const last = days[days.length - 1].getTime();
+    const needle = query.trim().toLowerCase();
+    return items.flatMap((item) => {
+      if (item.direction !== "inbound" || item.isSmallParcel) return [];
+      // Warehouse receiving appointments come from IMPORTS column Q (Delivery Expected).
+      // Column O ETA stays authoritative only for the separate Import Schedule table.
+      const scheduled = firstDatedValue(item.deliveryExpected ?? "");
+      if (!scheduled) return [];
+      const stamp = new Date(
+        scheduled.date.getFullYear(),
+        scheduled.date.getMonth(),
+        scheduled.date.getDate(),
+      ).getTime();
+      if (stamp < first || stamp > last) return [];
+      if (!includeFinished && finished.has(item.status.toLowerCase())) return [];
+      if (needle && ![
+        item.title,
+        item.reference,
+        item.invoice,
+        item.shipmentNo,
+        item.container,
+        item.mbl,
+        item.hbl,
+        item.vessel,
+        item.status,
+      ].join(" ").toLowerCase().includes(needle)) return [];
+      return [{ ...item, date: scheduled.date, dateText: scheduled.text }];
+    });
+  }, [days, includeFinished, items, query]);
 
   const inboundParcelVisibleItems = useMemo(
     () => inboundVisibleItems.filter((item) => item.isSmallParcel),
@@ -2367,7 +2547,7 @@ export default function Home() {
         const selectedShipment = scheduleMatchesInventoryShipment(item, selectedInventory);
         const isStaleImport = item.date.getTime() < IMPORT_STALE_CUTOFF;
         const isFinishedOrStale = finishedImports.has(item.status.toLowerCase()) || isStaleImport;
-        if (isFinishedOrStale && !includeFinished && !selectedShipment) return false;
+        if (isFinishedOrStale && !includeFinished) return false;
         if (selectedShipment) return true;
         if (!needle) return true;
         return [
@@ -2388,7 +2568,7 @@ export default function Home() {
 
   const counts = useMemo(() => {
     const today = dayKey(days[0]);
-    const inbound = visibleItems.filter((item) => item.direction === "inbound").length;
+    const inbound = inboundScheduleVisibleItems.length + inboundParcelVisibleItems.length;
     const outbound = outboundVisibleItems.length + outboundParcelVisibleItems.length;
     const dueToday = visibleItems.filter((item) => dayKey(item.date) === today).length;
     const exceptions = visibleItems.filter((item) =>
@@ -2396,6 +2576,18 @@ export default function Home() {
     ).length;
     return { inbound, outbound, dueToday, exceptions };
   }, [days, outboundParcelVisibleItems, outboundVisibleItems, visibleItems]);
+
+  const fulfillmentTkSummary = useMemo(() => {
+    const today = dayKey(days[0]);
+    let dueToday = 0;
+    let amount = 0;
+    fulfillmentTkJobs.forEach((job) => {
+      const date = parseFulfillmentDate(job.shipDate);
+      if (date && dayKey(date) === today) dueToday += 1;
+      amount += parseMoney(clean(job.amount));
+    });
+    return { count: fulfillmentTkJobs.length, dueToday, amount };
+  }, [days, fulfillmentTkJobs]);
 
   const handleStatus = async (item: ScheduleItem, status: string) => {
     setSavingId(item.id);
@@ -2453,16 +2645,25 @@ export default function Home() {
               <a className="button secondary" href={SALES_SHEET_URL} target="_blank" rel="noreferrer">
                 SALES
               </a>
+              <a className="button secondary" href={FULFILLMENT_SALES_URL} target="_blank" rel="noreferrer">
+                FULFILLMENT TK
+              </a>
             </div>
           </div>
         </div>
         <div className="sync-strip" role="status" aria-live="polite">
           <span>
             <b className={error ? "sync-dot error" : loading ? "sync-dot loading" : "sync-dot"} />
-            {error ? "Workbook connection needs attention" : loading ? "Syncing live records…" : "3 live workbooks connected"}
+            {error
+              ? "Workbook connection needs attention"
+              : loading
+                ? "Syncing live records…"
+                : fulfillmentTkError
+                  ? "3 core workbooks connected · TK source needs attention"
+                  : "4 live sources connected"}
           </span>
           <span className="mono">
-            AUTO SYNC 30 MIN · LAST SYNC {updatedAt ? updatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "America/Los_Angeles" }) : "—"}
+            AUTO SYNC 15 MIN · LAST SYNC {updatedAt ? updatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "America/Los_Angeles" }) : "—"}
             {" · "}NEXT CHECK {nextRefreshAt ? nextRefreshAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "America/Los_Angeles" }) : "—"}
           </span>
         </div>
@@ -2495,6 +2696,22 @@ export default function Home() {
           <span>EXCEPTIONS</span>
           <strong>{counts.exceptions}</strong>
           <small>pending / hold / delayed</small>
+        </article>
+        <article className={`metric-fulfillment ${fulfillmentTkError ? "metric-source-error" : ""}`}>
+          <span>FULFILLMENT · TK</span>
+          <strong>{fulfillmentTkError ? "!" : fulfillmentTkSummary.count}</strong>
+          <small>
+            {fulfillmentTkError
+              ? "source unavailable · open dashboard"
+              : `${fulfillmentTkSummary.dueToday} due today · ${moneyWithCents(fulfillmentTkSummary.amount)}`}
+          </small>
+          <a
+            className="metric-card-link"
+            href={FULFILLMENT_SALES_URL}
+            target="_blank"
+            rel="noreferrer"
+            aria-label="Open SK Fulfillment Sales dashboard"
+          />
         </article>
       </section>
 
@@ -2651,12 +2868,20 @@ export default function Home() {
           eyebrow="MATCHING PRODUCTS · CURRENT WAREHOUSE ON HAND"
           items={warehouseStock}
           loading={loading}
+          onSelect={(item) => setSelectedInventory((current) => current?.id === item.id ? null : item)}
+          selectable
           selectedItem={selectedInventory}
           showLocation
         />
       </div>
 
-      <LowStockPanel items={warehouseStock} inboundItems={inboundInventory} loading={loading} />
+      <LowStockPanel
+        items={warehouseStock}
+        inboundItems={inboundInventory}
+        loading={loading}
+        selectedItem={selectedInventory}
+        onSelect={(item) => setSelectedInventory((current) => current?.id === item.id ? null : item)}
+      />
 
       <div className="schedule-stack" aria-label="Separate inbound and outbound schedules">
         <ScheduleBoard
@@ -2693,7 +2918,7 @@ export default function Home() {
 
       <footer>
         <p><strong>SK</strong> STYLEKOREAN LOGISTICS · COMPANY OPERATIONS</p>
-        <p className="mono">AUTO-REFRESH 30 MIN · STATUS EDITS SYNC TO SOURCE ROWS</p>
+        <p className="mono">AUTO-REFRESH 15 MIN · STATUS EDITS SYNC TO SOURCE ROWS</p>
       </footer>
 
       {notice && <div className="toast" role="status">{notice}</div>}
