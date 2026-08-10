@@ -12,6 +12,11 @@
 
 /* eslint-disable no-unused-vars */
 
+// Deployment marker: ensures the import-boundary/hourly-parcel Apps Script
+// changes are pushed to the live /exec deployment after CI change detection
+// was corrected on 2026-08-10.
+var APPS_SCRIPT_DEPLOY_SYNC_VERSION = "2026-08-10-import-parcels-v1";
+
 var TRIGGER_PLAN = [
   { handler: "processLogisticsEmails", minutes: 15 },          // Gmail ingestion
   { handler: "processApprovedPending", minutes: 30 },          // commit human-approved rows
