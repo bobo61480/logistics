@@ -2,7 +2,7 @@
 # Repo setting required once: Settings → Pages → Source = "GitHub Actions".
 #
 # Also deploys google-apps-script/ to the live Apps Script project via clasp
-# whenever .gs files change.  Requires one secret in Settings → Secrets:
+# whenever Apps Script source changes. Requires one secret in Settings → Secrets:
 #   CLASP_ACCESS_TOKEN  — JSON content of ~/.clasprc.json after `clasp login`
 #
 # IMPORTANT: `clasp push` only syncs source code into the Apps Script editor —
@@ -41,31 +41,55 @@ jobs:
   deploy-apps-script:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # Only run when .gs files or the manifest changed (or on manual trigger).
-    if: |
-      github.event_name == 'workflow_dispatch' ||
-      contains(toJson(github.event.commits.*.modified), '.gs') ||
-      contains(toJson(github.event.commits.*.modified), 'appsscript.json')
+    # Always start this lightweight job, then use the actual Git diff to decide
+    # whether Apps Script must be pushed. The push-event commits.*.modified list
+    # can be incomplete after squash merges.
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect Apps Script changes
+        id: apps-script-changes
+        shell: bash
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            changed=true
+          else
+            before=$(python3 -c 'import json,os; print(json.load(open(os.environ["GITHUB_EVENT_PATH"])).get("before", ""))')
+            if [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ]; then
+              changed=true
+            elif git diff --quiet "$before" "$GITHUB_SHA" -- google-apps-script/; then
+              changed=false
+            else
+              changed=true
+            fi
+          fi
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "Apps Script changed: $changed"
 
       - uses: actions/setup-node@v4
+        if: steps.apps-script-changes.outputs.changed == 'true'
         with:
           node-version: '22.13.0'
 
       - name: Install clasp
+        if: steps.apps-script-changes.outputs.changed == 'true'
         run: npm install -g @google/clasp
 
       - name: Restore clasp credentials
+        if: steps.apps-script-changes.outputs.changed == 'true'
         # CLASP_ACCESS_TOKEN must be set in repo secrets (Settings → Secrets → Actions).
         # Value is the full JSON content of ~/.clasprc.json after running `clasp login` locally.
         run: echo '${{ secrets.CLASP_ACCESS_TOKEN }}' > ~/.clasprc.json
 
       - name: Push to Apps Script
+        if: steps.apps-script-changes.outputs.changed == 'true'
         # clasp reads .clasp.json at repo root (rootDir = google-apps-script)
         run: clasp push --force
 
       - name: Update the live deployment
+        if: steps.apps-script-changes.outputs.changed == 'true'
         # Creates a new version snapshot AND re-points the existing deployment
         # (same /exec URL) at it in one step. Without --deploymentId, `clasp
         # deploy` would create a brand-new deployment with a different URL,
