@@ -155,7 +155,7 @@ function readWmsContainerLog_() {
  */
 function readAllocationIncoming_(startedAt) {
   var CHANNELS = ["CAWH", "IHERB", "HQ IHERB PO", "NATIONAL", "BK", "US_OFFICIAL", "MOIDA", "NY"];
-  var completedShipments = getCompletedImportShipments_();
+  var activeShipments = getActiveImportShipments_();
   var ss = SpreadsheetApp.openById(INVENTORY_SYNC.allocationId);
   var sheets = ss.getSheets();
   var bySku = {};
@@ -167,7 +167,7 @@ function readAllocationIncoming_(startedAt) {
     var sheet = sheets[s];
     if (sheet.getLastRow() < 2 || sheet.getLastColumn() < 4) continue;
     if (sheet.getLastColumn() > 40) continue; // skip the wide per-shipment tracker tab
-    if (completedShipments.has(sheet.getName().trim().toUpperCase())) continue;
+    if (!allocationSheetMatchesActiveImport_(sheet.getName(), activeShipments)) continue;
 
     var data = sheet.getRange(1, 1, Math.min(sheet.getLastRow(), 300), Math.min(sheet.getLastColumn(), 16)).getDisplayValues();
     // Header can be on row 1 or 2; require SKU + Cnfm Qty to treat the tab as an allocation sheet.
@@ -213,39 +213,141 @@ function channelQty_(value) {
   return m ? num_(m[1]) : 0;
 }
 
-var TERMINAL_STATUSES_ = new Set(["SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED"]);
+var TERMINAL_STATUSES_ = new Set(["DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED", "FINISHED", "CLOSED", "PUTAWAY"]);
+var IMPORT_CUTOFF_DATE_ = new Date(2026, 6, 1); // July 1, 2026 (local script time)
 
 /**
- * Reads the IMPORTS sheet and returns a Set of upper-cased shipment
- * identifiers (차수 codes, shipment #, container #) whose status is
- * already in a terminal state. Used to exclude finished shipments from
- * allocation and enrichment processing.
+ * Builds an allow-list from IMPORTS. Only non-grey, non-terminal shipments
+ * dated July 1, 2026 or later are eligible to contribute inbound inventory.
+ */
+function getActiveImportShipments_() {
+  var active = new Set();
+  var ss = SpreadsheetApp.openById(INVENTORY_SYNC.masterId);
+  var sheet = ss.getSheetByName(INVENTORY_SYNC.importsTab);
+  if (!sheet || sheet.getLastRow() < 2) return active;
+
+  var range = sheet.getDataRange();
+  var data = range.getDisplayValues();
+  var backgrounds = range.getBackgrounds();
+  var headerIdx = findHeaderRowIdx_(data);
+  if (headerIdx < 0) return active;
+  var map = headerMap_(data[headerIdx]);
+
+  var statusCol = firstMappedColumn_(map, ["WEBSITE STATUS", "STATUS", "SHIPMENT STATUS"]);
+  var dateCols = ["ETA", "DELIVERY EXPECTED", "ETD", "LFD"]
+    .map(function (name) { return map[name]; })
+    .filter(function (index) { return index !== undefined; });
+  var idCols = ["SHIPMENT", "SHIPMENT #", "SHIPMENT NO", "SHIPMENT NO.", "DOCS",
+    "INVOICE", "MBL", "HBL", "차수", "CONTAINER", "CONTAINER #", "CONTAINER NO",
+    "ENTRY NUMBER", "CONTAINER RAW (SYSTEM)"]
+    .map(function (name) { return map[name]; })
+    .filter(function (index, position, list) { return index !== undefined && list.indexOf(index) === position; });
+
+  for (var r = headerIdx + 1; r < data.length; r++) {
+    var row = data[r];
+    if (isGreyedImportRow_(backgrounds[r] || [])) continue;
+
+    var status = statusCol === null ? "" : String(row[statusCol] || "").trim().toUpperCase();
+    if (TERMINAL_STATUSES_.has(status)) continue;
+
+    var scheduledDate = null;
+    for (var d = 0; d < dateCols.length && !scheduledDate; d++) {
+      scheduledDate = parseImportDate_(row[dateCols[d]]);
+    }
+    if (!scheduledDate || scheduledDate < IMPORT_CUTOFF_DATE_) continue;
+
+    for (var i = 0; i < idCols.length; i++) {
+      splitImportIdentifiers_(row[idCols[i]]).forEach(function (identifier) {
+        active.add(normalizeImportIdentifier_(identifier));
+      });
+    }
+  }
+  return active;
+}
+
+function allocationSheetMatchesActiveImport_(sheetName, active) {
+  var normalized = normalizeImportIdentifier_(sheetName);
+  if (!normalized || !active.size) return false;
+  if (active.has(normalized)) return true;
+  var matched = false;
+  active.forEach(function (identifier) {
+    if (!matched && identifier.length >= 3 &&
+        (normalized.indexOf(identifier) !== -1 || identifier.indexOf(normalized) !== -1)) {
+      matched = true;
+    }
+  });
+  return matched;
+}
+
+function firstMappedColumn_(map, names) {
+  for (var i = 0; i < names.length; i++) {
+    if (map[names[i]] !== undefined) return map[names[i]];
+  }
+  return null;
+}
+
+function splitImportIdentifiers_(value) {
+  return String(value || "")
+    .split(/[\r\n,;|/]+/)
+    .map(function (part) { return part.trim(); })
+    .filter(Boolean);
+}
+
+function normalizeImportIdentifier_(value) {
+  return String(value || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+function parseImportDate_(value) {
+  var text = String(value || "").trim();
+  if (!text) return null;
+  var parsed = new Date(text);
+  if (!isNaN(parsed.getTime())) return parsed;
+  var match = text.match(/(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/);
+  if (!match) return null;
+  var year = match[3] ? Number(match[3]) : 2026;
+  if (year < 100) year += 2000;
+  parsed = new Date(year, Number(match[1]) - 1, Number(match[2]));
+  return isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function isGreyedImportRow_(backgrounds) {
+  var grey = {
+    "#cccccc": true, "#d3d3d3": true, "#e8eaed": true,
+    "#b7b7b7": true, "#c9c9c9": true, "#999999": true
+  };
+  var greyCells = 0;
+  for (var i = 0; i < Math.min(backgrounds.length, 18); i++) {
+    if (grey[String(backgrounds[i] || "").toLowerCase()]) greyCells++;
+  }
+  return greyCells >= 3;
+}
+
+/**
+ * Backward-compatible terminal-set helper used by other inventory routines.
+ * The allow-list above is authoritative for inbound inventory.
  */
 function getCompletedImportShipments_() {
-  var result = new Set();
+  var active = getActiveImportShipments_();
+  var excluded = new Set();
   try {
     var ss = SpreadsheetApp.openById(INVENTORY_SYNC.masterId);
     var sheet = ss.getSheetByName(INVENTORY_SYNC.importsTab);
-    if (!sheet || sheet.getLastRow() < 2) return result;
+    if (!sheet) return excluded;
     var data = sheet.getDataRange().getDisplayValues();
     var headerIdx = findHeaderRowIdx_(data);
     var map = headerMap_(data[headerIdx]);
-    var statusCol = map["WEBSITE STATUS"] !== undefined ? map["WEBSITE STATUS"]
-                  : (map["STATUS"] !== undefined ? map["STATUS"]
-                  : (map["SHIPMENT STATUS"] !== undefined ? map["SHIPMENT STATUS"] : null));
-    if (statusCol === null) return result;
-    var idCols = ["SHIPMENT #", "SHIPMENT NO", "SHIPMENT NO.", "차수", "CONTAINER", "CONTAINER #", "CONTAINER NO"];
-    var idIndices = idCols.map(function(name) { return map[name]; }).filter(function(v) { return v !== undefined; });
+    var idCols = ["SHIPMENT", "DOCS", "INVOICE", "MBL", "HBL", "CONTAINER", "CONTAINER RAW (SYSTEM)"]
+      .map(function (name) { return map[name]; }).filter(function (index) { return index !== undefined; });
     for (var r = headerIdx + 1; r < data.length; r++) {
-      var status = String(data[r][statusCol] || "").trim().toUpperCase();
-      if (!TERMINAL_STATUSES_.has(status)) continue;
-      for (var c = 0; c < idIndices.length; c++) {
-        var val = String(data[r][idIndices[c]] || "").trim().toUpperCase();
-        if (val) result.add(val);
+      for (var i = 0; i < idCols.length; i++) {
+        splitImportIdentifiers_(data[r][idCols[i]]).forEach(function (identifier) {
+          var normalized = normalizeImportIdentifier_(identifier);
+          if (normalized && !active.has(normalized)) excluded.add(String(identifier).trim().toUpperCase());
+        });
       }
     }
-  } catch (e) { /* non-fatal: if IMPORTS is unreadable, process all tabs */ }
-  return result;
+  } catch (e) { Logger.log("Could not build completed import compatibility set: " + e.message); }
+  return excluded;
 }
 
 /* ------------------------------------------------------------------ */
