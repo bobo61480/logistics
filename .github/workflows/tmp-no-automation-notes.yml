@@ -1,0 +1,38 @@
+name: Validate automation note suppression
+on:
+  push:
+    branches: [fix/no-automation-notes-20260810]
+permissions:
+  contents: write
+jobs:
+  patch-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply guarded patch
+        run: python scripts/patch_no_automation_notes.py
+      - name: Validate Apps Script syntax
+        run: |
+          cp google-apps-script/Code.gs /tmp/Code.js
+          cp google-apps-script/GmailPipeline.gs /tmp/GmailPipeline.js
+          cp google-apps-script/GmailPipelineV2.gs /tmp/GmailPipelineV2.js
+          node --check /tmp/Code.js
+          node --check /tmp/GmailPipeline.js
+          node --check /tmp/GmailPipelineV2.js
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Regression tests
+        run: |
+          npm run typecheck
+          npm test -- --run
+      - name: Commit source changes
+        run: |
+          git config user.name "tokkiboi"
+          git config user.email "tokkiboi@users.noreply.github.com"
+          git add google-apps-script/Code.gs google-apps-script/GmailPipeline.gs google-apps-script/GmailPipelineV2.gs
+          git commit -m "Stop importing automation metadata into NOTES"
+          git push
