@@ -1034,17 +1034,13 @@ type ImportSourceRecord = {
   deliveryExpected: string;
 };
 
+function importSectionMarkerIndex(rows: string[][], marker: string) {
+  const wanted = clean(marker).toUpperCase();
+  return rows.findIndex((row) => clean(cell(row, 0)).toUpperCase() === wanted);
+}
+
 function importsBoundaryRow(rows: string[][]) {
-  const index = rows.findIndex((row) => {
-    const joined = row.map(clean).join("").toUpperCase();
-    return (
-      joined.includes("URGENT") &&
-      joined.includes("COMPLETED") &&
-      joined.includes("ESTIMATED") &&
-      joined.includes("CHANGED") &&
-      joined.includes("미정")
-    );
-  });
+  const index = importSectionMarkerIndex(rows, "SCHEDULING");
   return index === -1 ? rows.length : index;
 }
 
@@ -1086,12 +1082,10 @@ function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
     // Requiring those fields hid newly scheduled rows that already had a shipment code and ETA/ETD.
     if (!hasShipmentIdentity || parcelCarrier(record.shipmentNo)) return [];
 
-    // Prefer Delivery Expected when present, but most in-transit rows only ever get an ETA/ETD
-    // filled in (Delivery Expected is usually populated only once a shipment is close to or
-    // already received). Without this fallback, unfinished shipments with a real ETA but a
-    // blank Delivery Expected cell were silently dropped, which emptied out the Inbound
-    // Schedule and Import Schedules table.
-    const dated = firstDatedValue(record.deliveryExpected, record.eta, record.etd);
+    // Import Schedule is authoritative from IMPORTS column O (ETA) only.
+    // Delivery Expected belongs to receiving/trucking planning and ETD is an origin date;
+    // neither may move a shipment into a different inbound ETA slot.
+    const dated = firstDatedValue(record.eta);
     if (!dated) return [];
     const date = dated.date;
     const overdue = date.getTime() < today.getTime();
@@ -1147,8 +1141,11 @@ function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
 function inboundParcelItems(rows: string[][]): ScheduleItem[] {
   let currentCarrier = "";
   const today = startOfToday();
+  const parcelsMarkerIndex = importSectionMarkerIndex(rows, "PARCELS");
+  if (parcelsMarkerIndex === -1) return [];
 
-  return rows.flatMap((row, index) => {
+  return rows.slice(parcelsMarkerIndex + 1).flatMap((row, offset) => {
+    const index = parcelsMarkerIndex + 1 + offset;
     const firstColumn = cell(row, 0);
     const sectionCarrier = parcelCarrier(firstColumn);
     if (sectionCarrier) {
@@ -1770,6 +1767,8 @@ async function postStatus(item: ScheduleItem, status: string) {
     mbl: item.mbl ?? "",
     hbl: item.hbl ?? "",
     pro: item.pro ?? "",
+    trackingNumber: item.trackingNumber ?? "",
+    isSmallParcel: Boolean(item.isSmallParcel),
     invoice: item.invoice ?? "",
     customer: item.customer ?? "",
     shipDate: item.shipDate ?? "",
