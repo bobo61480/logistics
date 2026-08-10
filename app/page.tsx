@@ -12,6 +12,9 @@ const NATIONAL_SHEET_ID = "12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8";
 const NATIONAL_SHEET_URL = `https://docs.google.com/spreadsheets/d/${NATIONAL_SHEET_ID}/edit?gid=99300389#gid=99300389`;
 const SALES_SHEET_ID = "14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I";
 const SALES_SHEET_URL = `https://docs.google.com/spreadsheets/d/${SALES_SHEET_ID}/edit?gid=0#gid=0`;
+const FULFILLMENT_SALES_URL = "https://sk-b2b-mobile.github.io/fulfillment/sales.html";
+const FULFILLMENT_API_URL =
+  "https://script.google.com/macros/s/AKfycbykK9DWjem9ORHxfR_mpdZl5DVh-en0D6JpCdIuel305QmfqxoNU_NqSnjkhFk401hI/exec";
 const SALES_SNAPSHOT = {
   nationalsMtd: 2_209_375.46,
   nationalsYtd: 6_244_884.52,
@@ -71,6 +74,7 @@ type ScheduleItem = {
   shippingMethod?: string;
   sourceType?: string;
   department?: OutboundDepartment;
+  fulfillment?: FulfillmentTkJob;
 };
 
 type KpiSnapshot = {
@@ -118,6 +122,29 @@ type InventoryCollections = {
   inStock: InventoryItem[];
 };
 
+type FulfillmentTkJob = {
+  invoice?: unknown;
+  remarks?: unknown;
+  shipDate?: unknown;
+  method?: unknown;
+  amount?: unknown;
+  inspection?: unknown;
+  inspEnd?: unknown;
+  movedToPacking?: unknown;
+  dimsCount?: unknown;
+  dimIncludedIn?: unknown;
+  pickStart?: unknown;
+  pickComplete?: unknown;
+  status?: unknown;
+  pickAnomaly?: unknown;
+  [key: string]: unknown;
+};
+
+type FulfillmentTkLoad = {
+  jobs: FulfillmentTkJob[];
+  error: string;
+};
+
 const EMPTY_KPIS: KpiSnapshot = {
   shippingMtd: 0,
   shippingYtd: 0,
@@ -142,6 +169,7 @@ const EMPTY_KPIS: KpiSnapshot = {
 
 const SOURCE_LEGEND = [
   "Wholesale",
+  "Fulfillment TK",
   "Ocean",
   "Air",
   "UPS (Parcel)",
@@ -411,6 +439,7 @@ function sourceClass(value: string) {
   if (normalized === "ocean") return "source-ocean";
   if (normalized === "air") return "source-air";
   if (normalized === "wholesale") return "source-wholesale";
+  if (normalized === "fulfillment tk") return "source-fulfillment-tk";
   if (normalized.includes("ups") && normalized.includes("freight")) return "source-ups-freight";
   if (normalized.includes("fedex") && normalized.includes("freight")) return "source-fedex-freight";
   if (normalized.includes("dhl") && normalized.includes("freight")) return "source-dhl-freight";
@@ -618,6 +647,107 @@ async function fetchOptionalSheet(sheetName: string, range: string) {
   } catch {
     return null;
   }
+}
+
+function parseFulfillmentDate(value: unknown) {
+  const text = clean(value);
+  const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (iso) return new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
+  return parseDate(text);
+}
+
+function fulfillmentBool(value: unknown) {
+  return value === true || /^(TRUE|YES|1)$/i.test(clean(value));
+}
+
+function fulfillmentTkStatus(job: FulfillmentTkJob) {
+  const inspection = clean(job.inspection);
+  if (/ISSUE|HOLD|ERROR|MISMATCH/i.test(inspection) || fulfillmentBool(job.pickAnomaly)) {
+    return "Pending";
+  }
+  const hasProgress = Boolean(
+    clean(job.pickStart) ||
+      fulfillmentBool(job.pickComplete) ||
+      inspection ||
+      fulfillmentBool(job.movedToPacking) ||
+      Number(job.dimsCount || 0) > 0,
+  );
+  return hasProgress ? "Work in Progress" : "Scheduled";
+}
+
+async function fetchFulfillmentTkJobs(): Promise<FulfillmentTkLoad> {
+  try {
+    const url = new URL(FULFILLMENT_API_URL);
+    url.searchParams.set("op", "getSalesOverview");
+    url.searchParams.set("t", String(Date.now()));
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) throw new Error(`Fulfillment read failed (${response.status}).`);
+    const payload = await response.json();
+    if (payload?.ok === false) throw new Error(clean(payload.error) || "Fulfillment source rejected the request.");
+    const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
+    return {
+      jobs: jobs.filter((job: FulfillmentTkJob) => clean(job.method).toUpperCase() === "TK"),
+      error: "",
+    };
+  } catch (error) {
+    return {
+      jobs: [],
+      error: error instanceof Error ? error.message : "Fulfillment TK source could not be loaded.",
+    };
+  }
+}
+
+function fulfillmentTkItems(jobs: FulfillmentTkJob[]): ScheduleItem[] {
+  return jobs.flatMap((job, index) => {
+    const shipDate = clean(job.shipDate);
+    const date = parseFulfillmentDate(shipDate);
+    if (!date) return [];
+    const invoice = clean(job.invoice);
+    const customer = clean(job.remarks) || "TK Fulfillment";
+    const amount = parseMoney(clean(job.amount));
+    const inspection = clean(job.inspection);
+    const dimsCount = Number(job.dimsCount || 0) || 0;
+    const pickLabel = fulfillmentBool(job.pickComplete)
+      ? "Picking complete"
+      : clean(job.pickStart)
+        ? "Picking active"
+        : "Picking waiting";
+    const secondary = [
+      "FULFILLMENT TK",
+      pickLabel,
+      inspection ? `Inspection: ${inspection}` : "",
+      fulfillmentBool(job.movedToPacking) ? "Moved to packing" : "",
+      dimsCount ? `Dims: ${dimsCount}` : "",
+      amount ? `Amount: ${moneyWithCents(amount)}` : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    return [
+      {
+        id: `fulfillment-tk-${normalizedIdentifier(invoice) || index}`,
+        direction: "outbound" as const,
+        date,
+        dateText: shipDate,
+        title: customer,
+        reference: invoice || "TK fulfillment order",
+        secondary,
+        status: fulfillmentTkStatus(job),
+        sourceSheet: "SK Fulfillment Sales · TK",
+        sourceRow: index + 1,
+        sourceUrl: FULFILLMENT_SALES_URL,
+        editable: false,
+        customer,
+        customerNo: customer,
+        invoice,
+        carrier: "TK",
+        shipDate,
+        shippingMethod: "Trucking",
+        sourceType: "Fulfillment TK",
+        department: "B2B/E-Com" as const,
+        fulfillment: job,
+      },
+    ];
+  });
 }
 
 function inventoryHeader(value: unknown) {
@@ -2194,6 +2324,8 @@ export default function Home() {
   const [inboundInventory, setInboundInventory] = useState<InventoryItem[]>([]);
   const [warehouseStock, setWarehouseStock] = useState<InventoryItem[]>([]);
   const [selectedInventory, setSelectedInventory] = useState<InventoryItem | null>(null);
+  const [fulfillmentTkJobs, setFulfillmentTkJobs] = useState<FulfillmentTkJob[]>([]);
+  const [fulfillmentTkError, setFulfillmentTkError] = useState("");
   const loadInFlight = useRef(false);
   const lastRefreshAt = useRef(0);
 
@@ -2217,6 +2349,7 @@ export default function Home() {
         outbound,
         nationalOutbound,
         salesOutbound,
+        fulfillmentTk,
         liveKpis,
         inventoryDashboardTable,
         skwInboundTable,
@@ -2226,11 +2359,14 @@ export default function Home() {
         fetchCsvRows(SHEET_ID, 20260708),
         fetchTable(NATIONAL_SHEET_ID, 99300389, "A1:U3500", 1),
         fetchTable(SALES_SHEET_ID, 0, "A2:AF4200", 1),
+        fetchFulfillmentTkJobs(),
         fetchLiveKpis(),
         fetchOptionalSheet("INVENTORY", "A1:O6500"),
         fetchOptionalSheet("SKW_Inbound", "A1:R2500"),
         fetchOptionalSheet("SKW_Stock", "A1:J2500"),
       ]);
+      setFulfillmentTkJobs(fulfillmentTk.jobs);
+      setFulfillmentTkError(fulfillmentTk.error);
       const importItems = pendingImportItems(imports);
       const activeImportItems = importItems.filter((item) =>
         item.date.getTime() >= IMPORT_STALE_CUTOFF &&
@@ -2242,6 +2378,7 @@ export default function Home() {
         ...outboundItems(outbound),
         ...nationalOutboundItems(nationalOutbound),
         ...salesOutboundItems(salesOutbound),
+        ...fulfillmentTkItems(fulfillmentTk.jobs),
       ]));
       setKpis(liveKpis);
       const dashboardInventory = dashboardInventoryItems(inventoryDashboardTable);
@@ -2440,6 +2577,18 @@ export default function Home() {
     return { inbound, outbound, dueToday, exceptions };
   }, [days, outboundParcelVisibleItems, outboundVisibleItems, visibleItems]);
 
+  const fulfillmentTkSummary = useMemo(() => {
+    const today = dayKey(days[0]);
+    let dueToday = 0;
+    let amount = 0;
+    fulfillmentTkJobs.forEach((job) => {
+      const date = parseFulfillmentDate(job.shipDate);
+      if (date && dayKey(date) === today) dueToday += 1;
+      amount += parseMoney(clean(job.amount));
+    });
+    return { count: fulfillmentTkJobs.length, dueToday, amount };
+  }, [days, fulfillmentTkJobs]);
+
   const handleStatus = async (item: ScheduleItem, status: string) => {
     setSavingId(item.id);
     setNotice(`Saving ${item.title}…`);
@@ -2496,16 +2645,25 @@ export default function Home() {
               <a className="button secondary" href={SALES_SHEET_URL} target="_blank" rel="noreferrer">
                 SALES
               </a>
+              <a className="button secondary" href={FULFILLMENT_SALES_URL} target="_blank" rel="noreferrer">
+                FULFILLMENT TK
+              </a>
             </div>
           </div>
         </div>
         <div className="sync-strip" role="status" aria-live="polite">
           <span>
             <b className={error ? "sync-dot error" : loading ? "sync-dot loading" : "sync-dot"} />
-            {error ? "Workbook connection needs attention" : loading ? "Syncing live records…" : "3 live workbooks connected"}
+            {error
+              ? "Workbook connection needs attention"
+              : loading
+                ? "Syncing live records…"
+                : fulfillmentTkError
+                  ? "3 core workbooks connected · TK source needs attention"
+                  : "4 live sources connected"}
           </span>
           <span className="mono">
-            AUTO SYNC 30 MIN · LAST SYNC {updatedAt ? updatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "America/Los_Angeles" }) : "—"}
+            AUTO SYNC 15 MIN · LAST SYNC {updatedAt ? updatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "America/Los_Angeles" }) : "—"}
             {" · "}NEXT CHECK {nextRefreshAt ? nextRefreshAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "America/Los_Angeles" }) : "—"}
           </span>
         </div>
@@ -2538,6 +2696,22 @@ export default function Home() {
           <span>EXCEPTIONS</span>
           <strong>{counts.exceptions}</strong>
           <small>pending / hold / delayed</small>
+        </article>
+        <article className={`metric-fulfillment ${fulfillmentTkError ? "metric-source-error" : ""}`}>
+          <span>FULFILLMENT · TK</span>
+          <strong>{fulfillmentTkError ? "!" : fulfillmentTkSummary.count}</strong>
+          <small>
+            {fulfillmentTkError
+              ? "source unavailable · open dashboard"
+              : `${fulfillmentTkSummary.dueToday} due today · ${moneyWithCents(fulfillmentTkSummary.amount)}`}
+          </small>
+          <a
+            className="metric-card-link"
+            href={FULFILLMENT_SALES_URL}
+            target="_blank"
+            rel="noreferrer"
+            aria-label="Open SK Fulfillment Sales dashboard"
+          />
         </article>
       </section>
 
