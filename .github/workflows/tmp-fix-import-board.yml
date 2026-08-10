@@ -21,12 +21,16 @@ jobs:
           grep -q 'inventoryForActiveImports' app/page.tsx
           grep -q 'Warehouse receiving appointments' app/page.tsx
           git diff --check
-      - name: Test application
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Typecheck and unit tests
         run: |
-          npm ci --no-audit --no-fund
           npm run typecheck
           npm test
-          npm run test:e2e
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+      - name: End-to-end tests
+        run: npm run test:e2e
       - name: Commit application fix
         run: |
           git config user.name "github-actions[bot]"
