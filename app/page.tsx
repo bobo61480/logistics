@@ -203,8 +203,8 @@ function startOfToday() {
 //
 // This used to be a fixed literal date, which meant it silently stopped working once "today"
 // caught up to it -- every row eventually aged past the cutoff and the whole table (and the
-// Inbound Schedule calendar it feeds) went empty. It's now a rolling window measured back from
-// today, computed at module load, so it keeps working without needing a manual date bump.
+// Inbound Schedule calendar it feeds) went empty. The cutoff is now the explicit July 1, 2026
+// operational boundary, while source status determines whether a July+ shipment is still current.
 // Operational import history starts July 1, 2026. Keep every non-terminal import
 // from that point forward visible until its source status says it is done.
 // This is intentionally not a rolling window: an overdue Pending/Scheduled import
@@ -807,6 +807,7 @@ function InventoryPanel({
       if (!wrap || !matchedRow) return;
       const targetTop = matchedRow.offsetTop - (wrap.clientHeight - matchedRow.offsetHeight) / 2;
       wrap.scrollTo({ top: Math.max(0, targetTop), behavior: "smooth" });
+      matchedRow.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(frame);
   }, [displayedItems, selectedItem, showLocation]);
