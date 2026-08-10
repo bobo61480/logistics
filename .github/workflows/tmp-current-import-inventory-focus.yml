@@ -1,0 +1,260 @@
+name: Apply current import inventory focus fix
+
+on:
+  push:
+    branches:
+      - fix/current-import-inventory-focus-20260810
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/current-import-inventory-focus-20260810
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Apply page fixes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('app/page.tsx')
+          text = path.read_text()
+
+          def replace_once(old, new, label):
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly 1 match, found {count}')
+              text = text.replace(old, new, 1)
+
+          replace_once(
+          '''const IMPORT_STALE_WINDOW_DAYS = 30;
+          const IMPORT_STALE_CUTOFF = (() => {
+            const cutoff = startOfToday();
+            cutoff.setDate(cutoff.getDate() - IMPORT_STALE_WINDOW_DAYS);
+            return cutoff.getTime();
+          })();''',
+          '''// Operational import history starts July 1, 2026. Keep every non-terminal import
+          // from that point forward visible until its source status/grey-row state says it is done.
+          // This is intentionally not a rolling window: an overdue Pending/Scheduled import must
+          // remain visible instead of silently aging out of the current Import Schedule.
+          const IMPORT_STALE_CUTOFF = new Date(2026, 6, 1).getTime();''',
+          'fixed import cutoff')
+
+          replace_once(
+          '''    const hasShipmentDocuments = Boolean(
+                record.shipmentNo && (record.invoice || record.mbl || record.hbl || record.container),
+              );
+              if (!hasShipmentDocuments || parcelCarrier(record.shipmentNo)) return [];''',
+          '''    const hasShipmentIdentity = Boolean(record.shipmentNo);
+              // A current scheduled/pending import is still operational even while invoice/MBL/HBL/
+              // container fields are incomplete. Requiring those documents hid valid rows such as
+              // newly scheduled imports that only have a shipment code and ETA/ETD so far.
+              if (!hasShipmentIdentity || parcelCarrier(record.shipmentNo)) return [];''',
+          'relax import document requirement')
+
+          replace_once(
+          '''      setItems(consolidateTruckingItems([
+                ...pendingImportItems(imports),''',
+          '''      const importItems = pendingImportItems(imports);
+              const activeImportItems = importItems.filter((item) =>
+                item.date.getTime() >= IMPORT_STALE_CUTOFF &&
+                !finishedImports.has(item.status.toLowerCase()),
+              );
+              setItems(consolidateTruckingItems([
+                ...importItems,''',
+          'capture active import schedule')
+
+          replace_once(
+          '''      const dashboardInventory = dashboardInventoryItems(inventoryDashboardTable);
+              setInboundInventory(uniqueInventoryItems([
+                ...dashboardInventory.inbound,
+                ...skwInboundItems(skwInboundTable),
+              ], true));''',
+          '''      const dashboardInventory = dashboardInventoryItems(inventoryDashboardTable);
+              const allInboundInventory = uniqueInventoryItems([
+                ...dashboardInventory.inbound,
+                ...skwInboundItems(skwInboundTable),
+              ], true);
+              // Inbound Inventory is a detail view of the current Import Schedule, not a historical
+              // receiving ledger. Keep only product rows whose shipment reference resolves to one
+              // of the active July-2026+ non-terminal import rows above.
+              setInboundInventory(allInboundInventory.filter((inventoryItem) =>
+                activeImportItems.some((scheduleItem) =>
+                  scheduleMatchesInventoryShipment(scheduleItem, inventoryItem),
+                ),
+              ));''',
+          'filter inbound inventory by active import schedule')
+
+          replace_once(
+          '''    if (!selectedItem || !showLocation) return filteredItems.slice(0, 250);''',
+          '''    if (!selectedItem) return filteredItems.slice(0, 250);''',
+          'cross-panel match sorting')
+
+          replace_once(
+          '''    if (!selectedItem || !showLocation) return;''',
+          '''    if (!selectedItem) return;''',
+          'cross-panel match scrolling')
+
+          replace_once(
+          '''              const selected = selectable && selectedItem?.id === item.id;
+                        const matching = !selectable && Boolean(selectedItem && inventoryProductsMatch(item, selectedItem));''',
+          '''              const selected = selectedItem?.id === item.id;
+                        const matching = Boolean(selectedItem && inventoryProductsMatch(item, selectedItem));''',
+          'cross-panel row highlighting')
+
+          replace_once(
+          '''        <InventoryPanel
+                  title="Products in Stock"
+                  eyebrow="MATCHING PRODUCTS · CURRENT WAREHOUSE ON HAND"
+                  items={warehouseStock}
+                  loading={loading}
+                  selectedItem={selectedInventory}
+                  showLocation
+                />''',
+          '''        <InventoryPanel
+                  title="Products in Stock"
+                  eyebrow="MATCHING PRODUCTS · CURRENT WAREHOUSE ON HAND"
+                  items={warehouseStock}
+                  loading={loading}
+                  onSelect={(item) => setSelectedInventory((current) => current?.id === item.id ? null : item)}
+                  selectable
+                  selectedItem={selectedInventory}
+                  showLocation
+                />''',
+          'make stock inventory selectable')
+
+          replace_once(
+          '''  loading,
+          }: {
+            items: InventoryItem[];
+            inboundItems: InventoryItem[];
+            loading: boolean;
+          }) {''',
+          '''  loading,
+            selectedItem,
+            onSelect,
+          }: {
+            items: InventoryItem[];
+            inboundItems: InventoryItem[];
+            loading: boolean;
+            selectedItem: InventoryItem | null;
+            onSelect?: (item: InventoryItem) => void;
+          }) {''',
+          'low stock shared selection props')
+
+          low_start = text.index('function LowStockPanel({')
+          low_end = text.index('\nexport default function', low_start)
+          low = text[low_start:low_end]
+
+          old = '''  const lowStockItems = useMemo(
+              () => items.filter((item) => item.quantity < 200).sort((a, b) => a.quantity - b.quantity),
+              [items],
+            );'''
+          new = '''  const lowStockItems = useMemo(
+              () => items.filter((item) => item.quantity < 200).sort((a, b) => a.quantity - b.quantity),
+              [items],
+            );
+            const tableWrapRef = useRef<HTMLDivElement>(null);
+            const displayedLowStockItems = useMemo(() => {
+              if (!selectedItem) return lowStockItems;
+              return [...lowStockItems].sort((left, right) =>
+                Number(inventoryProductsMatch(right, selectedItem)) -
+                Number(inventoryProductsMatch(left, selectedItem)),
+              );
+            }, [lowStockItems, selectedItem]);
+            useEffect(() => {
+              if (!selectedItem) return;
+              const frame = window.requestAnimationFrame(() => {
+                const wrap = tableWrapRef.current;
+                const matchedRow = wrap?.querySelector<HTMLTableRowElement>('tr.inventory-match');
+                if (!wrap || !matchedRow) return;
+                const targetTop = matchedRow.offsetTop - (wrap.clientHeight - matchedRow.offsetHeight) / 2;
+                wrap.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
+              });
+              return () => window.cancelAnimationFrame(frame);
+            }, [displayedLowStockItems, selectedItem]);'''
+          if low.count(old) != 1:
+              raise SystemExit(f'low stock display setup: expected 1 match, found {low.count(old)}')
+          low = low.replace(old, new, 1)
+          if low.count('<div className="inventory-table-wrap">') != 1:
+              raise SystemExit('low stock table wrap: expected exactly 1 match')
+          low = low.replace('<div className="inventory-table-wrap">', '<div className="inventory-table-wrap" ref={tableWrapRef}>', 1)
+          if low.count('{lowStockItems.map((item) => {') != 1:
+              raise SystemExit('low stock map: expected exactly 1 match')
+          low = low.replace('{lowStockItems.map((item) => {', '{displayedLowStockItems.map((item) => {', 1)
+          if low.count('<tr key={item.id}>') != 1:
+              raise SystemExit('low stock row: expected exactly 1 match')
+          low = low.replace(
+              '<tr key={item.id}>',
+              '''<tr
+                        key={item.id}
+                        aria-label={`Select ${item.productName || item.sku || item.upc}`}
+                        aria-selected={Boolean(selectedItem && inventoryProductsMatch(item, selectedItem)) || undefined}
+                        className={[
+                          "inventory-selectable",
+                          selectedItem?.id === item.id ? "inventory-selected" : "",
+                          selectedItem && inventoryProductsMatch(item, selectedItem) ? "inventory-match" : "",
+                        ].filter(Boolean).join(" ")}
+                        data-product-key={normalizedIdentifier(item.sku || item.upc || item.productName)}
+                        onClick={() => onSelect?.(item)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            onSelect?.(item);
+                          }
+                        }}
+                        role="button"
+                        tabIndex={0}
+                      >''',
+              1,
+          )
+          text = text[:low_start] + low + text[low_end:]
+
+          replace_once(
+          '''      <LowStockPanel items={warehouseStock} inboundItems={inboundInventory} loading={loading} />''',
+          '''      <LowStockPanel
+                items={warehouseStock}
+                inboundItems={inboundInventory}
+                loading={loading}
+                selectedItem={selectedInventory}
+                onSelect={(item) => setSelectedInventory((current) => current?.id === item.id ? null : item)}
+              />''',
+          'wire low stock shared selection')
+
+          replace_once(
+          '''        if (isFinishedOrStale && !includeFinished && !selectedShipment) return false;''',
+          '''        if (isFinishedOrStale && !includeFinished) return false;''',
+          'keep finished imports out of default schedule even when inventory selected')
+
+          path.write_text(text)
+          PY
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Commit tested fix and remove temporary workflow
+        shell: bash
+        run: |
+          rm .github/workflows/tmp-current-import-inventory-focus.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/page.tsx .github/workflows/tmp-current-import-inventory-focus.yml
+          git diff --cached --check
+          git commit -m "Fix current import inventory linking and cross-focus"
+          git push origin HEAD:fix/current-import-inventory-focus-20260810
