@@ -131,7 +131,6 @@ function upsertInboundRow_(record) {
   put(["INVOICE", "INVOICE NO.", "PI NO.", "ENTRY NO"], record.invoice);
   put(["QTY", "CTNS", "CARTONS", "수량"], record.qty);
   put(["MODE", "TYPE"], record.mode);
-  put(["NOTE", "REMARK", "비고"], (record.note || "") + " [auto: " + (record._sourceEmail || "email") + "]");
   put(["WEBSITE STATUS", "STATUS"], "SCHEDULED");
   sheet.appendRow(newRow);
   markAutoRow_(sheet, sheet.getLastRow());
@@ -170,7 +169,6 @@ function upsertOutboundRow_(record) {
   put(["PALLET TYPE", "PALLETS", "PLT"], record.pallets);
   put(["CARRIER"], record.carrier || "Trucking");
   put(["PRO#", "PRO"], record.pro);
-  put(["NOTE", "REMARK"], (record.note || "Imported from email") + " [auto: " + (record._sourceEmail || "email") + "]");
   put(["WEBSITE STATUS", "STATUS"], "WORK IN PROGRESS");
   sheet.appendRow(newRow);
   markAutoRow_(sheet, sheet.getLastRow());

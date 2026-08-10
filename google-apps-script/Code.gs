@@ -431,7 +431,6 @@ function scanAndImportWmsTruckingOrders() {
       }
 
       const invoiceText = group.invoices.join("\n");
-      const noteText = "Imported from WMS Stylekorean rows " + group.sourceRows.join(", ");
       const totalAmount = group.amounts.reduce(function (sum, value) { return sum + value; }, 0);
 
       if (rowNumber) {
@@ -443,10 +442,6 @@ function scanAndImportWmsTruckingOrders() {
         changed = setMappedValue_(values, targetMap, "SHIP DATE", group.shipDate) || changed;
         if (totalAmount > 0 && targetMap["VALUE"] !== undefined && !values[targetMap["VALUE"]]) {
           values[targetMap["VALUE"]] = totalAmount;
-          changed = true;
-        }
-        if (targetMap["NOTE"] !== undefined && !values[targetMap["NOTE"]]) {
-          values[targetMap["NOTE"]] = noteText;
           changed = true;
         }
         if (targetMap["STATUS"] !== undefined && !values[targetMap["STATUS"]]) {
@@ -463,7 +458,6 @@ function scanAndImportWmsTruckingOrders() {
         row[targetMap["INVOICE NO."]] = invoiceText;
         row[targetMap["SHIP DATE"]] = group.shipDate;
         if (targetMap["VALUE"] !== undefined && totalAmount > 0) row[targetMap["VALUE"]] = totalAmount;
-        if (targetMap["NOTE"] !== undefined) row[targetMap["NOTE"]] = noteText;
         if (targetMap["STATUS"] !== undefined) row[targetMap["STATUS"]] = "WORK IN PROGRESS";
         pendingRows.push(row);
         imported++;
