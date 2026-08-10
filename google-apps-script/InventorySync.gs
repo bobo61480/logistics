@@ -746,6 +746,16 @@ function lookupParcelTrackingUpdate_(carrier, tracking, sourceNote) {
   return note;
 }
 
+function parcelCurrentEta_(text) {
+  var value = String(text || "");
+  var autoMatches = value.match(/\[AUTO TRACK[^\]]*ETA:(\d{1,2}\/\d{1,2}\/\d{2,4})[^\]]*\]/ig);
+  if (autoMatches && autoMatches.length) {
+    var last = autoMatches[autoMatches.length - 1].match(/ETA:(\d{1,2}\/\d{1,2}\/\d{2,4})/i);
+    if (last) return last[1];
+  }
+  return parcelEtaFromText_(value);
+}
+
 function mergeParcelAutoTrackingNote_(existing, signal) {
   var base = String(existing || "").replace(/\s*\[AUTO TRACK[^\]]*\]\s*$/i, "").trim();
   var pieces = [Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm")];
@@ -793,7 +803,8 @@ function trackImportsParcelStatus_(ss) {
       currentStatus = normalizedStatus;
       rowChanged = true;
     }
-    if (signal.eta) {
+    var currentEta = parcelCurrentEta_(existingEtaNote);
+    if (signal.eta && signal.eta !== currentEta) {
       var nextNote = mergeParcelAutoTrackingNote_(existingEtaNote, {
         status: signal.status || currentStatus,
         eta: signal.eta,
