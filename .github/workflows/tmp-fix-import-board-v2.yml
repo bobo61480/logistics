@@ -1,0 +1,148 @@
+name: Fix import board and inventory semantics v2
+on:
+  push:
+    branches: [fix/import-board-inventory-source-semantics-20260810]
+permissions:
+  contents: write
+jobs:
+  patch-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/import-board-inventory-source-semantics-20260810
+          fetch-depth: 0
+      - name: Patch source semantics robustly
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path('app/page.tsx')
+          s = p.read_text()
+
+          def once(pattern, replacement, label, flags=0):
+              global s
+              s2, n = re.subn(pattern, replacement, s, count=1, flags=flags)
+              if n != 1:
+                  raise SystemExit(f'{label}: expected one match, found {n}')
+              s = s2
+
+          once(r'  eta\?: string;\n  isSmallParcel\?: boolean;',
+               '  eta?: string;\n  deliveryExpected?: string;\n  isSmallParcel?: boolean;',
+               'ScheduleItem deliveryExpected')
+
+          once(
+              r'    const hasShipmentIdentity = Boolean\(record\.shipmentNo\);\n    // A current import remains operational while invoice/MBL/HBL/container details are incomplete\.\n    // Requiring those fields hid newly scheduled rows that already had a shipment code and ETA/ETD\.\n    if \(!hasShipmentIdentity \|\| parcelCarrier\(record\.shipmentNo\)\) return \[\];',
+              '''    const hasShipmentIdentity = Boolean(record.shipmentNo);
+              const shipmentLabel = clean(record.shipmentNo).toUpperCase();
+              const planningRow = /^(?:AS OF\\b|SCHEDULING\\b|SCHEDULED\\b|NEED SCHEDULING\\b|MONTH OF\\b|URGENT\\b|COMPLETED\\b|ESTIMATED\\b)/.test(shipmentLabel);
+              // A current import remains operational while invoice/MBL/HBL/container details are incomplete,
+              // but planning-grid labels can never become shipment rows even if they contain date-like cells.
+              if (!hasShipmentIdentity || planningRow || parcelCarrier(record.shipmentNo)) return [];''',
+              'planning row guard')
+
+          once(
+              r'(      pod: /\^OSL/i\.test\(record\.shipmentNo\) \? "LGB" : "LAX",\n      eta,\n)(      isSmallParcel: false,)',
+              r'\1      deliveryExpected: record.deliveryExpected,\n\2',
+              'deliveryExpected item mapping')
+
+          anchor = '''function scheduleMatchesInventoryShipment(item: ScheduleItem, selected: InventoryItem | null) {
+            if (!selected) return false;
+            const selectedCodes = inventoryShipmentCodes(selected);
+            if (!selectedCodes.size) return false;
+            return [item.shipmentNo, item.title]
+              .flatMap((value) => inventoryShipmentReferences(value ?? ""))
+              .map(normalizedShipmentCode)
+              .some((value) => selectedCodes.has(value));
+          }'''
+          anchor = '\n'.join(line[10:] if line.startswith('          ') else line for line in anchor.splitlines())
+          if anchor not in s:
+              raise SystemExit('inventory helper anchor missing')
+          helper = anchor + '''
+
+function inventoryForActiveImports(item: InventoryItem, activeCodes: Set<string>) {
+  const activeReferences = inventoryShipmentReferences(item.shipmentNo).filter((reference) =>
+    activeCodes.has(normalizedShipmentCode(reference)),
+  );
+  if (!activeReferences.length) return null;
+  return { ...item, shipmentNo: activeReferences.join(", ") };
+}'''
+          s = s.replace(anchor, helper, 1)
+
+          once(
+              r'      const allInboundInventory = uniqueInventoryItems\(\[\n        \.\.\.dashboardInventory\.inbound,\n        \.\.\.skwInboundItems\(skwInboundTable\),\n      \], true\);\n      // Inbound Inventory is a detail view of the active Import Schedule, not receiving history\.\n      setInboundInventory\(allInboundInventory\.filter\(\(inventoryItem\) =>\n        activeImportItems\.some\(\(scheduleItem\) =>\n          scheduleMatchesInventoryShipment\(scheduleItem, inventoryItem\),\n        \),\n      \)\);',
+              '''      const activeImportCodes = new Set(
+                activeImportItems
+                  .flatMap((item) => [item.shipmentNo, item.title])
+                  .flatMap((value) => inventoryShipmentReferences(value ?? ""))
+                  .map(normalizedShipmentCode)
+                  .filter(Boolean),
+              );
+              // Project each inventory row onto active shipment references before deduplication,
+              // so old HJ/ES references cannot survive just because the same product is inbound again.
+              const currentInboundInventory = [
+                ...dashboardInventory.inbound,
+                ...skwInboundItems(skwInboundTable),
+              ].flatMap((inventoryItem) => {
+                const projected = inventoryForActiveImports(inventoryItem, activeImportCodes);
+                return projected ? [projected] : [];
+              });
+              setInboundInventory(uniqueInventoryItems(currentInboundInventory, true));'''.replace('              ', '      '),
+              'active inbound inventory projection')
+
+          once(
+              r'  const inboundScheduleVisibleItems = useMemo\(\n    \(\) => inboundVisibleItems\.filter\(\(item\) => !item\.isSmallParcel\),\n    \[inboundVisibleItems\],\n  \);',
+              '''  const inboundScheduleVisibleItems = useMemo(() => {
+                const first = days[0].getTime();
+                const last = days[days.length - 1].getTime();
+                const needle = query.trim().toLowerCase();
+                return items.flatMap((item) => {
+                  if (item.direction !== "inbound" || item.isSmallParcel) return [];
+                  // Warehouse receiving board: only IMPORTS column Q (Delivery Expected) schedules a move.
+                  // Port ETA (column O) remains authoritative for the separate Import Schedule table.
+                  const scheduled = firstDatedValue(item.deliveryExpected ?? "");
+                  if (!scheduled) return [];
+                  const stamp = new Date(
+                    scheduled.date.getFullYear(),
+                    scheduled.date.getMonth(),
+                    scheduled.date.getDate(),
+                  ).getTime();
+                  if (stamp < first || stamp > last) return [];
+                  if (!includeFinished && finished.has(item.status.toLowerCase())) return [];
+                  if (needle && ![
+                    item.title, item.reference, item.invoice, item.shipmentNo, item.container,
+                    item.mbl, item.hbl, item.vessel, item.status,
+                  ].join(" ").toLowerCase().includes(needle)) return [];
+                  return [{ ...item, date: scheduled.date, dateText: scheduled.text }];
+                });
+              }, [days, includeFinished, items, query]);'''.replace('              ', ''),
+              'warehouse inbound date source')
+
+          once(r'    const inbound = visibleItems\.filter\(\(item\) => item\.direction === "inbound"\)\.length;',
+               '    const inbound = inboundScheduleVisibleItems.length + inboundParcelVisibleItems.length;',
+               'inbound summary count')
+
+          p.write_text(s)
+          PY
+      - name: Static assertions
+        run: |
+          grep -q 'planningRow' app/page.tsx
+          grep -q 'deliveryExpected: record.deliveryExpected' app/page.tsx
+          grep -q 'inventoryForActiveImports' app/page.tsx
+          grep -q 'Warehouse receiving board' app/page.tsx
+          git diff --check
+      - name: Test application
+        run: |
+          npm ci --no-audit --no-fund
+          npm run typecheck
+          npm test
+          npm run test:e2e
+      - name: Commit source fix
+        run: |
+          rm -f .github/workflows/tmp-fix-import-board.yml .github/workflows/tmp-fix-import-board-v2.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/page.tsx .github/workflows/tmp-fix-import-board.yml .github/workflows/tmp-fix-import-board-v2.yml
+          git diff --cached --check
+          git commit -m "Fix import schedule, inbound board, and inventory source semantics"
+          git push origin HEAD:fix/import-board-inventory-source-semantics-20260810
