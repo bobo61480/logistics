@@ -141,7 +141,7 @@ export default function InventoryPanels() {
             <th>Batch</th>
             <th>Expiration</th>
             <th>Qty (EA)</th>
-            {withLocation ? <th>Location</th> : <th>ETA · Status</th>}
+            {withLocation ? <th>Location</th> : <th>Current Import Shipment(s)</th>}
           </tr>
         </thead>
         <tbody>
