@@ -533,31 +533,26 @@ function exactVal_(row, map, names) {
 }
 
 /**
- * Creates or resets the 30-minute time-driven trigger for WMS Trucking scanner.
- * Deletes all obsolete/legacy triggers in the project to ensure a clean schedule.
+ * Creates or resets the 15-minute WMS Trucking sync trigger.
+ * Only this handler's triggers are replaced; unrelated project triggers are preserved.
  */
-function create30MinTrigger() {
-  const triggers = ScriptApp.getProjectTriggers();
-  const ALLOWED_TRIGGER_HANDLERS = ["scanAndImportWmsTruckingOrders"];
-  
-  for (let i = 0; i < triggers.length; i++) {
-    const handler = triggers[i].getHandlerFunction();
-    // FIX: the old condition was `!ALLOWED.includes(handler) || handler === "scanAnd..."`,
-    // which is always true, so this wiped EVERY trigger in the project --
-    // including the ones provisioned by Triggers.gs (processLogisticsEmails,
-    // processApprovedPending, syncInventoryModule, enrichImportsFromContainerLog,
-    // requestSiteRedeploy). Only reset this function's own trigger.
-    if (ALLOWED_TRIGGER_HANDLERS.includes(handler)) {
-      ScriptApp.deleteTrigger(triggers[i]);
-      Logger.log("Deleted obsolete/existing trigger for handler: " + handler);
+function createTimeDrivenTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function (trigger) {
+    if (trigger.getHandlerFunction() === "scanAndImportWmsTruckingOrders") {
+      ScriptApp.deleteTrigger(trigger);
     }
-  }
+  });
 
   ScriptApp.newTrigger("scanAndImportWmsTruckingOrders")
     .timeBased()
-    .everyMinutes(30)
+    .everyMinutes(15)
     .create();
-  Logger.log("30-minute time-driven trigger cleanly provisioned for scanAndImportWmsTruckingOrders");
+  Logger.log("15-minute trigger provisioned for scanAndImportWmsTruckingOrders");
+}
+
+/** Backward-compatible entry point for anyone who previously used this name. */
+function create30MinTrigger() {
+  return createTimeDrivenTrigger();
 }
 
 /**
