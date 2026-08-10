@@ -1,0 +1,10 @@
+name = "stylekorean-logistics-planner"
+compatibility_date = "2026-08-10"
+workers_dev = false
+
+[assets]
+directory = "./out"
+
+[[routes]]
+pattern = "stylekorean.dpdns.org"
+custom_domain = true
