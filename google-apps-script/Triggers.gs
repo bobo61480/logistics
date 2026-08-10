@@ -16,7 +16,7 @@ var TRIGGER_PLAN = [
   { handler: "processLogisticsEmails", minutes: 15 },          // Gmail ingestion
   { handler: "processApprovedPending", minutes: 30 },          // commit human-approved rows
   { handler: "scanAndImportWmsTruckingOrders", minutes: 15 },  // existing WMS trucking scanner (Code.gs)
-  { handler: "trackSmallParcelsStatusUpdates", minutes: 45 },  // track inbound small parcels for status updates
+  { handler: "trackSmallParcelsStatusUpdates", hours: 1 },     // official carrier/email tracking + IMPORTS write-back
   { handler: "syncInventoryModule", hours: 1 },                // inventory + KPI rebuild
   { handler: "enrichImportsFromContainerLog", daily: 6 },      // 6 AM daily
   { handler: "requestSiteRedeploy", daily: 7 }                 // 7 AM daily safety redeploy

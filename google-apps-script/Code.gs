@@ -113,10 +113,58 @@ function validateRequest_(request) {
   if (!ALLOWED_SHEETS.includes(request.sourceSheet)) throw new Error("Source sheet is not allowed.");
 }
 
+function importsSectionMarkerRow_(values, marker) {
+  const wanted = String(marker || "").trim().toUpperCase();
+  for (let r = 0; r < values.length; r++) {
+    if (String(values[r][0] || "").trim().toUpperCase() === wanted) return r + 1;
+  }
+  return 0;
+}
+
+function inboundWriteToken_(value) {
+  return String(value || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+function inboundWriteTokens_(value) {
+  return String(value || "")
+    .split(/[\r\n,;|/]+/)
+    .map(inboundWriteToken_)
+    .filter(Boolean);
+}
+
 function findInboundTarget_(sheet, request) {
   const row = Number(request.sourceRow);
   if (!Number.isInteger(row) || row < 3 || row > sheet.getLastRow()) throw new Error("Invalid IMPORTS source row.");
-  const headers = sheet.getRange(1, 1, 3, sheet.getLastColumn()).getDisplayValues();
+
+  const values = sheet.getDataRange().getDisplayValues();
+  const schedulingRow = importsSectionMarkerRow_(values, "SCHEDULING");
+  const parcelsRow = importsSectionMarkerRow_(values, "PARCELS");
+  const isParcel = Boolean(request.isSmallParcel);
+
+  if (sheet.getName() === "IMPORTS") {
+    if (isParcel) {
+      if (!parcelsRow || row <= parcelsRow) throw new Error("Parcel write-back row is outside the PARCELS section.");
+      const wantedTracking = inboundWriteToken_(request.trackingNumber || request.pro || request.shipmentNo);
+      const rowTracking = [values[row - 1][1], values[row - 1][10]]
+        .flatMap(inboundWriteTokens_);
+      if (!wantedTracking || rowTracking.indexOf(wantedTracking) === -1) {
+        throw new Error("Parcel source row no longer matches the selected tracking number.");
+      }
+    } else {
+      if (schedulingRow && row >= schedulingRow) throw new Error("Import write-back row is at or below SCHEDULING.");
+      const wanted = [request.shipmentNo, request.invoice, request.container, request.mbl, request.hbl]
+        .flatMap(inboundWriteTokens_)
+        .filter(Boolean);
+      const rowTokens = values[row - 1].slice(0, 18)
+        .flatMap(inboundWriteTokens_)
+        .filter(Boolean);
+      if (!wanted.length || !wanted.some(function (token) { return rowTokens.indexOf(token) !== -1; })) {
+        throw new Error("Import source row no longer matches the selected shipment.");
+      }
+    }
+  }
+
+  const headers = values.slice(0, 3);
   const header = findHeader_(headers, ["WEBSITE STATUS", "STATUS", "INBOUND STATUS", "SHIPMENT STATUS"]);
   if (!header) throw new Error("Inbound status column not found.");
   return sheet.getRange(row, header.column);

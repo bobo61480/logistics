@@ -220,6 +220,14 @@ var IMPORT_CUTOFF_DATE_ = new Date(2026, 6, 1); // July 1, 2026 (local script ti
  * Builds an allow-list from IMPORTS. Only non-grey, non-terminal shipments
  * dated July 1, 2026 or later are eligible to contribute inbound inventory.
  */
+function findImportSectionMarkerIndex_(data, marker) {
+  var wanted = String(marker || "").trim().toUpperCase();
+  for (var r = 0; r < data.length; r++) {
+    if (String(data[r][0] || "").trim().toUpperCase() === wanted) return r;
+  }
+  return -1;
+}
+
 function getActiveImportShipments_() {
   var active = new Set();
   var ss = SpreadsheetApp.openById(INVENTORY_SYNC.masterId);
@@ -232,28 +240,28 @@ function getActiveImportShipments_() {
   var headerIdx = findHeaderRowIdx_(data);
   if (headerIdx < 0) return active;
   var map = headerMap_(data[headerIdx]);
+  var schedulingIdx = findImportSectionMarkerIndex_(data, "SCHEDULING");
+  var endIdx = schedulingIdx === -1 ? data.length : schedulingIdx;
 
   var statusCol = firstMappedColumn_(map, ["WEBSITE STATUS", "STATUS", "SHIPMENT STATUS"]);
-  var dateCols = ["ETA", "DELIVERY EXPECTED", "ETD", "LFD"]
-    .map(function (name) { return map[name]; })
-    .filter(function (index) { return index !== undefined; });
+  var etaCol = map["ETA"];
+  if (etaCol === undefined) return active;
   var idCols = ["SHIPMENT", "SHIPMENT #", "SHIPMENT NO", "SHIPMENT NO.", "DOCS",
     "INVOICE", "MBL", "HBL", "차수", "CONTAINER", "CONTAINER #", "CONTAINER NO",
     "ENTRY NUMBER", "CONTAINER RAW (SYSTEM)"]
     .map(function (name) { return map[name]; })
     .filter(function (index, position, list) { return index !== undefined && list.indexOf(index) === position; });
 
-  for (var r = headerIdx + 1; r < data.length; r++) {
+  for (var r = headerIdx + 1; r < endIdx; r++) {
     var row = data[r];
     if (isGreyedImportRow_(backgrounds[r] || [])) continue;
 
     var status = statusCol === null ? "" : String(row[statusCol] || "").trim().toUpperCase();
     if (TERMINAL_STATUSES_.has(status)) continue;
 
-    var scheduledDate = null;
-    for (var d = 0; d < dateCols.length && !scheduledDate; d++) {
-      scheduledDate = parseImportDate_(row[dateCols[d]]);
-    }
+    // The website's Import Schedule is based strictly on IMPORTS ETA (column O).
+    // Inventory uses the same allow-list so historical/ETD/delivery-date rows cannot leak in.
+    var scheduledDate = parseImportDate_(row[etaCol]);
     if (!scheduledDate || scheduledDate < IMPORT_CUTOFF_DATE_) continue;
 
     for (var i = 0; i < idCols.length; i++) {
@@ -515,140 +523,304 @@ function num_(value) {
  * 
  * Updates are pulled from email notifications, carrier tracking, and manual sources.
  */
+var SMALL_PARCEL_TRIGGER_VERSION_ = "hourly-v2-20260810";
+
+function ensureHourlySmallParcelTrigger_() {
+  var props = PropertiesService.getScriptProperties();
+  if (props.getProperty("SMALL_PARCEL_TRIGGER_VERSION") === SMALL_PARCEL_TRIGGER_VERSION_) return;
+  ScriptApp.getProjectTriggers().forEach(function (trigger) {
+    if (trigger.getHandlerFunction() === "trackSmallParcelsStatusUpdates") ScriptApp.deleteTrigger(trigger);
+  });
+  ScriptApp.newTrigger("trackSmallParcelsStatusUpdates").timeBased().everyHours(1).create();
+  props.setProperty("SMALL_PARCEL_TRIGGER_VERSION", SMALL_PARCEL_TRIGGER_VERSION_);
+  Logger.log("Small parcel tracker migrated to hourly trigger.");
+}
+
 function trackSmallParcelsStatusUpdates() {
+  var ss;
   try {
-    var ss = SpreadsheetApp.openById(INVENTORY_SYNC.masterId);
+    ensureHourlySmallParcelTrigger_();
+    ss = SpreadsheetApp.openById(INVENTORY_SYNC.masterId);
     var results = { checked: 0, updated: 0, errors: [] };
-    
-    // Track SKW_Inbound (small packages)
+
     results.skwUpdates = trackSkwInboundStatus_(ss);
     results.checked += results.skwUpdates.checked;
     results.updated += results.skwUpdates.updated;
-    
-    // Track IMPORTS (main inbound schedule)
-    results.importsUpdates = trackImportsScheduleStatus_(ss);
+
+    results.importsUpdates = trackImportsParcelStatus_(ss);
     results.checked += results.importsUpdates.checked;
     results.updated += results.importsUpdates.updated;
-    
-    var summary = "Tracked small parcels: " + results.checked + " packages, " + results.updated + " updated";
+
+    var summary = "Tracked small parcels hourly: " + results.checked + " packages, " + results.updated + " source rows updated";
     Logger.log(summary);
     appendPipelineLog_(ss, summary, "SMALL_PARCEL_TRACKING");
-    
     return results;
   } catch (err) {
     var msg = "trackSmallParcelsStatusUpdates error: " + err.toString();
     Logger.log(msg);
-    appendPipelineLog_(ss, msg, "ERROR");
+    if (ss) appendPipelineLog_(ss, msg, "ERROR");
     throw err;
   }
 }
 
-/**
- * Scans SKW_Inbound sheet for SCHEDULED packages and checks for status updates.
- * Marks packages as SHIPPED/DELIVERED when their status changes.
- */
 function trackSkwInboundStatus_(ss) {
   var sheet = ss.getSheetByName("SKW_Inbound");
   if (!sheet) return { checked: 0, updated: 0 };
-  
   var data = sheet.getDataRange().getDisplayValues();
   var headerIdx = findHeaderRowIdx_(data);
   if (headerIdx === -1) return { checked: 0, updated: 0 };
-  
-  var map = headerMap_(data[headerIdx]);
-  var statusCol = map["STATUS"] !== undefined ? map["STATUS"] : 
-                  map["WEBSITE STATUS"] !== undefined ? map["WEBSITE STATUS"] : -1;
-  var trackingCol = map["TRACKING"] !== undefined ? map["TRACKING"] :
-                    map["TRACKING_NUMBER"] !== undefined ? map["TRACKING_NUMBER"] : -1;
-  var dateReceivedCol = map["DATE_RECEIVED"] !== undefined ? map["DATE_RECEIVED"] :
-                        map["RECEIVED_DATE"] !== undefined ? map["RECEIVED_DATE"] : -1;
-  
-  if (statusCol === -1) return { checked: 0, updated: 0 };
-  
-  var checked = 0, updated = 0;
-  
-  for (var r = headerIdx + 1; r < data.length; r++) {
-    var currentStatus = String(data[r][statusCol]).trim().toUpperCase();
-    
-    // Only track packages in SCHEDULED or WORK IN PROGRESS status
-    if (currentStatus !== "SCHEDULED" && currentStatus !== "WORK IN PROGRESS") continue;
-    
-    checked++;
-    
-    // Get tracking number if available
-    var tracking = trackingCol !== -1 ? String(data[r][trackingCol]).trim() : "";
-    
-    // Check if package has been received/delivered
-    var dateReceived = dateReceivedCol !== -1 ? data[r][dateReceivedCol] : "";
-    if (dateReceived && dateReceived !== "") {
-      // Package marked as received — update status to DELIVERED
-      if (currentStatus !== "DELIVERED") {
-        sheet.getRange(r + 1, statusCol + 1).setValue("DELIVERED");
-        updated++;
-        Logger.log("SKW_Inbound row " + (r + 1) + " status updated to DELIVERED");
-      }
-    }
-  }
-  
-  return { checked: checked, updated: updated };
-}
-
-/**
- * Scans IMPORTS sheet for SCHEDULED packages and checks for status updates.
- * Marks packages as SHIPPED/DELIVERED when their status changes based on
- * email notifications or carrier tracking updates.
- */
-function trackImportsScheduleStatus_(ss) {
-  var sheet = ss.getSheetByName("IMPORTS");
-  if (!sheet) return { checked: 0, updated: 0 };
-  
-  var data = sheet.getDataRange().getDisplayValues();
-  var headerIdx = findHeaderRowIdx_(data);
-  if (headerIdx === -1) return { checked: 0, updated: 0 };
-  
   var map = headerMap_(data[headerIdx]);
   var statusCol = map["STATUS"] !== undefined ? map["STATUS"] :
                   map["WEBSITE STATUS"] !== undefined ? map["WEBSITE STATUS"] : -1;
-  var noteCol = map["NOTE"] !== undefined ? map["NOTE"] :
-                map["REMARK"] !== undefined ? map["REMARK"] : -1;
-  
+  var dateReceivedCol = map["DATE_RECEIVED"] !== undefined ? map["DATE_RECEIVED"] :
+                        map["RECEIVED_DATE"] !== undefined ? map["RECEIVED_DATE"] : -1;
   if (statusCol === -1) return { checked: 0, updated: 0 };
-  
   var checked = 0, updated = 0;
-  
   for (var r = headerIdx + 1; r < data.length; r++) {
-    var currentStatus = String(data[r][statusCol]).trim().toUpperCase();
-    
-    // Only track packages in SCHEDULED status (waiting for delivery)
-    if (currentStatus !== "SCHEDULED") continue;
-    
+    var currentStatus = String(data[r][statusCol] || "").trim().toUpperCase();
+    if (currentStatus !== "SCHEDULED" && currentStatus !== "WORK IN PROGRESS") continue;
     checked++;
-    
-    // Check notes/remarks for tracking updates
-    var notes = noteCol !== -1 ? String(data[r][noteCol]).toLowerCase() : "";
-    
-    // Simple heuristic: if notes mention delivery/shipped/in transit, advance status
-    var statusKeywords = {
-      "delivered": "DELIVERED",
-      "received": "RECEIVED",
-      "shipped": "SHIPPED",
-      "in transit": "SHIPPING",
-      "customs": "Customs Clearance",
-      "fda": "FDA Review/Hold"
-    };
-    
-    for (var keyword in statusKeywords) {
-      if (notes.indexOf(keyword) !== -1) {
-        var newStatus = statusKeywords[keyword];
-        if (currentStatus !== newStatus.toUpperCase()) {
-          sheet.getRange(r + 1, statusCol + 1).setValue(newStatus);
-          updated++;
-          Logger.log("IMPORTS row " + (r + 1) + " status updated to " + newStatus);
-          break;  // Only apply first matching keyword
-        }
-      }
+    var dateReceived = dateReceivedCol !== -1 ? data[r][dateReceivedCol] : "";
+    if (dateReceived) {
+      sheet.getRange(r + 1, statusCol + 1).setValue("DELIVERED");
+      updated++;
     }
   }
-  
+  return { checked: checked, updated: updated };
+}
+
+function parcelCarrierSection_(value) {
+  var text = String(value || "").trim().toUpperCase();
+  if (/^UPS\b/.test(text)) return "UPS";
+  if (/^FEDEX\b|^FED EX\b/.test(text)) return "FEDEX";
+  if (/^USPS\b/.test(text)) return "USPS";
+  if (/^DHL\b/.test(text)) return "DHL";
+  if (/^AMAZON\b/.test(text)) return "AMAZON";
+  return "";
+}
+
+function parcelTrackingCandidate_(row) {
+  var candidates = [row[1], row[10]];
+  for (var i = 0; i < candidates.length; i++) {
+    var text = String(candidates[i] || "").trim();
+    if (!text || /TRACKING\s*#?/i.test(text)) continue;
+    var match = text.match(/\b(1Z[A-Z0-9]{16}|\d{12,30}|[A-Z]{2}\d{9}[A-Z]{2})\b/i);
+    if (match) return match[1].toUpperCase();
+    if (/^[A-Z0-9-]{10,40}$/i.test(text)) return text.toUpperCase();
+  }
+  return "";
+}
+
+function normalizeParcelSheetStatus_(value) {
+  var text = String(value || "").trim();
+  var upper = text.toUpperCase().replace(/\s+/g, " ");
+  if (!upper) return "Scheduled";
+  if (/FDA.*(DETAIN|HOLD|REVIEW)/.test(upper)) return "FDA Review/Hold";
+  if (/CUSTOMS/.test(upper)) return "Customs Clearance";
+  if (/IN TRANSIT|SHIPPING|SHIPPED|OUT FOR DELIVERY/.test(upper)) return "Shipping";
+  if (/DELIVERED/.test(upper)) return "Delivered";
+  if (/RECEIVED/.test(upper)) return "Received";
+  if (/DELAY|EXCEPTION/.test(upper)) return "Delayed";
+  return text;
+}
+
+function parcelStatusRank_(value) {
+  var upper = normalizeParcelSheetStatus_(value).toUpperCase();
+  if (upper === "DELIVERED" || upper === "RECEIVED") return 100;
+  if (upper === "SHIPPING" || upper === "SHIPPED") return 60;
+  if (upper === "CUSTOMS CLEARANCE" || upper === "FDA REVIEW/HOLD" || upper === "DELAYED") return 50;
+  if (upper === "WORK IN PROGRESS" || upper === "PENDING") return 20;
+  return 10;
+}
+
+function shouldApplyParcelStatus_(current, next) {
+  var currentNormalized = normalizeParcelSheetStatus_(current);
+  var nextNormalized = normalizeParcelSheetStatus_(next);
+  if (!nextNormalized || currentNormalized.toUpperCase() === nextNormalized.toUpperCase()) return false;
+  if (/^(DELIVERED|RECEIVED|COMPLETED|CANCELLED)$/i.test(currentNormalized)) return false;
+  if (/^(CUSTOMS CLEARANCE|FDA REVIEW\/HOLD|DELAYED)$/i.test(nextNormalized)) return true;
+  if (/^(CUSTOMS CLEARANCE|FDA REVIEW\/HOLD|DELAYED)$/i.test(currentNormalized) && /^(SHIPPING|DELIVERED|RECEIVED)$/i.test(nextNormalized)) return true;
+  return parcelStatusRank_(nextNormalized) >= parcelStatusRank_(currentNormalized);
+}
+
+function parcelStatusFromText_(text) {
+  var value = String(text || "").replace(/\s+/g, " ").toLowerCase();
+  if (!value) return "";
+  if (/fda.{0,30}(detain|hold|review)|detain.{0,30}fda/.test(value)) return "FDA Review/Hold";
+  if (/customs.{0,30}(hold|clearance|processing)|clearance.{0,30}customs/.test(value)) return "Customs Clearance";
+  if (/delivery exception|shipment exception|weather delay|delayed|delay in transit/.test(value)) return "Delayed";
+  if (!/not delivered|delivery attempt failed/.test(value) && /\bdelivered\b|proof of delivery/.test(value)) return "Delivered";
+  if (/out for delivery|on vehicle for delivery|\bin transit\b|on the way|has shipped|was shipped|departed facility|arrived at facility/.test(value)) return "Shipping";
+  if (/label created|shipment information (sent|received)|pre[- ]shipment|awaiting carrier pickup/.test(value)) return "Scheduled";
+  return "";
+}
+
+function parcelEtaFromText_(text) {
+  var value = String(text || "").replace(/\s+/g, " ");
+  var slash = value.match(/(?:ETA|ESTIMATED(?: DELIVERY| ARRIVAL)?|SCHEDULED DELIVERY|EXPECTED DELIVERY|ARRIVING)[^0-9]{0,24}(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)/i);
+  if (slash) {
+    var parsed = parseImportDate_(slash[1]);
+    if (parsed) return Utilities.formatDate(parsed, Session.getScriptTimeZone(), "MM/dd/yy");
+  }
+  var month = value.match(/(?:ETA|ESTIMATED(?: DELIVERY| ARRIVAL)?|SCHEDULED DELIVERY|EXPECTED DELIVERY|ARRIVING)[^A-Z0-9]{0,24}((?:JAN(?:UARY)?|FEB(?:RUARY)?|MAR(?:CH)?|APR(?:IL)?|MAY|JUN(?:E)?|JUL(?:Y)?|AUG(?:UST)?|SEP(?:TEMBER)?|OCT(?:OBER)?|NOV(?:EMBER)?|DEC(?:EMBER)?)\s+\d{1,2}(?:,?\s+\d{4})?)/i);
+  if (month) {
+    var date = new Date(month[1]);
+    if (!isNaN(date.getTime())) return Utilities.formatDate(date, Session.getScriptTimeZone(), "MM/dd/yy");
+  }
+  return "";
+}
+
+function parcelSignalFromText_(text, source) {
+  return { status: parcelStatusFromText_(text), eta: parcelEtaFromText_(text), source: source || "" };
+}
+
+function officialParcelTrackingUrl_(carrier, tracking) {
+  var n = encodeURIComponent(tracking);
+  if (carrier === "UPS") return "https://www.ups.com/track?loc=en_US&tracknum=" + n;
+  if (carrier === "FEDEX") return "https://www.fedex.com/fedextrack/?trknbr=" + n;
+  if (carrier === "USPS") return "https://tools.usps.com/go/TrackConfirmAction?tLabels=" + n;
+  if (carrier === "DHL") return "https://www.dhl.com/us-en/home/tracking.html?tracking-id=" + n;
+  return "";
+}
+
+function trackingContext_(text, tracking) {
+  var body = String(text || "").replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;|&#160;/gi, " ").replace(/\s+/g, " ");
+  var upper = body.toUpperCase();
+  var needle = String(tracking || "").toUpperCase();
+  var index = upper.indexOf(needle);
+  if (index === -1) return "";
+  return body.slice(Math.max(0, index - 2500), Math.min(body.length, index + needle.length + 2500));
+}
+
+function officialParcelSignal_(carrier, tracking) {
+  var url = officialParcelTrackingUrl_(carrier, tracking);
+  if (!url) return { status: "", eta: "", source: "" };
+  try {
+    var response = UrlFetchApp.fetch(url, {
+      muteHttpExceptions: true,
+      followRedirects: true,
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; SKW-Logistics/1.0)" }
+    });
+    if (response.getResponseCode() < 200 || response.getResponseCode() >= 400) return { status: "", eta: "", source: "" };
+    var context = trackingContext_(response.getContentText().slice(0, 400000), tracking);
+    if (!context) return { status: "", eta: "", source: "" };
+    return parcelSignalFromText_(context, "official " + carrier);
+  } catch (err) {
+    Logger.log("Official " + carrier + " tracking failed for " + tracking + ": " + err.message);
+    return { status: "", eta: "", source: "" };
+  }
+}
+
+function parcelEmailSignal_(tracking) {
+  try {
+    var threads = GmailApp.search('"' + String(tracking || "").replace(/"/g, "") + '" newer_than:45d', 0, 8);
+    var best = null;
+    threads.forEach(function (thread) {
+      thread.getMessages().forEach(function (message) {
+        var text = message.getSubject() + "\n" + message.getPlainBody().slice(0, 60000);
+        var signal = parcelSignalFromText_(text, "carrier email");
+        if ((!signal.status && !signal.eta) || (best && message.getDate() <= best.date)) return;
+        best = { status: signal.status, eta: signal.eta, source: signal.source, date: message.getDate() };
+      });
+    });
+    return best || { status: "", eta: "", source: "" };
+  } catch (err) {
+    Logger.log("Carrier email search failed for " + tracking + ": " + err.message);
+    return { status: "", eta: "", source: "" };
+  }
+}
+
+function lookupParcelTrackingUpdate_(carrier, tracking, sourceNote) {
+  // Priority: official carrier page, then exact-tracking carrier email, then the source note.
+  var note = parcelSignalFromText_(sourceNote, "sheet note");
+  var official = officialParcelSignal_(carrier, tracking);
+  if (official.status || official.eta) {
+    if (!official.eta && note.eta) official.eta = note.eta;
+    return official;
+  }
+  var email = parcelEmailSignal_(tracking);
+  if (email.status || email.eta) {
+    if (!email.eta && note.eta) email.eta = note.eta;
+    return email;
+  }
+  return note;
+}
+
+function parcelCurrentEta_(text) {
+  var value = String(text || "");
+  var autoMatches = value.match(/\[AUTO TRACK[^\]]*ETA:(\d{1,2}\/\d{1,2}\/\d{2,4})[^\]]*\]/ig);
+  if (autoMatches && autoMatches.length) {
+    var last = autoMatches[autoMatches.length - 1].match(/ETA:(\d{1,2}\/\d{1,2}\/\d{2,4})/i);
+    if (last) return last[1];
+  }
+  return parcelEtaFromText_(value);
+}
+
+function mergeParcelAutoTrackingNote_(existing, signal) {
+  var base = String(existing || "").replace(/\s*\[AUTO TRACK[^\]]*\]\s*$/i, "").trim();
+  var pieces = [Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm")];
+  if (signal.status) pieces.push(normalizeParcelSheetStatus_(signal.status));
+  if (signal.source) pieces.push(signal.source);
+  if (signal.eta) pieces.push("ETA:" + signal.eta);
+  return (base ? base + " " : "") + "[AUTO TRACK " + pieces.join(" · ") + "]";
+}
+
+function trackImportsParcelStatus_(ss) {
+  var sheet = ss.getSheetByName("IMPORTS");
+  if (!sheet) return { checked: 0, updated: 0 };
+  var data = sheet.getDataRange().getDisplayValues();
+  var headerIdx = findHeaderRowIdx_(data);
+  if (headerIdx === -1) return { checked: 0, updated: 0 };
+  var map = headerMap_(data[headerIdx]);
+  var statusCol = map["WEBSITE STATUS"] !== undefined ? map["WEBSITE STATUS"] :
+                  map["STATUS"] !== undefined ? map["STATUS"] : -1;
+  if (statusCol === -1) return { checked: 0, updated: 0 };
+  var parcelsIdx = findImportSectionMarkerIndex_(data, "PARCELS");
+  if (parcelsIdx === -1) return { checked: 0, updated: 0 };
+
+  var currentCarrier = "";
+  var checked = 0, updated = 0;
+  for (var r = parcelsIdx + 1; r < data.length; r++) {
+    var first = String(data[r][0] || "").trim();
+    var section = parcelCarrierSection_(first);
+    if (section) currentCarrier = section;
+    else if (first) currentCarrier = "";
+    if (!currentCarrier) continue;
+
+    var tracking = parcelTrackingCandidate_(data[r]);
+    if (!tracking) continue;
+    var currentStatus = normalizeParcelSheetStatus_(data[r][statusCol]);
+    if (/^(DELIVERED|RECEIVED|COMPLETED|CANCELLED)$/i.test(currentStatus)) continue;
+    checked++;
+
+    var existingEtaNote = String(data[r][4] || "").trim();
+    var signal = lookupParcelTrackingUpdate_(currentCarrier, tracking, existingEtaNote);
+    var rowChanged = false;
+    if (signal.status && shouldApplyParcelStatus_(currentStatus, signal.status)) {
+      var normalizedStatus = normalizeParcelSheetStatus_(signal.status);
+      sheet.getRange(r + 1, statusCol + 1).setValue(normalizedStatus);
+      data[r][statusCol] = normalizedStatus;
+      currentStatus = normalizedStatus;
+      rowChanged = true;
+    }
+    var currentEta = parcelCurrentEta_(existingEtaNote);
+    if (signal.eta && signal.eta !== currentEta) {
+      var nextNote = mergeParcelAutoTrackingNote_(existingEtaNote, {
+        status: signal.status || currentStatus,
+        eta: signal.eta,
+        source: signal.source
+      });
+      if (nextNote !== existingEtaNote) {
+        sheet.getRange(r + 1, 5).setValue(nextNote);
+        data[r][4] = nextNote;
+        rowChanged = true;
+      }
+    }
+    if (rowChanged) {
+      updated++;
+      Logger.log("IMPORTS parcel row " + (r + 1) + " " + tracking + " -> " + currentStatus + (signal.eta ? " ETA " + signal.eta : "") + " via " + signal.source);
+    }
+  }
+  if (updated) SpreadsheetApp.flush();
   return { checked: checked, updated: updated };
 }
