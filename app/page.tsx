@@ -205,12 +205,11 @@ function startOfToday() {
 // caught up to it -- every row eventually aged past the cutoff and the whole table (and the
 // Inbound Schedule calendar it feeds) went empty. It's now a rolling window measured back from
 // today, computed at module load, so it keeps working without needing a manual date bump.
-const IMPORT_STALE_WINDOW_DAYS = 30;
-const IMPORT_STALE_CUTOFF = (() => {
-  const cutoff = startOfToday();
-  cutoff.setDate(cutoff.getDate() - IMPORT_STALE_WINDOW_DAYS);
-  return cutoff.getTime();
-})();
+// Operational import history starts July 1, 2026. Keep every non-terminal import
+// from that point forward visible until its source status says it is done.
+// This is intentionally not a rolling window: an overdue Pending/Scheduled import
+// must remain visible instead of silently aging out of the current Import Schedule.
+const IMPORT_STALE_CUTOFF = new Date(2026, 6, 1).getTime();
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -788,7 +787,7 @@ function InventoryPanel({
       .includes(needle));
   }, [inventoryQuery, items]);
   const displayedItems = useMemo(() => {
-    if (!selectedItem || !showLocation) return filteredItems.slice(0, 250);
+    if (!selectedItem) return filteredItems.slice(0, 250);
     const selectedMatches = items.filter((item) => inventoryProductsMatch(item, selectedItem));
     const visibleById = new Map(
       [...selectedMatches, ...filteredItems].map((item) => [item.id, item]),
@@ -801,7 +800,7 @@ function InventoryPanel({
       .slice(0, 250);
   }, [filteredItems, items, selectedItem, showLocation]);
   useEffect(() => {
-    if (!selectedItem || !showLocation) return;
+    if (!selectedItem) return;
     const frame = window.requestAnimationFrame(() => {
       const wrap = tableWrapRef.current;
       const matchedRow = wrap?.querySelector<HTMLTableRowElement>("tr.inventory-match");
@@ -833,8 +832,8 @@ function InventoryPanel({
           <thead><tr><th>Product name</th><th>SKU #</th><th>UPC #</th><th>Expiration</th>{!showLocation && <th>Pallet #</th>}<th>Qty</th>{showLocation && <th>Location</th>}</tr></thead>
           <tbody>
             {displayedItems.map((item) => {
-              const selected = selectable && selectedItem?.id === item.id;
-              const matching = !selectable && Boolean(selectedItem && inventoryProductsMatch(item, selectedItem));
+              const selected = selectedItem?.id === item.id;
+              const matching = Boolean(selectedItem && inventoryProductsMatch(item, selectedItem));
               return <tr
                 aria-label={selectable ? `Select ${item.productName || item.sku || item.upc}` : undefined}
                 aria-selected={selected || matching || undefined}
@@ -893,15 +892,39 @@ function LowStockPanel({
   items,
   inboundItems,
   loading,
+  selectedItem,
+  onSelect,
 }: {
   items: InventoryItem[];
   inboundItems: InventoryItem[];
   loading: boolean;
+  selectedItem: InventoryItem | null;
+  onSelect?: (item: InventoryItem) => void;
 }) {
   const lowStockItems = useMemo(
     () => items.filter((item) => item.quantity < 200).sort((a, b) => a.quantity - b.quantity),
     [items],
   );
+  const tableWrapRef = useRef<HTMLDivElement>(null);
+  const displayedLowStockItems = useMemo(() => {
+    if (!selectedItem) return lowStockItems;
+    return [...lowStockItems].sort((left, right) =>
+      Number(inventoryProductsMatch(right, selectedItem)) -
+      Number(inventoryProductsMatch(left, selectedItem)),
+    );
+  }, [lowStockItems, selectedItem]);
+  useEffect(() => {
+    if (!selectedItem) return;
+    const frame = window.requestAnimationFrame(() => {
+      const wrap = tableWrapRef.current;
+      const matchedRow = wrap?.querySelector<HTMLTableRowElement>("tr.inventory-match");
+      if (!wrap || !matchedRow) return;
+      const targetTop = matchedRow.offsetTop - (wrap.clientHeight - matchedRow.offsetHeight) / 2;
+      wrap.scrollTo({ top: Math.max(0, targetTop), behavior: "smooth" });
+      matchedRow.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [displayedLowStockItems, selectedItem]);
   const incomingShipmentsFor = (item: InventoryItem) =>
     Array.from(new Set(
       inboundItems
@@ -914,14 +937,33 @@ function LowStockPanel({
         <div><p className="eyebrow">QTY UNDER 200 · CURRENT WAREHOUSE ON HAND</p><h2>Low Stock</h2></div>
         <div className="inventory-total"><strong>{lowStockItems.length}</strong><span>products</span></div>
       </div>
-      <div className="inventory-table-wrap">
+      <div className="inventory-table-wrap" ref={tableWrapRef}>
         <table className="inventory-table">
           <thead><tr><th>Product name</th><th>SKU #</th><th>UPC #</th><th>Expiration</th><th>Qty</th><th>Location</th><th>Incoming shipment #</th></tr></thead>
           <tbody>
-            {lowStockItems.map((item) => {
+            {displayedLowStockItems.map((item) => {
               const shipments = incomingShipmentsFor(item);
               return (
-                <tr key={item.id}>
+                <tr
+                  key={item.id}
+                  aria-label={`Select ${item.productName || item.sku || item.upc}`}
+                  aria-selected={Boolean(selectedItem && inventoryProductsMatch(item, selectedItem)) || undefined}
+                  className={[
+                    "inventory-selectable",
+                    selectedItem?.id === item.id ? "inventory-selected" : "",
+                    selectedItem && inventoryProductsMatch(item, selectedItem) ? "inventory-match" : "",
+                  ].filter(Boolean).join(" ")}
+                  data-product-key={normalizedIdentifier(item.sku || item.upc || item.productName)}
+                  onClick={() => onSelect?.(item)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onSelect?.(item);
+                    }
+                  }}
+                  role="button"
+                  tabIndex={0}
+                >
                   <td><strong>{item.productName || "—"}</strong></td>
                   <td>{item.sku || "—"}</td>
                   <td>{item.upc || "—"}</td>
@@ -1038,10 +1080,10 @@ function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
 
   return importSourceRecords(importsRows).flatMap((record) => {
     const status = normalizeStatus(record.status);
-    const hasShipmentDocuments = Boolean(
-      record.shipmentNo && (record.invoice || record.mbl || record.hbl || record.container),
-    );
-    if (!hasShipmentDocuments || parcelCarrier(record.shipmentNo)) return [];
+    const hasShipmentIdentity = Boolean(record.shipmentNo);
+    // A current import remains operational while invoice/MBL/HBL/container details are incomplete.
+    // Requiring those fields hid newly scheduled rows that already had a shipment code and ETA/ETD.
+    if (!hasShipmentIdentity || parcelCarrier(record.shipmentNo)) return [];
 
     // Prefer Delivery Expected when present, but most in-transit rows only ever get an ETA/ETD
     // filled in (Delivery Expected is usually populated only once a shipment is close to or
@@ -2177,8 +2219,13 @@ export default function Home() {
         fetchOptionalSheet("SKW_Inbound", "A1:R2500"),
         fetchOptionalSheet("SKW_Stock", "A1:J2500"),
       ]);
+      const importItems = pendingImportItems(imports);
+      const activeImportItems = importItems.filter((item) =>
+        item.date.getTime() >= IMPORT_STALE_CUTOFF &&
+        !finishedImports.has(item.status.toLowerCase()),
+      );
       setItems(consolidateTruckingItems([
-        ...pendingImportItems(imports),
+        ...importItems,
         ...inboundParcelItems(imports),
         ...outboundItems(outbound),
         ...nationalOutboundItems(nationalOutbound),
@@ -2186,10 +2233,16 @@ export default function Home() {
       ]));
       setKpis(liveKpis);
       const dashboardInventory = dashboardInventoryItems(inventoryDashboardTable);
-      setInboundInventory(uniqueInventoryItems([
+      const allInboundInventory = uniqueInventoryItems([
         ...dashboardInventory.inbound,
         ...skwInboundItems(skwInboundTable),
-      ], true));
+      ], true);
+      // Inbound Inventory is a detail view of the active Import Schedule, not receiving history.
+      setInboundInventory(allInboundInventory.filter((inventoryItem) =>
+        activeImportItems.some((scheduleItem) =>
+          scheduleMatchesInventoryShipment(scheduleItem, inventoryItem),
+        ),
+      ));
       setWarehouseStock(uniqueInventoryItems([
         ...dashboardInventory.inStock,
         ...skwStockItems(skwStockTable),
@@ -2311,7 +2364,7 @@ export default function Home() {
         const selectedShipment = scheduleMatchesInventoryShipment(item, selectedInventory);
         const isStaleImport = item.date.getTime() < IMPORT_STALE_CUTOFF;
         const isFinishedOrStale = finishedImports.has(item.status.toLowerCase()) || isStaleImport;
-        if (isFinishedOrStale && !includeFinished && !selectedShipment) return false;
+        if (isFinishedOrStale && !includeFinished) return false;
         if (selectedShipment) return true;
         if (!needle) return true;
         return [
@@ -2595,12 +2648,20 @@ export default function Home() {
           eyebrow="MATCHING PRODUCTS · CURRENT WAREHOUSE ON HAND"
           items={warehouseStock}
           loading={loading}
+          onSelect={(item) => setSelectedInventory((current) => current?.id === item.id ? null : item)}
+          selectable
           selectedItem={selectedInventory}
           showLocation
         />
       </div>
 
-      <LowStockPanel items={warehouseStock} inboundItems={inboundInventory} loading={loading} />
+      <LowStockPanel
+        items={warehouseStock}
+        inboundItems={inboundInventory}
+        loading={loading}
+        selectedItem={selectedInventory}
+        onSelect={(item) => setSelectedInventory((current) => current?.id === item.id ? null : item)}
+      />
 
       <div className="schedule-stack" aria-label="Separate inbound and outbound schedules">
         <ScheduleBoard
