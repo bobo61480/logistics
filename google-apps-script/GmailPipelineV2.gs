@@ -13,7 +13,7 @@
 
 /* eslint-disable no-unused-vars */
 
-var GMAIL_PIPELINE_V2_VERSION = "2026-08-10-v1";
+var GMAIL_PIPELINE_V2_VERSION = "2026-08-10-v2-no-operational-notes";
 var GMAIL_V2_LOOKBACK_DAYS = 4;
 var GMAIL_V2_MAX_THREADS = 12;
 var GMAIL_V2_RUNTIME_BUDGET_MS = 210000;
@@ -740,9 +740,10 @@ function multilineHasV2_(cellValue, wanted) {
   return wantedKeys.some(function (key) { return cellKeys.indexOf(key) !== -1; });
 }
 function emailNoteV2_(record) {
-  var subject = String(record._emailSubject || record.note || "").trim();
-  if (!subject) return "";
-  return "[EMAIL AUTO] " + subject.slice(0, 220);
+  // Keep Gmail provenance in PIPELINE LOG / message metadata only.
+  // Never import email subjects, attachment NOTES/REMARKS, or parser audit text
+  // into operational NOTES columns in IMPORTS or WH Trucking Request.
+  return "";
 }
 function formatEmailStatusRowV2_(sheet, rowNumber, status) {
   var done = /^(SHIPPED|DELIVERED|RECEIVED|CANCELLED|COMPLETED)$/i.test(String(status || "").trim());
