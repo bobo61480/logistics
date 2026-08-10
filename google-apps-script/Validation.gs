@@ -156,8 +156,8 @@ function processApprovedPending() {
         record.note = data[r][col["Note"]] || record.note;
         var when = data[r][col["Ship Date / ETA"]];
         var kind = String(data[r][col["Kind"]] || "outbound").toLowerCase();
-        if (kind === "inbound") { record.eta = when || record.eta; upsertInboundRow_(record); }
-        else { record.shipDate = when || record.shipDate; upsertOutboundRow_(record); }
+        if (kind === "inbound") { record.eta = when || record.eta; upsertInboundEmailV2_(record, true); }
+        else { record.shipDate = when || record.shipDate; upsertOutboundEmailV2_(record, true); }
         sheet.getRange(r + 1, col["Status"] + 1).setValue("COMMITTED");
         rowRange.setBackground(VALIDATION.colors.committed);
         committed++;
