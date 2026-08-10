@@ -66,6 +66,7 @@ type ScheduleItem = {
   vessel?: string;
   pod?: string;
   eta?: string;
+  deliveryExpected?: string;
   isSmallParcel?: boolean;
   shippingMethod?: string;
   sourceType?: string;
@@ -543,6 +544,14 @@ function scheduleMatchesInventoryShipment(item: ScheduleItem, selected: Inventor
     .flatMap((value) => inventoryShipmentReferences(value ?? ""))
     .map(normalizedShipmentCode)
     .some((value) => selectedCodes.has(value));
+}
+
+function inventoryForActiveImports(item: InventoryItem, activeCodes: Set<string>) {
+  const activeReferences = inventoryShipmentReferences(item.shipmentNo).filter((reference) =>
+    activeCodes.has(normalizedShipmentCode(reference)),
+  );
+  if (!activeReferences.length) return null;
+  return { ...item, shipmentNo: activeReferences.join(", ") };
 }
 
 function packingListUrl(shipment: string) {
@@ -1078,9 +1087,11 @@ function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
   return importSourceRecords(importsRows).flatMap((record) => {
     const status = normalizeStatus(record.status);
     const hasShipmentIdentity = Boolean(record.shipmentNo);
-    // A current import remains operational while invoice/MBL/HBL/container details are incomplete.
-    // Requiring those fields hid newly scheduled rows that already had a shipment code and ETA/ETD.
-    if (!hasShipmentIdentity || parcelCarrier(record.shipmentNo)) return [];
+    const shipmentLabel = clean(record.shipmentNo).toUpperCase();
+    const planningRow = /^(?:AS OF\b|SCHEDULING\b|SCHEDULED\b|NEED SCHEDULING\b|MONTH OF\b|URGENT\b|COMPLETED\b|ESTIMATED\b)/.test(shipmentLabel);
+    // Current imports can have incomplete documents, but planning-grid labels can never
+    // become shipment rows even when neighboring cells look like dates or identifiers.
+    if (!hasShipmentIdentity || planningRow || parcelCarrier(record.shipmentNo)) return [];
 
     // Import Schedule is authoritative from IMPORTS column O (ETA) only.
     // Delivery Expected belongs to receiving/trucking planning and ETD is an origin date;
@@ -1131,6 +1142,7 @@ function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
       vessel: record.vessel,
       pod: /^OSL/i.test(record.shipmentNo) ? "LGB" : "LAX",
       eta,
+      deliveryExpected: record.deliveryExpected,
       isSmallParcel: false,
       shippingMethod: mode,
       sourceType: mode,
@@ -2233,16 +2245,23 @@ export default function Home() {
       ]));
       setKpis(liveKpis);
       const dashboardInventory = dashboardInventoryItems(inventoryDashboardTable);
-      const allInboundInventory = uniqueInventoryItems([
+      const activeImportCodes = new Set(
+        activeImportItems
+          .flatMap((item) => [item.shipmentNo, item.title])
+          .flatMap((value) => inventoryShipmentReferences(value ?? ""))
+          .map(normalizedShipmentCode)
+          .filter(Boolean),
+      );
+      // Reduce each source row to active shipment references before deduplication. This prevents
+      // received/history codes such as old HJ/ES rounds from surviving on a mixed allocation row.
+      const currentInboundInventory = [
         ...dashboardInventory.inbound,
         ...skwInboundItems(skwInboundTable),
-      ], true);
-      // Inbound Inventory is a detail view of the active Import Schedule, not receiving history.
-      setInboundInventory(allInboundInventory.filter((inventoryItem) =>
-        activeImportItems.some((scheduleItem) =>
-          scheduleMatchesInventoryShipment(scheduleItem, inventoryItem),
-        ),
-      ));
+      ].flatMap((inventoryItem) => {
+        const projected = inventoryForActiveImports(inventoryItem, activeImportCodes);
+        return projected ? [projected] : [];
+      });
+      setInboundInventory(uniqueInventoryItems(currentInboundInventory, true));
       setWarehouseStock(uniqueInventoryItems([
         ...dashboardInventory.inStock,
         ...skwStockItems(skwStockTable),
@@ -2330,10 +2349,37 @@ export default function Home() {
     [visibleItems],
   );
 
-  const inboundScheduleVisibleItems = useMemo(
-    () => inboundVisibleItems.filter((item) => !item.isSmallParcel),
-    [inboundVisibleItems],
-  );
+  const inboundScheduleVisibleItems = useMemo(() => {
+    const first = days[0].getTime();
+    const last = days[days.length - 1].getTime();
+    const needle = query.trim().toLowerCase();
+    return items.flatMap((item) => {
+      if (item.direction !== "inbound" || item.isSmallParcel) return [];
+      // Warehouse receiving appointments come from IMPORTS column Q (Delivery Expected).
+      // Column O ETA stays authoritative only for the separate Import Schedule table.
+      const scheduled = firstDatedValue(item.deliveryExpected ?? "");
+      if (!scheduled) return [];
+      const stamp = new Date(
+        scheduled.date.getFullYear(),
+        scheduled.date.getMonth(),
+        scheduled.date.getDate(),
+      ).getTime();
+      if (stamp < first || stamp > last) return [];
+      if (!includeFinished && finished.has(item.status.toLowerCase())) return [];
+      if (needle && ![
+        item.title,
+        item.reference,
+        item.invoice,
+        item.shipmentNo,
+        item.container,
+        item.mbl,
+        item.hbl,
+        item.vessel,
+        item.status,
+      ].join(" ").toLowerCase().includes(needle)) return [];
+      return [{ ...item, date: scheduled.date, dateText: scheduled.text }];
+    });
+  }, [days, includeFinished, items, query]);
 
   const inboundParcelVisibleItems = useMemo(
     () => inboundVisibleItems.filter((item) => item.isSmallParcel),
@@ -2385,7 +2431,7 @@ export default function Home() {
 
   const counts = useMemo(() => {
     const today = dayKey(days[0]);
-    const inbound = visibleItems.filter((item) => item.direction === "inbound").length;
+    const inbound = inboundScheduleVisibleItems.length + inboundParcelVisibleItems.length;
     const outbound = outboundVisibleItems.length + outboundParcelVisibleItems.length;
     const dueToday = visibleItems.filter((item) => dayKey(item.date) === today).length;
     const exceptions = visibleItems.filter((item) =>
