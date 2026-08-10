@@ -1,0 +1,53 @@
+name: Validate Gmail v2 status safety
+on:
+  push:
+    branches: [fix/gmail-v2-status-safety-20260810]
+permissions:
+  contents: write
+jobs:
+  patch-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/gmail-v2-status-safety-20260810
+          fetch-depth: 0
+      - name: Apply Gmail status safety patch
+        run: python3 scripts/patch_gmail_v2_status_safety.py
+      - name: Syntax and behavior checks
+        run: |
+          node --check < google-apps-script/GmailPipelineV2.gs
+          node <<'NODE'
+          const fs = require('fs');
+          const vm = require('vm');
+          vm.runInThisContext(fs.readFileSync('google-apps-script/GmailPipelineV2.gs','utf8'));
+          function eq(a,b,n){ if(a!==b) throw new Error(`${n}: expected ${b}, got ${a}`); }
+          let c = extractEmailContextV2_(
+            'AIR SHIPMENT / MAWB #936-02523964 / HAWB #JSL260803 / ETA :8/11 /ICN-LAX',
+            'Current LAX arrival is 8/11. If you have received this email in error, please delete it. Delivery schedule will follow after customs.'
+          );
+          eq(c.status, '', 'disclaimer received must not set status');
+          eq(c.eta, '08/11/26', 'air ETA retained');
+          c = extractEmailContextV2_('Shipment STY-2212 has been completed!', 'Invoice IN00463069');
+          eq(c.status, 'Completed', 'explicit carrier completion');
+          c = extractEmailContextV2_('Your Packages Have Been Delivered', 'Delivered Monday 08/10/2026');
+          eq(c.status, 'Delivered', 'explicit UPS delivery');
+          eq(isPlausibleVesselV2_('delays'), false, 'status fragment is not a vessel');
+          eq(isPlausibleVesselV2_('HMM DAON 0022E'), true, 'ocean vessel accepted');
+          eq(isPlausibleVesselV2_('SQ-7408'), true, 'flight accepted');
+          console.log('Gmail v2 status safety samples passed');
+          NODE
+          git diff --check
+      - name: Application regression tests
+        run: |
+          npm ci --no-audit --no-fund
+          npm run typecheck
+          npm test
+      - name: Commit Apps Script fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add google-apps-script/GmailPipelineV2.gs
+          git diff --cached --check
+          git commit -m "Harden Gmail status and vessel extraction"
+          git push origin HEAD:fix/gmail-v2-status-safety-20260810
