@@ -13,7 +13,7 @@
 
 /* eslint-disable no-unused-vars */
 
-var GMAIL_PIPELINE_V2_VERSION = "2026-08-10-v2-no-operational-notes";
+var GMAIL_PIPELINE_V2_VERSION = "2026-08-11-v3-import-document-folders";
 var GMAIL_V2_LOOKBACK_DAYS = 4;
 var GMAIL_V2_MAX_THREADS = 12;
 var GMAIL_V2_RUNTIME_BUDGET_MS = 210000;
@@ -152,18 +152,16 @@ function processLogisticsMessageV2_(message) {
   var context = extractEmailContextV2_(subject, body);
   var attachments = message.getAttachments({ includeInlineImages: false, includeAttachments: true }) || [];
   var records = [];
-  var archived = [];
   var supportedSeen = false;
+  var documentAttachments = [];
 
   attachments.forEach(function (attachment) {
     var name = String(attachment.getName() || "attachment");
     if (/\.(png|jpe?g|gif|ics|vcf)$/i.test(name)) return;
-    var archiveUrl = archiveEmailAttachmentV2_(attachment, meta, context.kind || "other");
-    if (archiveUrl) archived.push(archiveUrl);
+    documentAttachments.push(attachment);
     var parsed = extractAttachmentRecordsV2_(attachment, name, context, meta);
     if (parsed.supported) supportedSeen = true;
     parsed.records.forEach(function (record) {
-      record._driveFile = archiveUrl || "";
       records.push(record);
     });
   });
@@ -176,13 +174,19 @@ function processLogisticsMessageV2_(message) {
     return mergeRecordContextV2_(record, context, meta);
   }));
 
+  var documentFolderUrl = "";
+  if (documentAttachments.length && context.kind !== "outbound") {
+    documentFolderUrl = archiveInboundEmailAttachmentsV2_(documentAttachments, records, context, meta);
+    records.forEach(function (record) { record._driveFolder = documentFolderUrl; });
+  }
+
   if (!records.length) {
     addPendingRow_({
       kind: context.kind || "inbound",
       issues: [supportedSeen ? "No reliable shipment record could be extracted." : "No supported logistics attachment or strong shipment identifiers were extracted."],
       record: mergeRecordContextV2_({ parseError: "Email extraction produced no shipment-level record." }, context, meta),
       meta: meta,
-      driveUrl: archived[0] || ""
+      driveUrl: documentFolderUrl
     });
     return { inserted: 0, updated: 0, noop: 0, pending: 1 };
   }
@@ -198,7 +202,7 @@ function processLogisticsMessageV2_(message) {
     }
     var validation = validateRecord_(record, kind);
     if (!validation.ok) {
-      addPendingRow_({ kind: kind, issues: validation.issues, record: record, meta: meta, driveUrl: record._driveFile || archived[0] || "" });
+      addPendingRow_({ kind: kind, issues: validation.issues, record: record, meta: meta, driveUrl: record._driveFolder || documentFolderUrl });
       result.pending++;
       return;
     }
@@ -206,7 +210,7 @@ function processLogisticsMessageV2_(message) {
     if (inserted.action === "inserted") result.inserted++;
     else if (inserted.matched) result[inserted.action]++;
     else {
-      addPendingRow_({ kind: kind, issues: ["Validated record could not be matched or safely inserted."], record: record, meta: meta, driveUrl: record._driveFile || "" });
+      addPendingRow_({ kind: kind, issues: ["Validated record could not be matched or safely inserted."], record: record, meta: meta, driveUrl: record._driveFolder || documentFolderUrl });
       result.pending++;
     }
   });
@@ -569,23 +573,62 @@ function pdfTextRecordV2_(text, context, sourceName) {
   return record;
 }
 
-function archiveEmailAttachmentV2_(attachment, meta, kind) {
+function archiveInboundEmailAttachmentsV2_(attachments, records, context, meta) {
   try {
-    var roots = DriveApp.getFoldersByName(GMAIL_PIPELINE.driveRootName);
-    var root = roots.hasNext() ? roots.next() : DriveApp.createFolder(GMAIL_PIPELINE.driveRootName);
-    var year = Utilities.formatDate(meta.date, "America/Los_Angeles", "yyyy");
-    var month = Utilities.formatDate(meta.date, "America/Los_Angeles", "MM");
-    var yf = childFolderV2_(root, year);
-    var mf = childFolderV2_(yf, month);
-    var kf = childFolderV2_(mf, kind || "other");
-    var blob = attachment.copyBlob();
-    var safe = Utilities.formatDate(meta.date, "America/Los_Angeles", "yyyyMMdd-HHmmss") + "__" + String(attachment.getName() || "attachment").replace(/[\\/:*?\"<>|]+/g, "_");
-    blob.setName(safe);
-    return kf.createFile(blob).getUrl();
+    var folder = findExistingInboundDocsFolderV2_(records) || getOrCreateInboundDocsFolderV2_(records, context, meta);
+    attachments.forEach(function (attachment) { createAttachmentIfMissingV2_(folder, attachment); });
+    return folder.getUrl();
   } catch (err) {
     writeLog_("GMAIL V2 ARCHIVE", meta.messageId, String(err));
     return "";
   }
+}
+
+function findExistingInboundDocsFolderV2_(records) {
+  if (!records || !records.length) return null;
+  var sheet = SpreadsheetApp.openById(GMAIL_PIPELINE.masterId).getSheetByName("IMPORTS");
+  if (!sheet) return null;
+  var values = sheet.getDataRange().getDisplayValues();
+  var hits = [];
+  for (var r = 2; r < values.length; r++) {
+    var best = 0;
+    records.forEach(function (record) { best = Math.max(best, inboundMatchScoreV2_(values[r], record)); });
+    if (best) hits.push({ row: r + 1, score: best });
+  }
+  hits.sort(function (a, b) { return b.score - a.score; });
+  if (!hits.length || (hits[1] && hits[0].score === hits[1].score)) return null;
+  var rich = sheet.getRange(hits[0].row, 2).getRichTextValue();
+  var id = folderIdFromDriveUrlV2_(rich && rich.getLinkUrl ? rich.getLinkUrl() : "");
+  if (!id) return null;
+  try { return DriveApp.getFolderById(id); } catch (err) { return null; }
+}
+
+function getOrCreateInboundDocsFolderV2_(records, context, meta) {
+  var root = DriveApp.getFolderById(GMAIL_PIPELINE.importShipmentsFolderId);
+  var names = uniqueTextV2_((records || []).map(function (record) {
+    return record.shipmentNo || record.hbl || record.container || record.mbl || "";
+  }).filter(Boolean));
+  var base = names.length === 1 ? names[0] : (context.shipmentNo || context.hbl || context.container || context.mbl || meta.subject);
+  base = String(base || "EMAIL IMPORT " + Utilities.formatDate(meta.date, "America/Los_Angeles", "yyyyMMdd"))
+    .replace(/[\\/:*?\"<>|]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
+  return childFolderV2_(root, base);
+}
+
+function createAttachmentIfMissingV2_(folder, attachment) {
+  var name = String(attachment.getName() || "attachment").replace(/[\\/:*?\"<>|]+/g, "_");
+  var size = Number(attachment.getSize ? attachment.getSize() : attachment.getBytes().length);
+  var existing = folder.getFilesByName(name);
+  while (existing.hasNext()) {
+    if (Number(existing.next().getSize()) === size) return;
+  }
+  var blob = attachment.copyBlob();
+  blob.setName(name);
+  folder.createFile(blob);
+}
+
+function folderIdFromDriveUrlV2_(url) {
+  var match = String(url || "").match(/\/folders\/([A-Za-z0-9_-]+)/);
+  return match ? match[1] : "";
 }
 
 function childFolderV2_(parent, name) {
@@ -618,7 +661,7 @@ function upsertInboundEmailV2_(record, allowInsert) {
   if (targetRow > 3) sheet.getRange(targetRow - 1, 1, 1, 28).copyTo(sheet.getRange(targetRow, 1, 1, 28), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
   var values = new Array(28).fill("");
   values[0] = record.shipmentNo || "EMAIL IMPORT";
-  values[1] = record.shipmentNo || "";
+  values[1] = record.shipmentNo || record.hbl || "DOCS";
   values[2] = record.invoice || "";
   values[3] = record.mbl || "";
   values[4] = record.hbl || "";
@@ -630,6 +673,7 @@ function upsertInboundEmailV2_(record, allowInsert) {
   values[14] = record.eta || "";
   values[27] = record.status || "Work in Progress";
   sheet.getRange(targetRow, 1, 1, 28).setValues([values]);
+  setInboundDocsLinkV2_(sheet, targetRow, values[1], record._driveFolder);
   return { matched: true, action: "inserted", row: targetRow };
 }
 
@@ -656,6 +700,7 @@ function updateInboundRowV2_(sheet, rowNumber, oldRow, record) {
     changed = true;
   }
   set(1, record.shipmentNo, false);
+  if (record._driveFolder && setInboundDocsLinkV2_(sheet, rowNumber, record.shipmentNo || record.hbl || oldRow[1] || "DOCS", record._driveFolder)) changed = true;
   if (record.invoice) {
     var mergedInvoices = mergeMultilineV2_(oldRow[2], record.invoice);
     if (mergedInvoices !== String(oldRow[2] || "").trim()) set(3, mergedInvoices, true);
@@ -681,6 +726,19 @@ function updateInboundRowV2_(sheet, rowNumber, oldRow, record) {
   }
   if (changed) formatEmailStatusRowV2_(sheet, rowNumber, String(oldRow[27] || record.status || ""));
   return changed;
+}
+
+function setInboundDocsLinkV2_(sheet, rowNumber, label, folderUrl) {
+  if (!folderUrl) return false;
+  var cell = sheet.getRange(rowNumber, 2);
+  var prior = cell.getRichTextValue();
+  var priorUrl = prior && prior.getLinkUrl ? prior.getLinkUrl() : "";
+  if (priorUrl && priorUrl !== folderUrl) return false;
+  var text = String(label || cell.getDisplayValue() || "DOCS").trim();
+  if (priorUrl === folderUrl && cell.getDisplayValue() === text) return false;
+  var rich = SpreadsheetApp.newRichTextValue().setText(text).setLinkUrl(folderUrl).build();
+  cell.setRichTextValue(rich);
+  return true;
 }
 
 function upsertOutboundEmailV2_(record, allowInsert) {
