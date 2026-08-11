@@ -32,7 +32,7 @@ const SALES_SNAPSHOT = {
 // if you redeploy that script, Apps Script gives you a new URL and this must be updated too.
 const WRITE_ENDPOINT =
   "https://script.google.com/macros/s/AKfycbz770kmpwqMTA-h-lzeLARgVnDh_VDjh-70OOKk_yE-iXJTmzAsVXUtln17QTOURO1R/exec";
-const AUTO_REFRESH_MS = 15 * 60 * 1000;
+const AUTO_REFRESH_MS = 60 * 1000;
 
 type Direction = "inbound" | "outbound";
 type OutboundDepartment = "Wholesale" | "B2B/E-Com" | "Nationals" | "MBX" | "NJ";
@@ -2595,10 +2595,12 @@ export default function Home() {
     setNotice(`Saving ${item.title}…`);
     try {
       await postStatus(item, status);
-      setItems((current) =>
-        current.map((record) => (record.id === item.id ? { ...record, status } : record)),
-      );
-      setNotice(`${item.title} updated to ${status}.`);
+      // Source-first writeback: after the Google Sheet confirms persistence, re-read
+      // every live source so schedules, KPIs and inventory reflect the authoritative
+      // backend immediately instead of relying on an optimistic local-only patch.
+      await load();
+      setNextRefreshAt(new Date(Date.now() + AUTO_REFRESH_MS));
+      setNotice(`${item.title} updated to ${status} in the source and re-synced.`);
       window.setTimeout(() => setNotice(""), 4500);
     } catch (statusError) {
       setNotice(
@@ -2664,7 +2666,7 @@ export default function Home() {
                   : "4 live sources connected"}
           </span>
           <span className="mono">
-            AUTO SYNC 15 MIN · LAST SYNC {updatedAt ? updatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "America/Los_Angeles" }) : "—"}
+            AUTO SYNC 1 MIN · LAST SYNC {updatedAt ? updatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "America/Los_Angeles" }) : "—"}
             {" · "}NEXT CHECK {nextRefreshAt ? nextRefreshAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "America/Los_Angeles" }) : "—"}
           </span>
         </div>
@@ -2925,7 +2927,7 @@ export default function Home() {
 
       <footer>
         <p><strong>SK</strong> STYLEKOREAN LOGISTICS · COMPANY OPERATIONS</p>
-        <p className="mono">AUTO-REFRESH 15 MIN · STATUS EDITS SYNC TO SOURCE ROWS</p>
+        <p className="mono">AUTO-REFRESH 1 MIN · SOURCE-FIRST WRITEBACKS · VERIFIED RE-SYNC</p>
       </footer>
 
       {notice && <div className="toast" role="status">{notice}</div>}
