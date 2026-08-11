@@ -27,9 +27,9 @@ describe("live dashboard style variants", () => {
     expect(css).toContain(":global(.outbound-panel)");
     expect(css).toContain(":global(.fulfillment-tk-panel)");
     expect(css).toContain(":global(.outbound-parcel-panel)");
-    expect(css).toMatch(/outbound-panel\)[^{]*\{[^}]*order:\s*12/s);
-    expect(css).toMatch(/fulfillment-tk-panel\)[^{]*\{[^}]*order:\s*13/s);
-    expect(css).toMatch(/outbound-parcel-panel\)[^{]*\{[^}]*order:\s*14/s);
+    expect(css).toMatch(/outbound-panel\)[^{]*\{[^}]*order:\s*12/);
+    expect(css).toMatch(/fulfillment-tk-panel\)[^{]*\{[^}]*order:\s*13/);
+    expect(css).toMatch(/outbound-parcel-panel\)[^{]*\{[^}]*order:\s*14/);
   });
 
   test("fulfillment money fields render as USD with a dollar sign", () => {
