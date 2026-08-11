@@ -407,6 +407,19 @@ function parcelCarrier(value: string) {
   return match ? match[1].toUpperCase().replace("FEDEX", "FedEx") : "";
 }
 
+function carrierFromTrackingNumber(value: string) {
+  const tracking = clean(value).replace(/[\s-]+/g, "").toUpperCase();
+  if (!tracking) return "";
+  if (/^1Z[A-Z0-9]{10,}$/.test(tracking)) return "UPS";
+  if (/^TBA[A-Z0-9]{8,}$/.test(tracking)) return "AMAZON";
+  if (/^JJD[A-Z0-9]{8,}$/.test(tracking)) return "DHL";
+  if (/^[A-Z]{2}\d{9}US$/.test(tracking)) return "USPS";
+  if (/^9\d{19,21}$/.test(tracking)) return "USPS";
+  if (/^\d{12}$/.test(tracking) || /^\d{15}$/.test(tracking)) return "FedEx";
+  if (/^\d{20,22}$/.test(tracking) && !tracking.startsWith("9")) return "FedEx";
+  return "";
+}
+
 function sourceClass(value: string) {
   const normalized = clean(value).toLowerCase();
   if (normalized === "ocean") return "source-ocean";
@@ -1193,9 +1206,11 @@ function inboundParcelItems(rows: string[][]): ScheduleItem[] {
     } else if (firstColumn) {
       currentCarrier = "";
     }
-    if (!currentCarrier) return [];
-
     const trackingNumber = trackingCandidate(cell(row, 1), cell(row, 10));
+    const trackingCarrier = carrierFromTrackingNumber(trackingNumber);
+    const resolvedCarrier = trackingCarrier || currentCarrier;
+    if (!resolvedCarrier) return [];
+
     const invoice = cell(row, 2);
     const department = cell(row, 3);
     const etaSource = lastDateToken(cell(row, 4));
@@ -1220,7 +1235,7 @@ function inboundParcelItems(rows: string[][]): ScheduleItem[] {
     const etaText = datedValue?.text
       ? `${datedValue.text}${overdue ? " · OVERDUE" : ""}`
       : "ETA pending";
-    const shipmentNo = trackingNumber || `${currentCarrier}-${sourceRow}`;
+    const shipmentNo = trackingNumber || `${resolvedCarrier}-${sourceRow}`;
 
     return [
       {
@@ -1229,7 +1244,7 @@ function inboundParcelItems(rows: string[][]): ScheduleItem[] {
         date,
         dateText: etaText,
         title: trackingNumber || "Tracking pending",
-        reference: trackingNumber || invoice || `${currentCarrier} parcel`,
+        reference: trackingNumber || invoice || `${resolvedCarrier} parcel`,
         secondary: department,
         status,
         sourceSheet: "IMPORTS",
@@ -1242,16 +1257,16 @@ function inboundParcelItems(rows: string[][]): ScheduleItem[] {
         invoiceUrl: invoice ? invoiceFileUrl(splitValues(invoice)[0] ?? "") : "",
         containerUrl: officialTrackingUrl(
           trackingNumber,
-          currentCarrier,
+          resolvedCarrier,
           importsCellUrl(sourceRow, "B"),
         ),
         eta: etaText,
-        carrier: currentCarrier,
+        carrier: resolvedCarrier,
         trackingNumber,
         pro: trackingNumber,
         isSmallParcel: true,
-        shippingMethod: currentCarrier,
-        sourceType: outboundSourceType(currentCarrier, true),
+        shippingMethod: resolvedCarrier,
+        sourceType: outboundSourceType(resolvedCarrier, true),
       },
     ];
   });
