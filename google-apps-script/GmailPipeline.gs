@@ -22,7 +22,10 @@ var GMAIL_PIPELINE = {
   masterId: "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc",
   inboundSheet: "IMPORTS",
   outboundSheet: "WH Trucking Request",
-  driveRootName: "SK Logistics Email Archive",
+  driveRootName: "SK Logistics Email Archive", // legacy helper compatibility
+  // Canonical shared-drive destinations used by the live IMPORTS document links.
+  warehouseDocumentsFolderId: "1YBWV9lXAasRt7JolWxk199dPkGbx60M9",
+  importShipmentsFolderId: "1AhGI2qM2pGFXSb406OY6dsOaN8unlGDM",
   labels: {
     processed: "sk-logistics/processed",
     pending: "sk-logistics/pending-verification",

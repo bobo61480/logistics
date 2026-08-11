@@ -523,7 +523,7 @@ function num_(value) {
  * 
  * Updates are pulled from email notifications, carrier tracking, and manual sources.
  */
-var SMALL_PARCEL_TRIGGER_VERSION_ = "hourly-v2-20260810";
+var SMALL_PARCEL_TRIGGER_VERSION_ = "hourly-v3-outbound-20260811";
 
 function ensureHourlySmallParcelTrigger_() {
   var props = PropertiesService.getScriptProperties();
@@ -551,6 +551,10 @@ function trackSmallParcelsStatusUpdates() {
     results.checked += results.importsUpdates.checked;
     results.updated += results.importsUpdates.updated;
 
+    results.outboundUpdates = trackOutboundShipmentStatus_();
+    results.checked += results.outboundUpdates.checked;
+    results.updated += results.outboundUpdates.updated;
+
     var summary = "Tracked small parcels hourly: " + results.checked + " packages, " + results.updated + " source rows updated";
     Logger.log(summary);
     appendPipelineLog_(ss, summary, "SMALL_PARCEL_TRACKING");
@@ -561,6 +565,84 @@ function trackSmallParcelsStatusUpdates() {
     if (ss) appendPipelineLog_(ss, msg, "ERROR");
     throw err;
   }
+}
+
+/**
+ * Tracks every active Stylekorean outbound row carrying a parcel tracking
+ * number or freight PRO number. Exact-number carrier emails are always checked;
+ * UPS/FedEx/USPS/DHL parcels also use the official carrier page.
+ *
+ * The update is stored in ISSUE as a replaceable [AUTO TRACK ...] marker. The
+ * dashboard reads that marker as the live schedule status without overwriting
+ * a user's existing issue note.
+ */
+function trackOutboundShipmentStatus_() {
+  var workbook = SpreadsheetApp.openById(WMS_SPREADSHEET_ID);
+  var sheet = workbook.getSheetByName("Stylekorean");
+  if (!sheet) return { checked: 0, updated: 0 };
+  var data = sheet.getDataRange().getDisplayValues();
+  var header = findWmsTruckingHeader_(data);
+  var map = header.map;
+  var issueCol = map["ISSUE"] !== undefined ? map["ISSUE"] : 7;
+  var methodCol = map["SHIPPING METHOD"] !== undefined ? map["SHIPPING METHOD"] : 5;
+  var checked = 0, updated = 0;
+
+  for (var r = header.rowIndex + 1; r < data.length; r++) {
+    var method = String(data[r][methodCol] || "").trim();
+    if (!/UPS|FEDEX|FED EX|USPS|DHL|AMAZON|TRUCK|LTL|FTL/i.test(method)) continue;
+    var tracking = outboundTrackingCandidate_(data[r], map);
+    if (!tracking) continue;
+    var existing = String(data[r][issueCol] || "").trim();
+    var currentStatus = parcelStatusFromText_(existing) || "Scheduled";
+    if (/^(DELIVERED|RECEIVED|COMPLETED|CANCELLED)$/i.test(currentStatus)) continue;
+    checked++;
+
+    var carrier = outboundCarrier_(method, tracking);
+    var signal = lookupParcelTrackingUpdate_(carrier, tracking, existing);
+    if (!signal.status && !signal.eta) continue;
+    var statusChanged = signal.status && shouldApplyParcelStatus_(currentStatus, signal.status);
+    var etaChanged = signal.eta && signal.eta !== parcelCurrentEta_(existing);
+    if (!statusChanged && !etaChanged) continue;
+    var next = mergeParcelAutoTrackingNote_(existing, {
+      status: signal.status || currentStatus,
+      eta: signal.eta,
+      source: signal.source
+    });
+    if (next === existing) continue;
+    sheet.getRange(r + 1, issueCol + 1).setValue(next);
+    data[r][issueCol] = next;
+    updated++;
+    Logger.log("Stylekorean outbound row " + (r + 1) + " " + tracking + " -> " + (signal.status || currentStatus) + " via " + signal.source);
+  }
+  if (updated) SpreadsheetApp.flush();
+  return { checked: checked, updated: updated };
+}
+
+function outboundTrackingCandidate_(row, map) {
+  var named = ["TRACKING#", "TRACKING #", "TRACKING NUMBER", "PRO#", "PRO #", "PRO NUMBER", "BOL#", "BOL"];
+  var values = [];
+  named.forEach(function (name) {
+    if (map[name] !== undefined) values.push(row[map[name]]);
+  });
+  // The WMS export sometimes places tracking/PRO data in unnamed columns I:AF.
+  for (var c = 8; c < Math.min(row.length, 32); c++) values.push(row[c]);
+  for (var i = 0; i < values.length; i++) {
+    var text = String(values[i] || "").trim();
+    if (!text) continue;
+    var match = text.match(/\b(1Z[A-Z0-9]{16}|\d{12,30}|[A-Z]{2}\d{9}[A-Z]{2}|[A-Z0-9][A-Z0-9-]{7,39})\b/i);
+    if (match && !/^(YES|NO|PENDING|ISSUE|SCHEDULED|TRUCKING)$/i.test(match[1])) return match[1].toUpperCase();
+  }
+  return "";
+}
+
+function outboundCarrier_(method, tracking) {
+  var text = String(method || "").toUpperCase();
+  var number = String(tracking || "").toUpperCase();
+  if (/^1Z/.test(number) || /UPS/.test(text)) return "UPS";
+  if (/FEDEX|FED EX/.test(text) || /^\d{12}$/.test(number)) return "FEDEX";
+  if (/USPS/.test(text) || /^\d{20,22}$/.test(number) || /^[A-Z]{2}\d{9}US$/.test(number)) return "USPS";
+  if (/DHL/.test(text)) return "DHL";
+  return ""; // Freight PROs are tracked through exact-number email signals.
 }
 
 function trackSkwInboundStatus_(ss) {

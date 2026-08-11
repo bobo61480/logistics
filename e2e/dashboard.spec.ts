@@ -36,6 +36,12 @@ function daysFromToday(offset: number) {
   return formatDate(date);
 }
 
+function isoDaysFromToday(offset: number) {
+  const date = laToday();
+  date.setDate(date.getDate() + offset);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
 // Builds one CSV line with `width` columns, filling only the given indexes.
 function csvRow(width: number, cells: Record<number, string>) {
   const row = new Array<string>(width).fill("");
@@ -164,6 +170,37 @@ async function mockWorkbooks(page: Page): Promise<MockState> {
   });
 
   await page.route("https://script.google.com/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (route.request().method() === "GET" && url.searchParams.get("op") === "getSalesOverview") {
+      return fulfill(
+        route,
+        JSON.stringify({
+          ok: true,
+          jobs: [
+            {
+              invoice: "INTK001",
+              remarks: "TK TEST CUSTOMER",
+              shipDate: isoDaysFromToday(3),
+              method: "TK",
+              amount: "1250.50",
+              pickStart: "08:15",
+              pickComplete: false,
+              inspection: "",
+              movedToPacking: false,
+              dimsCount: 0,
+            },
+            {
+              invoice: "INUPS001",
+              remarks: "UPS SHOULD NOT IMPORT",
+              shipDate: isoDaysFromToday(4),
+              method: "UPS",
+              amount: "99.00",
+            },
+          ],
+        }),
+        "application/json",
+      );
+    }
     const payload = JSON.parse(route.request().postData() ?? "{}");
     state.postedPayload = payload;
     state.postedStatus = String(payload.status ?? "");
@@ -182,7 +219,7 @@ test("renders live schedules and KPI cards computed from the workbooks", async (
   await page.goto("/");
 
   await expect(page.getByRole("heading", { name: /StyleKorean\s*Logistics Hub/ })).toBeVisible();
-  await expect(page.getByText("3 live workbooks connected")).toBeVisible();
+  await expect(page.getByText("4 live sources connected")).toBeVisible();
 
   // Import Schedules table row from the IMPORTS fixture.
   const importTable = page.locator(".import-table");
@@ -194,8 +231,19 @@ test("renders live schedules and KPI cards computed from the workbooks", async (
   // An ocean SCAC-style container number classifies the shipment as Ocean.
   await expect(page.locator(".import-totals")).toContainText("1 Ocean");
 
-  // Outbound trucking board shows the Outbound Shipping Schedule fixture.
+  // Outbound trucking board shows the workbook fixture plus METHOD=TK fulfillment data.
   await expect(page.locator(".outbound-panel")).toContainText("ULTA BEAUTY");
+  await expect(page.locator(".outbound-panel")).toContainText("TK TEST CUSTOMER");
+  await expect(page.locator(".outbound-panel")).toContainText("INTK001");
+  await expect(page.locator(".outbound-panel")).not.toContainText("UPS SHOULD NOT IMPORT");
+  const tkMetric = page.locator(".metric-fulfillment");
+  await expect(tkMetric).toContainText("FULFILLMENT · TK");
+  await expect(tkMetric).toContainText("1");
+  await expect(tkMetric).toContainText("$1,250.50");
+  await expect(tkMetric.locator(".metric-card-link")).toHaveAttribute(
+    "href",
+    "https://sk-b2b-mobile.github.io/fulfillment/sales.html",
+  );
 
   // KPI cards: values derived from the fixture workbooks (all dated today,
   // so MTD === YTD): trucking $1,200 + $3,400 + transfer $5,000.

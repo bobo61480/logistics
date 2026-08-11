@@ -302,7 +302,7 @@ function csvForUrl(url: string) {
   if (parsed.pathname.includes(NATIONAL_SHEET_ID)) return NATIONAL_CSV;
   if (parsed.pathname.includes(WMS_SHEET_ID)) return WMS_CSV;
   if (parsed.pathname.includes(LOGISTICS_SHEET_ID)) {
-    if (gid === "852802817") return TRUCKING_CSV;
+    if (gid === "1418033635") return TRUCKING_CSV;
     if (gid === "1834454901") return TRANSFER_CSV;
   }
   throw new Error(`Unexpected workbook fetch in test: ${url}`);

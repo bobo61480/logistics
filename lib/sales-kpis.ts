@@ -6,6 +6,10 @@
 const NATIONAL_SHEET_ID = "12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8";
 const WMS_SHEET_ID = "14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I";
 const LOGISTICS_SHEET_ID = "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc";
+// Current LOGISTICS MASTER 2026 tab id for "WH Trucking Request".
+// The old gid 852802817 no longer exists in the workbook and caused the KPI
+// Promise.all to reject, which in turn made the entire dashboard source load fail.
+const LOGISTICS_TRUCKING_GID = 1418033635;
 
 type CarrierKpi = {
   name: string;
@@ -159,7 +163,7 @@ export async function computeLiveKpis(): Promise<Record<string, number | string 
     const [nationalRows, wmsRows, truckingRows, transferRows] = await Promise.all([
       fullCsv(NATIONAL_SHEET_ID, 99300389),
       fullCsv(WMS_SHEET_ID, 0),
-      fullCsv(LOGISTICS_SHEET_ID, 852802817),
+      fullCsv(LOGISTICS_SHEET_ID, LOGISTICS_TRUCKING_GID),
       fullCsv(LOGISTICS_SHEET_ID, 1834454901),
     ]);
     const today = pacificDateParts();
