@@ -1,0 +1,55 @@
+name: Apply TK fulfillment card
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-tk-fulfillment-card.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Add TK fulfillment panel to dashboard
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const path = 'app/page.tsx';
+          let source = fs.readFileSync(path, 'utf8');
+
+          const importNeedle = 'import { computeLiveKpis } from "../lib/sales-kpis";';
+          const panelImport = 'import { FulfillmentTkPanel } from "./fulfillment-tk-panel";';
+          if (!source.includes(panelImport)) {
+            if (!source.includes(importNeedle)) throw new Error('Could not find sales KPI import anchor.');
+            source = source.replace(importNeedle, `${importNeedle}\n${panelImport}`);
+          }
+
+          const panelMarkup = `      <FulfillmentTkPanel\n        jobs={fulfillmentTkJobs}\n        error={fulfillmentTkError}\n        loading={loading}\n      />\n\n`;
+          const panelAnchor = '      <section className="kpi-panel" aria-labelledby="kpi-heading">';
+          if (!source.includes('<FulfillmentTkPanel')) {
+            if (!source.includes(panelAnchor)) throw new Error('Could not find KPI panel anchor.');
+            source = source.replace(panelAnchor, `${panelMarkup}${panelAnchor}`);
+          }
+
+          fs.writeFileSync(path, source);
+          NODE
+
+      - name: Commit dashboard integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/apply-tk-fulfillment-card.yml
+          git add app/page.tsx
+          git commit -m "Display TK fulfillment sales data on dashboard"
+          git push origin HEAD:main
