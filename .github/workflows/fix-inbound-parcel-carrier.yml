@@ -1,0 +1,65 @@
+name: Apply inbound parcel carrier correction
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fix-inbound-parcel-carrier.yml'
+      - '.github/fix-inbound-parcel-carrier.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Patch tracking-first carrier classification
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('app/page.tsx')
+          s = p.read_text()
+          old = '''function parcelCarrier(value: string) {\n  const match = clean(value).match(/\\b(UPS|FEDEX|DHL|USPS|AMAZON)\\b/i);\n  return match ? match[1].toUpperCase().replace("FEDEX", "FedEx") : "";\n}\n'''
+          new = '''function parcelCarrier(value: string) {\n  const match = clean(value).match(/\\b(UPS|FEDEX|DHL|USPS|AMAZON)\\b/i);\n  return match ? match[1].toUpperCase().replace("FEDEX", "FedEx") : "";\n}\n\nfunction carrierFromTrackingNumber(value: string) {\n  const tracking = clean(value).replace(/[\\s-]+/g, "").toUpperCase();\n  if (!tracking) return "";\n  if (/^1Z[A-Z0-9]{10,}$/.test(tracking)) return "UPS";\n  if (/^TBA[A-Z0-9]{8,}$/.test(tracking)) return "AMAZON";\n  if (/^JJD[A-Z0-9]{8,}$/.test(tracking)) return "DHL";\n  if (/^[A-Z]{2}\\d{9}US$/.test(tracking)) return "USPS";\n  if (/^9\\d{19,21}$/.test(tracking)) return "USPS";\n  if (/^\\d{12}$/.test(tracking) || /^\\d{15}$/.test(tracking)) return "FedEx";\n  if (/^\\d{20,22}$/.test(tracking) && !tracking.startsWith("9")) return "FedEx";\n  return "";\n}\n'''
+          if 'function carrierFromTrackingNumber' not in s:
+              if old not in s: raise SystemExit('parcelCarrier block not found')
+              s = s.replace(old, new, 1)
+          old2 = '''    if (!currentCarrier) return [];\n\n    const trackingNumber = trackingCandidate(cell(row, 1), cell(row, 10));\n    const invoice = cell(row, 2);\n'''
+          new2 = '''    const trackingNumber = trackingCandidate(cell(row, 1), cell(row, 10));\n    const trackingCarrier = carrierFromTrackingNumber(trackingNumber);\n    const resolvedCarrier = trackingCarrier || currentCarrier;\n    if (!resolvedCarrier) return [];\n\n    const invoice = cell(row, 2);\n'''
+          if 'const resolvedCarrier = trackingCarrier || currentCarrier;' not in s:
+              if old2 not in s: raise SystemExit('inbound parcel preamble not found')
+              s = s.replace(old2, new2, 1)
+          replacements = {
+              'const shipmentNo = trackingNumber || `${currentCarrier}-${sourceRow}`;': 'const shipmentNo = trackingNumber || `${resolvedCarrier}-${sourceRow}`;',
+              'reference: trackingNumber || invoice || `${currentCarrier} parcel`,': 'reference: trackingNumber || invoice || `${resolvedCarrier} parcel`,',
+              '          currentCarrier,\n          importsCellUrl(sourceRow, "B"),': '          resolvedCarrier,\n          importsCellUrl(sourceRow, "B"),',
+              '        carrier: currentCarrier,': '        carrier: resolvedCarrier,',
+              '        shippingMethod: currentCarrier,': '        shippingMethod: resolvedCarrier,',
+              '        sourceType: outboundSourceType(currentCarrier, true),': '        sourceType: outboundSourceType(resolvedCarrier, true),',
+          }
+          for before, after in replacements.items():
+              if after not in s:
+                  if before not in s: raise SystemExit('expected carrier usage not found: ' + before)
+                  s = s.replace(before, after, 1)
+          p.write_text(s)
+
+      - name: Verify regression markers
+        run: |
+          grep -Fq 'function carrierFromTrackingNumber' app/page.tsx
+          grep -Fq 'const resolvedCarrier = trackingCarrier || currentCarrier;' app/page.tsx
+          grep -Fq 'carrier: resolvedCarrier' app/page.tsx
+          grep -Fq 'shippingMethod: resolvedCarrier' app/page.tsx
+
+      - name: Commit correction
+        run: |
+          git config user.name 'stylekorean-automation'
+          git config user.email 'actions@users.noreply.github.com'
+          git add app/page.tsx
+          git diff --cached --quiet && exit 0
+          git commit -m 'fix: classify inbound parcels by tracking number'
+          git push origin HEAD:main
