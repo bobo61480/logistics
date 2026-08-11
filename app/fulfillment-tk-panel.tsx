@@ -34,6 +34,23 @@ function clean(value: unknown) {
   return String(value).trim();
 }
 
+function isMoneyField(key: string) {
+  return /(^|[_\s-])(amount|cost|rate|price|total|sales|earning|earnings|freight|shipping)([_\s-]|$)/i.test(key);
+}
+
+function formatFulfillmentValue(key: string, value: string) {
+  if (!value || !isMoneyField(key)) return value;
+  const normalized = value.replace(/[$,\s]/g, "");
+  const numeric = Number(normalized);
+  if (!Number.isFinite(numeric)) return value.startsWith("$") ? value : `$${value}`;
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(numeric);
+}
+
 function titleFor(key: string) {
   return key
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
@@ -124,7 +141,8 @@ export function FulfillmentTkPanel({
             {filtered.map((job, rowIndex) => (
               <tr key={`${clean(job.invoice) || "tk"}-${rowIndex}`}>
                 {columns.map((key) => {
-                  const value = clean(job[key]);
+                  const rawValue = clean(job[key]);
+                  const value = formatFulfillmentValue(key, rawValue);
                   return <td key={key} title={value || undefined}>{value || "—"}</td>;
                 })}
               </tr>
