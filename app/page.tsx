@@ -5,6 +5,7 @@ import { INBOUND_DOCUMENT_LINKS, INBOUND_PACKING_LIST_LINKS } from "./inbound-li
 import { INBOUND_INVOICE_LINKS } from "./inbound-invoice-links";
 import { packingListPallets } from "./inbound-pallets";
 import { computeLiveKpis } from "../lib/sales-kpis";
+import { FulfillmentTkPanel } from "./fulfillment-tk-panel";
 
 const SHEET_ID = "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc";
 const SHEET_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit`;
@@ -2714,6 +2715,12 @@ export default function Home() {
           />
         </article>
       </section>
+
+      <FulfillmentTkPanel
+        jobs={fulfillmentTkJobs}
+        error={fulfillmentTkError}
+        loading={loading}
+      />
 
       <section className="kpi-panel" aria-labelledby="kpi-heading">
         <div className="kpi-heading">
