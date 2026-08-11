@@ -378,7 +378,10 @@ function officialTrackingUrl(container: string, carrierKey: string, fallback: st
   }
   if (/AMAZON/.test(carrier) || /^TBA/.test(value)) return "https://track.amazon.com/";
   if (/^(SMCU)|SMLM|SM LINES?/.test(`${value} ${carrier}`)) {
-    return `https://esvc.smlines.com/smline/CUP_HOM_3301GS.do?_search=false&f_cmd=121&page=1&rows=10000&search_name=${encodeURIComponent(value)}&search_type=C&sidx=&sord=asc`;
+    // CUP_HOM_3301GS.do is SM Line's internal JSON data endpoint. Linking to it
+    // exposes implementation fields such as hashColumns instead of a readable
+    // tracking view. Send users to the carrier's human-facing Cargo Tracking UI.
+    return "https://esvc.smlines.com/smline/CUP_HOM_3301.do?sessLocale=en";
   }
   if (/^(HDMU)|(^| )HMM( |$)/.test(`${value} ${carrier}`)) {
     return "https://www.hmm21.com/e-service/general/trackNTrace/TrackNTrace.do";

@@ -87,6 +87,12 @@ describe("live dashboard style variants", () => {
     expect(tracker).toContain("lookupParcelTrackingUpdate_");
   });
 
+  test("SM Line container links open the readable cargo tracking page", () => {
+    const source = read("app/page.tsx");
+    expect(source).toContain('return "https://esvc.smlines.com/smline/CUP_HOM_3301.do?sessLocale=en";');
+    expect(source).not.toContain("CUP_HOM_3301GS.do?_search=false");
+  });
+
   test("both approved visual themes are present", () => {
     const css = read("app/style-variants.module.css");
     expect(css).toContain("--variant-mint");
