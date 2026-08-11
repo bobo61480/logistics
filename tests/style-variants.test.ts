@@ -39,6 +39,27 @@ describe("live dashboard style variants", () => {
     expect(source).toContain('currency: "USD"');
   });
 
+  test("Fulfillment TK card carries source-style dark and amber treatment", () => {
+    const css = read("app/globals.css");
+    expect(css).toContain(".fulfillment-tk-panel");
+    expect(css).toContain("--fulfillment-source-bg");
+    expect(css).toContain("--fulfillment-source-surface");
+    expect(css).toContain("--fulfillment-source-border");
+    expect(css).toContain("--fulfillment-source-amber");
+    expect(css).toContain(".fulfillment-tk-method");
+    expect(css).toContain(".fulfillment-tk-status");
+    expect(css).toContain(".fulfillment-tk-source-link");
+  });
+
+  test("Fulfillment TK rows expose semantic classes for method, status, and money", () => {
+    const source = read("app/fulfillment-tk-panel.tsx");
+    expect(source).toContain("function fulfillmentCellClass");
+    expect(source).toContain('"fulfillment-tk-method"');
+    expect(source).toContain('"fulfillment-tk-status"');
+    expect(source).toContain('"fulfillment-tk-money"');
+    expect(source).toContain('className="fulfillment-tk-source-link"');
+  });
+
   test("both approved visual themes are present", () => {
     const css = read("app/style-variants.module.css");
     expect(css).toContain("--variant-mint");
