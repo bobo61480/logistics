@@ -61,6 +61,16 @@ describe("live dashboard style variants", () => {
     expect(source).toContain('className="fulfillment-tk-source-link"');
   });
 
+  test("inbound small parcels derive carrier from tracking signature before section heading", () => {
+    const source = read("app/page.tsx");
+    expect(source).toContain("function carrierFromTrackingNumber");
+    expect(source).toContain('/^1Z[A-Z0-9]{10,}$/');
+    expect(source).toContain("const trackingCarrier = carrierFromTrackingNumber(trackingNumber);");
+    expect(source).toContain("const resolvedCarrier = trackingCarrier || currentCarrier;");
+    expect(source).toContain("carrier: resolvedCarrier");
+    expect(source).toContain("shippingMethod: resolvedCarrier");
+  });
+
   test("both approved visual themes are present", () => {
     const css = read("app/style-variants.module.css");
     expect(css).toContain("--variant-mint");
