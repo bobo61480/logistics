@@ -1,6 +1,9 @@
 name = "stylekorean-logistics-planner"
 compatibility_date = "2026-08-10"
 workers_dev = false
+routes = [
+  { pattern = "stylekorean.dpdns.org/*", zone_name = "dpdns.org" }
+]
 
 [assets]
 directory = "./out"
