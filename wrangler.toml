@@ -4,7 +4,3 @@ workers_dev = false
 
 [assets]
 directory = "./out"
-
-[[routes]]
-pattern = "stylekorean.dpdns.org"
-custom_domain = true
