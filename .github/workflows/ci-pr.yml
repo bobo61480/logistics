@@ -1,8 +1,14 @@
-name: Pull Request CI
+name: Fulfillment TK Pull Request CI
 
 on:
   pull_request:
     branches: [main]
+    paths:
+      - "app/fulfillment-tk-panel.tsx"
+      - "app/fulfillment-tk-source.css"
+      - "app/style-variants.module.css"
+      - "tests/style-variants.test.ts"
+      - ".github/workflows/ci-pr.yml"
 
 permissions:
   contents: read
