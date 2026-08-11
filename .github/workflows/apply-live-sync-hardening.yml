@@ -1,4 +1,4 @@
-# retrigger 2026-08-10T22:05-07:00
+# one-time source patch; delete after successful commit
 name: Apply live sync hardening
 
 on:
@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/apply-live-sync-hardening.yml'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -28,30 +29,22 @@ jobs:
           s = p.read_text()
           s = s.replace('const AUTO_REFRESH_MS = 15 * 60 * 1000;', 'const AUTO_REFRESH_MS = 60 * 1000;')
           old = '''      await postStatus(item, status);\n      setItems((current) =>\n        current.map((record) => (record.id === item.id ? { ...record, status } : record)),\n      );\n      setNotice(`${item.title} updated to ${status}.`);'''
-          new = '''      await postStatus(item, status);\n      // Source-first writeback: only after the Google Sheet confirms persistence do we\n      // re-read every live source so dependent schedules, KPIs and inventory reflect\n      // the authoritative backend instead of an optimistic local-only patch.\n      await load();\n      setNextRefreshAt(new Date(Date.now() + AUTO_REFRESH_MS));\n      setNotice(`${item.title} updated to ${status} in the source and re-synced.`);'''
+          new = '''      await postStatus(item, status);\n      // Source-first writeback: after the Google Sheet confirms persistence, re-read\n      // every live source so schedules, KPIs and inventory reflect the authoritative\n      // backend immediately instead of relying on an optimistic local-only patch.\n      await load();\n      setNextRefreshAt(new Date(Date.now() + AUTO_REFRESH_MS));\n      setNotice(`${item.title} updated to ${status} in the source and re-synced.`);'''
           if old not in s:
               raise SystemExit('handleStatus patch target not found')
           s = s.replace(old, new)
           s = s.replace('AUTO SYNC 15 MIN · LAST SYNC', 'AUTO SYNC 1 MIN · LAST SYNC')
           s = s.replace('AUTO-REFRESH 15 MIN · STATUS EDITS SYNC TO SOURCE ROWS', 'AUTO-REFRESH 1 MIN · SOURCE-FIRST WRITEBACKS · VERIFIED RE-SYNC')
           p.write_text(s)
-
-          wf = Path('.github/workflows/deploy-cloudflare.yml')
-          w = wf.read_text()
-          w = w.replace("grep -q 'AUTO SYNC 15 MIN' out/index.html", "grep -q 'AUTO SYNC 1 MIN' out/index.html")
-          w = w.replace("grep -q 'AUTO SYNC 15 MIN' /tmp/live.html", "grep -q 'AUTO SYNC 1 MIN' /tmp/live.html")
-          wf.write_text(w)
           PY
 
-      - name: Remove one-time workflow
-        run: rm .github/workflows/apply-live-sync-hardening.yml
-
-      - name: Commit hardened synchronization
+      - name: Commit app synchronization hardening
         shell: bash
         run: |
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add app/page.tsx .github/workflows/deploy-cloudflare.yml .github/workflows/apply-live-sync-hardening.yml
+          git add app/page.tsx
+          git diff --cached --quiet && { echo 'No app patch required.'; exit 0; }
           git commit -m 'Make dashboard writebacks source-first and re-sync live data every minute'
           git push origin HEAD:main
