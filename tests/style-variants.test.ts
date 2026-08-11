@@ -40,7 +40,7 @@ describe("live dashboard style variants", () => {
   });
 
   test("Fulfillment TK card carries source-style dark and amber treatment", () => {
-    const css = read("app/globals.css");
+    const css = read("app/fulfillment-tk-source.css");
     expect(css).toContain(".fulfillment-tk-panel");
     expect(css).toContain("--fulfillment-source-bg");
     expect(css).toContain("--fulfillment-source-surface");
@@ -53,6 +53,7 @@ describe("live dashboard style variants", () => {
 
   test("Fulfillment TK rows expose semantic classes for method, status, and money", () => {
     const source = read("app/fulfillment-tk-panel.tsx");
+    expect(source).toContain('import "./fulfillment-tk-source.css"');
     expect(source).toContain("function fulfillmentCellClass");
     expect(source).toContain('"fulfillment-tk-method"');
     expect(source).toContain('"fulfillment-tk-status"');
