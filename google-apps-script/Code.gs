@@ -40,6 +40,7 @@ const COMPLETED_STATUSES = ["SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "CO
 const INVENTORY_TRANSFER_STATUSES = ["DELIVERED", "RECEIVED", "COMPLETED"];
 const SKW_INBOUND_SHEET = "SKW_Inbound";
 const SKW_STOCK_SHEET = "SKW_Stock";
+const WMS_TRUCKING_LEDGER_SHEET = "WMS Trucking Processed";
 
 function doPost(e) {
   const lock = LockService.getScriptLock();
@@ -398,6 +399,14 @@ function scanAndImportWmsTruckingOrders() {
       if (targetMap[name] === undefined) throw new Error("WH Trucking Request is missing header: " + name);
     });
 
+    // The processed ledger is append-only history. It lets this sync recover
+    // invoice tokens if another job or a stale deployment replaces a combined
+    // destination cell with only the latest WMS group.
+    const ledgerSheet = targetSpreadsheet.getSheetByName(WMS_TRUCKING_LEDGER_SHEET);
+    const ledgerEntries = ledgerSheet
+      ? buildWmsLedgerEntries_(ledgerSheet.getDataRange().getDisplayValues())
+      : [];
+
     const existingByKey = new Map();
     const existingByInvoice = new Map();
     const existingRows = [];
@@ -450,7 +459,15 @@ function scanAndImportWmsTruckingOrders() {
       if (rowNumber) {
         const current = targetSheet.getRange(rowNumber, 1, 1, width).getValues()[0];
         const currentInvoices = splitWmsInvoices_(current[targetMap["INVOICE NO."]]);
-        const mergedInvoices = mergeWmsInvoices_(currentInvoices, group.invoices);
+        const ledgerInvoices = recoverWmsLedgerInvoices_(
+          ledgerEntries,
+          current[targetMap["CUSTOMER"]] || group.customer,
+          current[targetMap["SHIP DATE"]] || group.shipDate
+        );
+        const mergedInvoices = mergeWmsInvoices_(
+          mergeWmsInvoices_(currentInvoices, ledgerInvoices),
+          group.invoices
+        );
         const shipDate = earliestWmsSourceDateForInvoices_(mergedInvoices, sourceByInvoice, current[targetMap["SHIP DATE"]]);
         const currentCustomer = String(current[targetMap["CUSTOMER"]] || "").trim();
         const canonicalCurrent = canonicalWmsCustomer_(currentCustomer || group.customer);
@@ -618,6 +635,41 @@ function mergeWmsInvoices_(existing, additions) {
   return result;
 }
 
+function buildWmsLedgerEntries_(rows) {
+  if (!rows || !rows.length) return [];
+  const map = headerMap_(rows[0]);
+  if (map["CUSTOMER"] === undefined || map["INVOICE"] === undefined || map["SHIP DATE"] === undefined) {
+    return [];
+  }
+
+  const entries = [];
+  for (let r = 1; r < rows.length; r++) {
+    const customer = String(rows[r][map["CUSTOMER"]] || "").trim();
+    const invoice = String(rows[r][map["INVOICE"]] || "").trim().toUpperCase();
+    const shipDate = String(rows[r][map["SHIP DATE"]] || "").trim();
+    if (!customer || !invoice || !shipDate) continue;
+    entries.push({
+      customerKey: normalizeWmsCustomerKey_(canonicalWmsCustomer_(customer)),
+      invoice: invoice,
+      dateInfo: normalizeWmsShipDate_(shipDate)
+    });
+  }
+  return entries;
+}
+
+function recoverWmsLedgerInvoices_(entries, customer, shipDate) {
+  const customerKey = normalizeWmsCustomerKey_(canonicalWmsCustomer_(customer));
+  if (!customerKey || !shipDate) return [];
+  const result = [];
+  (entries || []).forEach(function (entry) {
+    if (!entry || entry.customerKey !== customerKey || !entry.dateInfo) return;
+    if (wmsDateDistanceDays_(entry.dateInfo.display, shipDate) > 3) return;
+    const invoice = String(entry.invoice || "").trim().toUpperCase();
+    if (invoice && result.indexOf(invoice) === -1) result.push(invoice);
+  });
+  return result;
+}
+
 function earliestWmsSourceDateForInvoices_(invoices, sourceByInvoice, fallback) {
   const candidates = [];
   (invoices || []).forEach(function (invoice) {
@@ -640,6 +692,19 @@ function writeMappedValue_(sheet, rowNumber, map, header, value) {
 
 function normalizeWmsShipDate_(value) {
   const text = String(value || "").trim();
+  // Some ledger rows are appended as raw Google Sheets serial numbers without
+  // a date number format. Decode those explicitly so reconciliation still
+  // compares the correct calendar day.
+  if (/^\d{4,5}(?:\.\d+)?$/.test(text)) {
+    const serial = Number(text);
+    if (serial >= 20000 && serial <= 80000) {
+      const date = new Date(Date.UTC(1899, 11, 30) + Math.floor(serial) * 86400000);
+      const year = date.getUTCFullYear();
+      const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+      const day = String(date.getUTCDate()).padStart(2, "0");
+      return { key: year + "-" + month + "-" + day, display: month + "/" + day + "/" + year };
+    }
+  }
   const parsed = new Date(text);
   if (isNaN(parsed.getTime())) {
     return { key: text.toUpperCase(), display: text };
