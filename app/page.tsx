@@ -69,6 +69,7 @@ type ScheduleItem = {
   vessel?: string;
   pod?: string;
   eta?: string;
+  deliveryExpected?: string;
   isSmallParcel?: boolean;
   shippingMethod?: string;
   sourceType?: string;
@@ -1082,17 +1083,13 @@ type ImportSourceRecord = {
   deliveryExpected: string;
 };
 
+function importSectionMarkerIndex(rows: string[][], marker: string) {
+  const wanted = clean(marker).toUpperCase();
+  return rows.findIndex((row) => clean(cell(row, 0)).toUpperCase() === wanted);
+}
+
 function importsBoundaryRow(rows: string[][]) {
-  const index = rows.findIndex((row) => {
-    const joined = row.map(clean).join("").toUpperCase();
-    return (
-      joined.includes("URGENT") &&
-      joined.includes("COMPLETED") &&
-      joined.includes("ESTIMATED") &&
-      joined.includes("CHANGED") &&
-      joined.includes("미정")
-    );
-  });
+  const index = importSectionMarkerIndex(rows, "SCHEDULING");
   return index === -1 ? rows.length : index;
 }
 
@@ -1114,11 +1111,11 @@ function importSourceRecords(rows: string[][]): ImportSourceRecord[] {
         mbl,
         hbl,
         container: cell(row, 7),
-        vessel: cell(row, 14),
-        status: cell(row, 29),
-        etd: cell(row, 15),
-        eta: cell(row, 16),
-        deliveryExpected: cell(row, 18),
+        vessel: cell(row, 12),
+        status: cell(row, 27),
+        etd: cell(row, 13),
+        eta: cell(row, 14),
+        deliveryExpected: cell(row, 16),
       },
     ];
   });
@@ -1129,23 +1126,19 @@ function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
 
   return importSourceRecords(importsRows).flatMap((record) => {
     const status = normalizeStatus(record.status);
-    const hasShipmentDocuments = Boolean(
-      record.shipmentNo && (record.invoice || record.mbl || record.hbl || record.container),
-    );
-    if (!hasShipmentDocuments || parcelCarrier(record.shipmentNo)) return [];
+    const hasShipmentIdentity = Boolean(record.shipmentNo);
+    const shipmentLabel = clean(record.shipmentNo).toUpperCase();
+    const planningRow = /^(?:AS OF\b|SCHEDULING\b|SCHEDULED\b|NEED SCHEDULING\b|MONTH OF\b|URGENT\b|COMPLETED\b|ESTIMATED\b)/.test(shipmentLabel);
+    // Newly scheduled imports remain visible before invoice/MBL/container documents arrive,
+    // while planning-grid labels are never promoted into shipment rows.
+    if (!hasShipmentIdentity || planningRow || parcelCarrier(record.shipmentNo)) return [];
 
-    // Prefer Delivery Expected when present, but most in-transit rows only ever get an ETA/ETD
-    // filled in (Delivery Expected is usually populated only once a shipment is close to or
-    // already received). Without this fallback, unfinished shipments with a real ETA but a
-    // blank Delivery Expected cell were silently dropped, which emptied out the Inbound
-    // Schedule and Import Schedules table.
-    const dated = firstDatedValue(record.deliveryExpected, record.eta, record.etd);
+    // Import Schedule is authoritative from IMPORTS column O (ETA) only.
+    const dated = firstDatedValue(record.eta);
     if (!dated) return [];
-    const date = dated?.date ?? today;
+    const date = dated.date;
     const overdue = date.getTime() < today.getTime();
-    const eta = dated
-      ? `${dated.text}${overdue ? " · OVERDUE" : ""}`
-      : "ETA pending";
+    const eta = `${dated.text}${overdue ? " · OVERDUE" : ""}`;
     const mode = resolvedInboundMode(
       "",
       record.shipmentNo,
@@ -1187,6 +1180,7 @@ function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
       vessel: record.vessel,
       pod: /^OSL/i.test(record.shipmentNo) ? "LGB" : "LAX",
       eta,
+      deliveryExpected: record.deliveryExpected,
       isSmallParcel: false,
       shippingMethod: mode,
       sourceType: mode,
@@ -2388,10 +2382,37 @@ export default function Home() {
     [visibleItems],
   );
 
-  const inboundScheduleVisibleItems = useMemo(
-    () => inboundVisibleItems.filter((item) => !item.isSmallParcel),
-    [inboundVisibleItems],
-  );
+  const inboundScheduleVisibleItems = useMemo(() => {
+    const first = days[0].getTime();
+    const last = days[days.length - 1].getTime();
+    const needle = query.trim().toLowerCase();
+    return items.flatMap((item) => {
+      if (item.direction !== "inbound" || item.isSmallParcel) return [];
+      // Warehouse receiving appointments use IMPORTS column Q (Delivery Expected);
+      // the Import Schedule table independently uses column O (ETA).
+      const scheduled = firstDatedValue(item.deliveryExpected ?? "");
+      if (!scheduled) return [];
+      const stamp = new Date(
+        scheduled.date.getFullYear(),
+        scheduled.date.getMonth(),
+        scheduled.date.getDate(),
+      ).getTime();
+      if (stamp < first || stamp > last) return [];
+      if (!includeFinished && finished.has(item.status.toLowerCase())) return [];
+      if (needle && ![
+        item.title,
+        item.reference,
+        item.invoice,
+        item.shipmentNo,
+        item.container,
+        item.mbl,
+        item.hbl,
+        item.vessel,
+        item.status,
+      ].join(" ").toLowerCase().includes(needle)) return [];
+      return [{ ...item, date: scheduled.date, dateText: scheduled.text }];
+    });
+  }, [days, includeFinished, items, query]);
 
   const inboundParcelVisibleItems = useMemo(
     () => inboundVisibleItems.filter((item) => item.isSmallParcel),
