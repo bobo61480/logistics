@@ -71,6 +71,22 @@ describe("live dashboard style variants", () => {
     expect(source).toContain("shippingMethod: resolvedCarrier");
   });
 
+  test("outbound parcel cards use the customer while tracking is pending", () => {
+    const source = read("app/page.tsx");
+    expect(source).toContain('tracking || item.customer || item.title || "Customer pending"');
+    expect(source).not.toContain('tracking || "Tracking pending"');
+  });
+
+  test("outbound schedule consumes hourly auto-tracking status markers", () => {
+    const page = read("app/page.tsx");
+    const tracker = read("google-apps-script/InventorySync.gs");
+    expect(page).toContain("const autoTrackedStatus");
+    expect(tracker).toContain("function trackOutboundShipmentStatus_");
+    expect(tracker).toContain('workbook.getSheetByName("Stylekorean")');
+    expect(tracker).toContain("outboundTrackingCandidate_");
+    expect(tracker).toContain("lookupParcelTrackingUpdate_");
+  });
+
   test("both approved visual themes are present", () => {
     const css = read("app/style-variants.module.css");
     expect(css).toContain("--variant-mint");
