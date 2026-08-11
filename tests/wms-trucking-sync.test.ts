@@ -7,6 +7,12 @@ type WmsHelpers = {
   isWmsFreightMethod_: (value: unknown) => boolean;
   isWmsActiveStatus_: (value: unknown) => boolean;
   mergeWmsInvoices_: (existing: string[], additions: string[]) => string[];
+  buildWmsLedgerEntries_: (rows: unknown[][]) => Array<Record<string, unknown>>;
+  recoverWmsLedgerInvoices_: (
+    entries: Array<Record<string, unknown>>,
+    customer: string,
+    shipDate: string,
+  ) => string[];
   findCloseWmsParentRow_: (
     rows: Array<Record<string, unknown>>,
     customer: string,
@@ -41,7 +47,8 @@ function loadWmsHelpers(): WmsHelpers {
   vm.runInContext(
     `${source}\n;globalThis.__wms = {` +
       "canonicalWmsCustomer_,isWmsFreightMethod_,isWmsActiveStatus_," +
-      "mergeWmsInvoices_,findCloseWmsParentRow_,normalizeWmsShipDate_," +
+      "mergeWmsInvoices_,buildWmsLedgerEntries_,recoverWmsLedgerInvoices_," +
+      "findCloseWmsParentRow_,normalizeWmsShipDate_," +
       "earliestWmsSourceDateForInvoices_};",
     context,
   );
@@ -72,6 +79,30 @@ describe("WMS trucking synchronization safeguards", () => {
     expect(
       helpers.mergeWmsInvoices_(["IN00463065", "IN00463818"], ["IN00463818", "IN00464415"]),
     ).toEqual(["IN00463065", "IN00463818", "IN00464415"]);
+  });
+
+  it("rehydrates lost invoice tokens from the processed ledger", () => {
+    const entries = helpers.buildWmsLedgerEntries_([
+      ["SOURCE ROW", "ENTRY DATE", "CUSTOMER", "METHOD", "INVOICE", "SHIP DATE"],
+      ["3771", "08/07/2026", "MEGA MART (PALO ALTO)", "TRUCKING", "IN00463065", "46244"],
+      ["3794", "08/08/2026", "MEGA MART (JAGALCHI)", "TRUCKING", "IN00463486", "08/11/2026"],
+      ["3817", "08/09/2026", "MEGA MART (FREMONT)", "TRUCKING", "IN00463818", "08/12/2026"],
+      ["100", "08/01/2026", "MEGA MART", "TRUCKING", "TOO_OLD", "08/01/2026"],
+      ["101", "08/09/2026", "OTHER CUSTOMER", "TRUCKING", "OTHER", "08/12/2026"],
+    ]);
+
+    expect(helpers.recoverWmsLedgerInvoices_(entries, "MEGA MART", "08/12/2026")).toEqual([
+      "IN00463065",
+      "IN00463486",
+      "IN00463818",
+    ]);
+  });
+
+  it("decodes unformatted Google Sheets date serials from the ledger", () => {
+    expect(helpers.normalizeWmsShipDate_("46244")).toEqual({
+      key: "2026-08-10",
+      display: "08/10/2026",
+    });
   });
 
   it("selects only an active same-customer parent within three calendar days", () => {
