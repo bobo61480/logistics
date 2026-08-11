@@ -51,12 +51,27 @@ jobs:
           grep -q 'FULFILLMENT · TK' out/index.html
           grep -q 'AUTO SYNC 15 MIN' out/index.html
 
-      - name: Deploy canonical Worker
+      - name: Deploy canonical Worker (CLOUDFLARE_* secrets)
+        if: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy --config wrangler.toml
+
+      - name: Deploy canonical Worker (CF_* secrets fallback)
+        if: ${{ (secrets.CLOUDFLARE_API_TOKEN == '' || secrets.CLOUDFLARE_ACCOUNT_ID == '') && secrets.CF_API_TOKEN != '' && secrets.CF_ACCOUNT_ID != '' }}
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
+          command: deploy --config wrangler.toml
+
+      - name: Fail when Cloudflare secrets are missing
+        if: ${{ (secrets.CLOUDFLARE_API_TOKEN == '' || secrets.CLOUDFLARE_ACCOUNT_ID == '') && (secrets.CF_API_TOKEN == '' || secrets.CF_ACCOUNT_ID == '') }}
+        run: |
+          echo "::error::Missing Cloudflare deploy credentials. Configure either CLOUDFLARE_API_TOKEN+CLOUDFLARE_ACCOUNT_ID or CF_API_TOKEN+CF_ACCOUNT_ID."
+          exit 1
 
       - name: Verify live custom domain
         run: |
