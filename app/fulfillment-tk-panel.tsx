@@ -51,6 +51,24 @@ function formatFulfillmentValue(key: string, value: string) {
   }).format(numeric);
 }
 
+function fulfillmentCellClass(key: string, rawValue: string) {
+  const normalizedKey = key.toLowerCase();
+  const normalizedValue = rawValue.trim().toLowerCase();
+  const classes = ["fulfillment-tk-cell"];
+
+  if (normalizedKey === "method") classes.push("fulfillment-tk-method");
+  if (/status|inspection|inspend/.test(normalizedKey)) {
+    classes.push("fulfillment-tk-status");
+    if (/deliver|complete|approved|pass|ready/.test(normalizedValue)) classes.push("is-success");
+    else if (/delay|issue|fail|hold|error/.test(normalizedValue)) classes.push("is-danger");
+    else if (/pending|wait/.test(normalizedValue)) classes.push("is-warning");
+    else if (/transit|shipping|active|progress/.test(normalizedValue)) classes.push("is-active");
+    else if (/pick/.test(normalizedValue)) classes.push("is-picked");
+  }
+  if (isMoneyField(key)) classes.push("fulfillment-tk-money");
+  return classes.join(" ");
+}
+
 function titleFor(key: string) {
   return key
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
@@ -120,7 +138,14 @@ export function FulfillmentTkPanel({
         />
         <span>
           Showing {filtered.length.toLocaleString()} of {tkJobs.length.toLocaleString()} TK rows ·{" "}
-          <a href={SOURCE_URL} target="_blank" rel="noreferrer">Open source ↗</a>
+          <a
+            className="fulfillment-tk-source-link"
+            href={SOURCE_URL}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Open source ↗
+          </a>
         </span>
       </div>
 
@@ -143,7 +168,15 @@ export function FulfillmentTkPanel({
                 {columns.map((key) => {
                   const rawValue = clean(job[key]);
                   const value = formatFulfillmentValue(key, rawValue);
-                  return <td key={key} title={value || undefined}>{value || "—"}</td>;
+                  return (
+                    <td
+                      className={fulfillmentCellClass(key, rawValue)}
+                      key={key}
+                      title={value || undefined}
+                    >
+                      {value || "—"}
+                    </td>
+                  );
                 })}
               </tr>
             ))}
