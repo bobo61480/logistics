@@ -1,0 +1,47 @@
+name: One-time remove obsolete dependencies
+
+on:
+  push:
+    branches: [fix/remove-obsolete-dependencies-20260812]
+    paths:
+      - '.github/workflows/remove-obsolete-dependencies-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/remove-obsolete-dependencies-20260812
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          cache: npm
+      - name: Remove unused legacy packages and update lockfile
+        run: npm uninstall build typecheck --package-lock-only
+      - name: Install clean dependency graph
+        run: npm ci
+      - name: Require clean audit
+        run: npm audit --audit-level=moderate
+      - name: Unit tests
+        run: npm test
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Production build
+        run: npm run build
+      - name: Commit package cleanup to branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "StyleKorean Control Tower Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add package.json package-lock.json
+          if git diff --cached --quiet; then
+            echo "Dependency graph already clean."
+            exit 0
+          fi
+          git commit -m "fix: remove obsolete vulnerable dependencies"
+          git push origin HEAD:fix/remove-obsolete-dependencies-20260812
