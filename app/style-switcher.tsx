@@ -5,7 +5,9 @@ import styles from "./style-variants.module.css";
 
 const options = [
   { href: "/", label: "Original" },
-  { href: "/light", label: "Light" },
+  { href: "/light-skin", label: "Light Skin" },
+  { href: "/light", label: "Light Control Tower" },
+  { href: "/light-full", label: "Light Full" },
   { href: "/fulfillment-style", label: "Fulfillment" },
 ] as const;
 
@@ -14,6 +16,7 @@ export function StyleSwitcher() {
 
   return (
     <nav className={styles.variantNav} aria-label="Dashboard appearance">
+      <span className={styles.variantNavLabel}>APPEARANCE</span>
       {options.map((option) => {
         const active = pathname === option.href;
         return (
@@ -21,7 +24,7 @@ export function StyleSwitcher() {
             aria-current={active ? "page" : undefined}
             href={option.href}
             key={option.href}
-            style={active ? { fontWeight: 900, boxShadow: "inset 0 -2px 0 currentColor" } : undefined}
+            className={active ? styles.variantActive : undefined}
           >
             {option.label}
           </a>
