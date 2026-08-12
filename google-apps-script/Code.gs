@@ -399,18 +399,9 @@ function scanAndImportWmsTruckingOrders() {
       if (targetMap[name] === undefined) throw new Error("WH Trucking Request is missing header: " + name);
     });
 
-    // The processed ledger is append-only history. It lets this sync recover
-    // invoice tokens if another job or a stale deployment replaces a combined
-    // destination cell with only the latest WMS group.
-    const ledgerSheet = targetSpreadsheet.getSheetByName(WMS_TRUCKING_LEDGER_SHEET);
-    const ledgerEntries = ledgerSheet
-      ? buildWmsLedgerEntries_(ledgerSheet.getDataRange().getDisplayValues())
-      : [];
-
-    const existingByKey = new Map();
+     const existingByKey = new Map();
     const existingByInvoice = new Map();
-    const existingRows = [];
-    let lastBusinessRow = targetHeader.rowIndex + 1;
+     let lastBusinessRow = targetHeader.rowIndex + 1;
 
     for (let r = targetHeader.rowIndex + 1; r < targetData.length; r++) {
       const row = targetData[r];
@@ -431,8 +422,7 @@ function scanAndImportWmsTruckingOrders() {
           invoices: splitWmsInvoices_(invoiceCell),
           active: isWmsActiveStatus_(status)
         };
-        existingRows.push(rowInfo);
-        if (rowInfo.active) existingByKey.set(customerKey + "___" + dateInfo.key, r + 1);
+         if (rowInfo.active) existingByKey.set(customerKey + "___" + dateInfo.key, r + 1);
       }
       splitWmsInvoices_(invoiceCell).forEach(function (invoice) {
         existingByInvoice.set(invoice, r + 1);
@@ -451,7 +441,9 @@ function scanAndImportWmsTruckingOrders() {
         rowNumber = existingByInvoice.get(group.invoices[i]);
       }
       if (!rowNumber) {
-        rowNumber = existingByKey.get(key) || findCloseWmsParentRow_(existingRows, group.customer, group.shipDate);
+        // Only an exact customer + ship-date match may reuse a row. Invoices
+        // scheduled on nearby dates are separate shipments and must stay separate.
+        rowNumber = existingByKey.get(key);
       }
 
       const totalAmount = group.amounts.reduce(function (sum, value) { return sum + value; }, 0);
@@ -459,15 +451,7 @@ function scanAndImportWmsTruckingOrders() {
       if (rowNumber) {
         const current = targetSheet.getRange(rowNumber, 1, 1, width).getValues()[0];
         const currentInvoices = splitWmsInvoices_(current[targetMap["INVOICE NO."]]);
-        const ledgerInvoices = recoverWmsLedgerInvoices_(
-          ledgerEntries,
-          current[targetMap["CUSTOMER"]] || group.customer,
-          current[targetMap["SHIP DATE"]] || group.shipDate
-        );
-        const mergedInvoices = mergeWmsInvoices_(
-          mergeWmsInvoices_(currentInvoices, ledgerInvoices),
-          group.invoices
-        );
+        const mergedInvoices = mergeWmsInvoices_(currentInvoices, group.invoices);
         const shipDate = earliestWmsSourceDateForInvoices_(mergedInvoices, sourceByInvoice, current[targetMap["SHIP DATE"]]);
         const currentCustomer = String(current[targetMap["CUSTOMER"]] || "").trim();
         const canonicalCurrent = canonicalWmsCustomer_(currentCustomer || group.customer);
@@ -486,14 +470,7 @@ function scanAndImportWmsTruckingOrders() {
         }
         if (changed) updated++;
 
-        const rowInfo = existingRows.find(function (item) { return item.rowNumber === rowNumber; });
-        if (rowInfo) {
-          rowInfo.customer = canonicalCurrent;
-          rowInfo.customerKey = normalizeWmsCustomerKey_(canonicalCurrent);
-          rowInfo.dateInfo = normalizeWmsShipDate_(shipDate);
-          rowInfo.invoices = mergedInvoices;
-        }
-        mergedInvoices.forEach(function (invoice) { existingByInvoice.set(invoice, rowNumber); });
+         mergedInvoices.forEach(function (invoice) { existingByInvoice.set(invoice, rowNumber); });
       } else {
         const invoiceText = group.invoices.join("\n");
         const row = new Array(width).fill("");
@@ -602,70 +579,11 @@ function isWmsActiveStatus_(value) {
   return ["SHIPPED", "DELIVERED", "RECEIVED", "COMPLETED", "CANCELLED"].indexOf(status) === -1;
 }
 
-function wmsDateDistanceDays_(left, right) {
-  const a = normalizeWmsShipDate_(left).key;
-  const b = normalizeWmsShipDate_(right).key;
-  const aMs = Date.parse(a + "T00:00:00Z");
-  const bMs = Date.parse(b + "T00:00:00Z");
-  if (isNaN(aMs) || isNaN(bMs)) return Infinity;
-  return Math.abs(aMs - bMs) / 86400000;
-}
-
-function findCloseWmsParentRow_(rows, customer, shipDate) {
-  const customerKey = normalizeWmsCustomerKey_(canonicalWmsCustomer_(customer));
-  let best = null;
-  rows.forEach(function (row) {
-    if (!row.active || row.customerKey !== customerKey) return;
-    const distance = wmsDateDistanceDays_(row.dateInfo.display, shipDate);
-    if (distance > 3) return;
-    if (!best || distance < best.distance ||
-        (distance === best.distance && row.dateInfo.key < best.dateKey)) {
-      best = { rowNumber: row.rowNumber, distance: distance, dateKey: row.dateInfo.key };
-    }
-  });
-  return best ? best.rowNumber : null;
-}
-
 function mergeWmsInvoices_(existing, additions) {
   const result = [];
   [].concat(existing || [], additions || []).forEach(function (invoice) {
     const clean = String(invoice || "").trim().toUpperCase();
     if (clean && result.indexOf(clean) === -1) result.push(clean);
-  });
-  return result;
-}
-
-function buildWmsLedgerEntries_(rows) {
-  if (!rows || !rows.length) return [];
-  const map = headerMap_(rows[0]);
-  if (map["CUSTOMER"] === undefined || map["INVOICE"] === undefined || map["SHIP DATE"] === undefined) {
-    return [];
-  }
-
-  const entries = [];
-  for (let r = 1; r < rows.length; r++) {
-    const customer = String(rows[r][map["CUSTOMER"]] || "").trim();
-    const invoice = String(rows[r][map["INVOICE"]] || "").trim().toUpperCase();
-    const shipDate = String(rows[r][map["SHIP DATE"]] || "").trim();
-    if (!customer || !invoice || !shipDate) continue;
-    entries.push({
-      customerKey: normalizeWmsCustomerKey_(canonicalWmsCustomer_(customer)),
-      invoice: invoice,
-      dateInfo: normalizeWmsShipDate_(shipDate)
-    });
-  }
-  return entries;
-}
-
-function recoverWmsLedgerInvoices_(entries, customer, shipDate) {
-  const customerKey = normalizeWmsCustomerKey_(canonicalWmsCustomer_(customer));
-  if (!customerKey || !shipDate) return [];
-  const result = [];
-  (entries || []).forEach(function (entry) {
-    if (!entry || entry.customerKey !== customerKey || !entry.dateInfo) return;
-    if (wmsDateDistanceDays_(entry.dateInfo.display, shipDate) > 3) return;
-    const invoice = String(entry.invoice || "").trim().toUpperCase();
-    if (invoice && result.indexOf(invoice) === -1) result.push(invoice);
   });
   return result;
 }
