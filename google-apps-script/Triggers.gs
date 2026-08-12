@@ -48,3 +48,13 @@ function setupAllTriggers() {
   Logger.log("Provisioned " + TRIGGER_PLAN.length + " canonical triggers.");
   return TRIGGER_PLAN;
 }
+
+/**
+ * Legacy safety shim only. This handler is intentionally absent from
+ * TRIGGER_PLAN, but retaining the function prevents a stale installed trigger
+ * from failing before setupAllTriggers() has a chance to delete it.
+ */
+function requestSiteRedeploy() {
+  Logger.log("requestSiteRedeploy is obsolete; live operational data no longer requires a code redeploy.");
+  return { skipped: "obsolete" };
+}
