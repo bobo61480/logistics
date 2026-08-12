@@ -61,7 +61,8 @@ jobs:
             suffix="?release=${GITHUB_SHA}&attempt=${attempt}"
             failed=0
             for route in "/" "/light-skin" "/light" "/light-full" "/fulfillment-style"; do
-              if ! curl -fsSL --max-time 30 "https://stylekorean.dpdns.org${route}${suffix}" -o "/tmp/live-$(echo "$route" | tr '/' '_' | sed 's/^_$/root/').html"; then
+              safe_name="$(echo "$route" | tr '/' '_' | sed 's/^_$/root/')"
+              if ! curl -fsSL --max-time 30 "https://stylekorean.dpdns.org${route}${suffix}" -o "/tmp/live-${safe_name}.html"; then
                 echo "Route failed on attempt ${attempt}: ${route}"
                 failed=1
                 break
@@ -74,23 +75,8 @@ jobs:
               && grep -Fq '"ok":true' /tmp/live-health.json \
               && grep -Fq '"ok":true' /tmp/live-snapshot.json \
               && grep -Fq 'sourceHealth' /tmp/live-snapshot.json \
-              && grep -Fq 'generatedAt' /tmp/live-snapshot.json; then
-              node - <<'NODE'
-            const fs = require('fs');
-            const health = JSON.parse(fs.readFileSync('/tmp/live-health.json', 'utf8'));
-            const snapshot = JSON.parse(fs.readFileSync('/tmp/live-snapshot.json', 'utf8'));
-            if (health.ok !== true || snapshot.ok !== true) process.exit(1);
-            if (!Array.isArray(snapshot.sourceHealth)) process.exit(1);
-            const core = new Map(snapshot.sourceHealth.map((item) => [item.name, item]));
-            for (const name of ['IMPORTS', 'Outbound Shipping Schedule']) {
-              if (!core.get(name)?.ok) {
-                console.error(`Core source unhealthy: ${name}`);
-                process.exit(1);
-              }
-            }
-            if (Number.isNaN(Date.parse(snapshot.generatedAt))) process.exit(1);
-            console.log(`Live Worker ${health.version}; snapshot ${snapshot.generatedAt}; ${snapshot.sourceHealth.length} source checks.`);
-            NODE
+              && grep -Fq 'generatedAt' /tmp/live-snapshot.json \
+              && node -e 'const fs=require("fs"); const health=JSON.parse(fs.readFileSync("/tmp/live-health.json","utf8")); const snapshot=JSON.parse(fs.readFileSync("/tmp/live-snapshot.json","utf8")); if(health.ok!==true||snapshot.ok!==true||!Array.isArray(snapshot.sourceHealth)||Number.isNaN(Date.parse(snapshot.generatedAt))) process.exit(1); const core=new Map(snapshot.sourceHealth.map(i=>[i.name,i])); for(const name of ["IMPORTS","Outbound Shipping Schedule"]){if(!core.get(name)?.ok){console.error(`Core source unhealthy: ${name}`);process.exit(1)}} console.log(`Live Worker ${health.version}; snapshot ${snapshot.generatedAt}; ${snapshot.sourceHealth.length} source checks.`);'; then
               echo "Live custom domain, all five appearance routes, health API, and snapshot API verified."
               exit 0
             fi
