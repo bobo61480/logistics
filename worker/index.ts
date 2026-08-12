@@ -1,3 +1,4 @@
+import { computeKpisFromRows } from "../lib/kpis/compute";
 import { fetchOperationalSources } from "./sources";
 import { handleStatusCommand } from "./status-command";
 
@@ -6,7 +7,7 @@ export type WorkerEnv = {
   APPS_SCRIPT_WRITE_URL?: string;
 };
 
-const WORKER_VERSION = "2026-08-12-worker-v1";
+const WORKER_VERSION = "2026-08-12-worker-v2-kpi-snapshot";
 
 function json(value: unknown, status = 200) {
   return Response.json(value, {
@@ -23,25 +24,25 @@ async function handleSnapshot() {
   const snapshot = await fetchOperationalSources();
   const coreOk = Boolean(snapshot.sources.imports && snapshot.sources.outbound);
   if (!coreOk) {
-    return json(
-      {
-        ok: false,
-        generatedAt,
-        error: "Core Logistics Master sources are unavailable",
-        sourceHealth: snapshot.sourceHealth,
-      },
-      503,
-    );
+    return json({ ok: false, generatedAt, error: "Core Logistics Master sources are unavailable", sourceHealth: snapshot.sourceHealth }, 503);
   }
+
+  let kpis = null;
+  let kpiError = "";
+  try {
+    kpis = computeKpisFromRows(snapshot.kpiRows);
+  } catch (error) {
+    kpiError = error instanceof Error ? error.message : String(error);
+  }
+
   return json({
     ok: true,
     generatedAt,
     version: WORKER_VERSION,
     sourceHealth: snapshot.sourceHealth,
     sources: snapshot.sources,
-    // The existing client computes live KPIs from source workbooks when this is null.
-    // A later hybrid-read-model wave moves the same pure calculation server-side.
-    kpis: null,
+    kpis,
+    kpiError: kpiError || undefined,
   });
 }
 
