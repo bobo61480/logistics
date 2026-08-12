@@ -17,12 +17,12 @@ var GMAIL_PIPELINE_TRIGGER_SYNC_VERSION = "2026-08-10-gmail-v2";
 // Deployment marker: ensures the import-boundary/hourly-parcel Apps Script
 // changes are pushed to the live /exec deployment after CI change detection
 // was corrected on 2026-08-10.
-var APPS_SCRIPT_DEPLOY_SYNC_VERSION = "2026-08-11-outbound-tracking-v1";
+var APPS_SCRIPT_DEPLOY_SYNC_VERSION = "2026-08-11-wms-trucking-v2";
 
 var TRIGGER_PLAN = [
   { handler: "processLogisticsEmailsV2", minutes: 15 },          // Gmail ingestion
   { handler: "processApprovedPending", minutes: 30 },          // commit human-approved rows
-  { handler: "scanAndImportWmsTruckingOrders", minutes: 15 },  // existing WMS trucking scanner (Code.gs)
+  { handler: "scanAndImportWmsTruckingOrdersV2", minutes: 15 },// exact-date WMS trucking scanner with Aug-2026 cutoff
   { handler: "trackSmallParcelsStatusUpdates", hours: 1 },     // all parcel/PRO tracking + inbound/outbound write-back
   { handler: "syncInventoryModule", hours: 1 },                // inventory + KPI rebuild
   { handler: "enrichImportsFromContainerLog", daily: 6 },      // 6 AM daily
