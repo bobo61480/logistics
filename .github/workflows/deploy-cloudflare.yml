@@ -41,7 +41,11 @@ jobs:
           test -f out/index.html
           grep -q 'FULFILLMENT · TK' out/index.html
           grep -q 'Fulfillment TK Orders' out/index.html
-          grep -q 'AUTO SYNC 1 MIN' out/index.html
+          grep -q 'AUTO SYNC 30 MIN' out/index.html
+          grep -q 'Appearance' out/index.html
+          grep -q 'Original' out/index.html
+          grep -q 'Light' out/index.html
+          grep -q 'Fulfillment' out/index.html
 
       - name: Deploy canonical Worker
         uses: cloudflare/wrangler-action@v3
@@ -59,11 +63,15 @@ jobs:
             if curl -fsSL --max-time 30 "$url" -o /tmp/live.html \
               && grep -q 'FULFILLMENT · TK' /tmp/live.html \
               && grep -q 'Fulfillment TK Orders' /tmp/live.html \
-              && grep -q 'AUTO SYNC 1 MIN' /tmp/live.html; then
-              echo "Live custom domain is serving the source-synchronized logistics build."
+              && grep -q 'AUTO SYNC 30 MIN' /tmp/live.html \
+              && grep -q 'Appearance' /tmp/live.html \
+              && grep -q 'Original' /tmp/live.html \
+              && grep -q 'Light' /tmp/live.html \
+              && grep -q 'Fulfillment' /tmp/live.html; then
+              echo "Live custom domain is serving the source-synchronized logistics build with the three-style appearance switcher."
               exit 0
             fi
             sleep 10
           done
-          echo "Live site did not expose one-minute source-sync markers after deployment."
+          echo "Live site did not expose the current source-sync and appearance-switcher markers after deployment."
           exit 1
