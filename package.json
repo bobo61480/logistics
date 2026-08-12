@@ -16,11 +16,9 @@
     "verify:production": "node scripts/verify-production.mjs"
   },
   "dependencies": {
-    "build": "^0.1.4",
     "next": "^16.3.0",
     "react": "19.2.6",
     "react-dom": "19.2.6",
-    "typecheck": "^0.1.2",
     "wrangler": "^4.120.1"
   },
   "devDependencies": {
