@@ -24,10 +24,11 @@ describe("live dashboard style variants", () => {
     const switcher = read("app/style-switcher.tsx");
     expect(layout).toContain('import { StyleSwitcher } from "./style-switcher"');
     expect(layout).toContain("<StyleSwitcher />");
-    expect(switcher).toContain('href="/"');
-    expect(switcher).toContain('href="/light"');
-    expect(switcher).toContain('href="/fulfillment-style"');
+    expect(switcher).toContain('{ href: "/", label: "Original" }');
+    expect(switcher).toContain('{ href: "/light", label: "Light" }');
+    expect(switcher).toContain('{ href: "/fulfillment-style", label: "Fulfillment" }');
     expect(switcher).toContain("usePathname");
+    expect(switcher).toContain("aria-current={active ? \"page\" : undefined}");
   });
 
   test("variant CSS places TK after the outbound trucking board", () => {
