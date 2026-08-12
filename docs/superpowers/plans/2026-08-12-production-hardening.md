@@ -20,11 +20,10 @@
 ### Task 1: Strengthen PR CI
 
 **Files:**
-- Modify/create: `.github/workflows/ci-pr.yml`
+- Modify: `.github/workflows/ci-pr.yml`
 
-- [ ] Run `npm ci`, `npm test`, `npm run typecheck`, `npm run build` on relevant application/Apps Script/test/config changes.
-- [ ] Run Playwright smoke tests when build/runtime supports it.
-- [ ] Cache npm through `actions/setup-node`.
+- [ ] Run `npm ci`, `npm test`, `npm run typecheck`, `npm run build`, and `npm run test:e2e` for application/Worker/Apps Script/test/config changes.
+- [ ] Cache npm through `actions/setup-node` with Node `22.13.0`.
 - [ ] Commit `ci: verify full control tower changes`.
 
 ### Task 2: Strengthen production Worker deploy
@@ -34,29 +33,31 @@
 
 - [ ] Use `npm ci` rather than non-lockfile install.
 - [ ] Run unit, type, build before deployment.
-- [ ] Apply D1 migrations only when the D1 binding/database is configured.
+- [ ] Apply D1 migrations only when a real D1 binding/database id is present in `wrangler.toml`.
 - [ ] Deploy Worker/static assets.
 - [ ] Probe `/`, `/light`, `/light-skin`, `/light-full`, `/fulfillment-style`.
 - [ ] Probe `/api/logistics/health` and `/api/logistics/snapshot` and require JSON `ok: true` for snapshot core sources.
-- [ ] Keep retries bounded and log response snippets on failure.
+- [ ] Retry live probes at most six times with ten seconds between attempts and print the failing response status/body prefix before exiting non-zero.
 - [ ] Commit `ci: verify live control tower behavior`.
 
 ### Task 3: Strengthen Apps Script deployment verification
 
 **Files:**
 - Modify: `.github/workflows/deploy-apps-script.yml`
+- Modify: the Apps Script web entry file containing `doGet`/operation routing.
 
 - [ ] Keep clasp push/deploy.
 - [ ] Verify expected deployment ID remains registered.
-- [ ] Add a non-mutating GET/health operation to Apps Script if absent, returning version markers for Gmail pipeline, trigger plan, WMS importer, and status vocabulary.
-- [ ] Curl that health operation after deployment and verify current version markers.
+- [ ] Add a non-mutating operation `op=health` returning JSON fields `ok`, `gmailPipelineVersion`, `appsScriptDeployVersion`, `wmsTruckingVersion`, and `statusVocabularyVersion`.
+- [ ] Curl the deployed `/exec?op=health` URL after deployment and require `ok: true` plus the current version strings.
 - [ ] Commit `ci: verify live Apps Script version`.
 
 ### Task 4: Add production smoke script
 
 **Files:**
 - Create: `scripts/verify-production.mjs`
-- Add npm script: `verify:production`.
+- Modify: `package.json`
+- Create: `tests/verify-production-script.test.ts`
 
 **Interface:**
 
@@ -67,13 +68,14 @@ const base = process.env.PRODUCTION_BASE_URL || "https://stylekorean.dpdns.org";
 Checks:
 
 - required routes HTTP 200;
-- snapshot JSON ok;
-- sourceHealth contains core sources;
-- generatedAt parseable;
-- HTML contains the application title/style switcher shell;
-- no route serves an obvious deployment error page.
+- snapshot JSON `ok === true`;
+- `sourceHealth` contains IMPORTS and outbound core sources;
+- `generatedAt` parses as a valid date;
+- root HTML contains `StyleKorean` and the appearance navigation shell;
+- no route body contains `Application error`, `Internal Server Error`, or Cloudflare deployment error markers.
 
-- [ ] Add script-level tests where practical.
+- [ ] Add source-level test that the script contains all required routes and API assertions.
+- [ ] Add `"verify:production": "node scripts/verify-production.mjs"` to package scripts.
 - [ ] Commit `test: add production control tower smoke verifier`.
 
 ### Task 5: Add operational post-deploy audit
@@ -82,20 +84,20 @@ Checks:
 - Create: `docs/operations/control-tower-verification.md`
 
 - [ ] Record exact checks for Gmail error-loop cessation, WMS trucking idempotency, import ETA visibility, carrier inference, Fulfillment TK, inventory, KPIs, and review queue.
-- [ ] Include rollback commands/process by backup Git ref and Drive workbook copy.
+- [ ] Include rollback process by backup Git ref and Drive workbook copy.
 - [ ] Commit `docs: add control tower production verification runbook`.
 
 ### Task 6: Final live verification
 
 - [ ] Confirm Cloudflare deploy job succeeded for the exact final main SHA.
-- [ ] Run production smoke verifier.
+- [ ] Run `npm run verify:production` in CI or an environment with network access.
 - [ ] Read live `PIPELINE LOG` after the final scheduled Gmail cycle and confirm the known AB221 validation error no longer increases.
 - [ ] Search live `WH Trucking Request` and confirm the two Korheim invoices are separated and stable after at least one importer interval.
-- [ ] Inspect live IMPORTS rows around current/future ETAs and verify later-than-08/14 shipments are visible through source logic.
+- [ ] Inspect live IMPORTS rows around current/future ETAs and verify later-than-08/14 shipments are represented by the source logic.
 - [ ] Verify a representative `1Z` parcel resolves to UPS.
 - [ ] Verify Fulfillment TK endpoint/card loads.
-- [ ] Verify inbound/stock inventory panels have source data or explicit healthy empty state.
-- [ ] Verify KPI snapshot returns numbers rather than transport error.
+- [ ] Verify inbound/stock inventory panels have source data or an explicit healthy empty state.
+- [ ] Verify KPI snapshot returns numeric KPI fields rather than a transport error.
 
 ### Task 7: Completion audit
 
@@ -108,7 +110,7 @@ Include:
 - Drive backup URL/title;
 - implementation PR/merge SHAs;
 - production deploy SHA/run;
-- test/type/build results;
+- test/type/build/E2E results;
 - Apps Script deployment result;
 - live source/automation verification timestamps;
 - D1 status (active or exact external provisioning blocker);
