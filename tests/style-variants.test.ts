@@ -21,6 +21,17 @@ describe("live dashboard style variants", () => {
     expect(source).toContain('href="/fulfillment-style"');
   });
 
+  test("canonical production page exposes the same three-way style switcher", () => {
+    const page = read("app/page.tsx");
+    const switcher = read("app/style-switcher.tsx");
+    expect(page).toContain('import { StyleSwitcher } from "./style-switcher"');
+    expect(page).toContain("<StyleSwitcher />");
+    expect(switcher).toContain('href="/"');
+    expect(switcher).toContain('href="/light"');
+    expect(switcher).toContain('href="/fulfillment-style"');
+    expect(switcher).toContain("usePathname");
+  });
+
   test("variant CSS places TK after the outbound trucking board", () => {
     const css = read("app/style-variants.module.css");
     expect(css).toContain("display: contents");
