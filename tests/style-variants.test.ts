@@ -9,16 +9,14 @@ describe("live dashboard style variants", () => {
   test.each([
     ["app/light/page.tsx", "styles.light"],
     ["app/fulfillment-style/page.tsx", "styles.fulfillment"],
-  ])("%s reuses the canonical live dashboard", (file, themeClass) => {
+  ])("%s reuses the canonical live dashboard without duplicating navigation", (file, themeClass) => {
     expect(fs.existsSync(path.join(root, file))).toBe(true);
     const source = read(file);
     expect(source).toContain('import Home from "../page"');
     expect(source).toContain('import styles from "../style-variants.module.css"');
     expect(source).toContain(themeClass);
     expect(source).toContain("<Home />");
-    expect(source).toContain('href="/"');
-    expect(source).toContain('href="/light"');
-    expect(source).toContain('href="/fulfillment-style"');
+    expect(source).not.toContain("function VariantNav");
   });
 
   test("canonical production page exposes the same three-way style switcher", () => {
