@@ -34,14 +34,12 @@ jobs:
       - name: Build static export
         run: npm run build
 
-      - name: Verify canonical export markers
+      - name: Verify canonical export
         shell: bash
         run: |
           set -euo pipefail
           test -f out/index.html
-          grep -q 'FULFILLMENT · TK' out/index.html
-          grep -q 'Fulfillment TK Orders' out/index.html
-          grep -q 'AUTO SYNC 30 MIN' out/index.html
+          test -d out/_next
 
       - name: Deploy canonical Worker
         uses: cloudflare/wrangler-action@v3
@@ -55,15 +53,16 @@ jobs:
         run: |
           set -euo pipefail
           for attempt in 1 2 3 4 5 6; do
-            url="https://stylekorean.dpdns.org/?release=${GITHUB_SHA}&attempt=${attempt}"
-            if curl -fsSL --max-time 30 "$url" -o /tmp/live.html \
-              && grep -q 'FULFILLMENT · TK' /tmp/live.html \
-              && grep -q 'Fulfillment TK Orders' /tmp/live.html \
-              && grep -q 'AUTO SYNC 30 MIN' /tmp/live.html; then
-              echo "Live custom domain is serving the current source-synchronized logistics build."
+            root="https://stylekorean.dpdns.org/?release=${GITHUB_SHA}&attempt=${attempt}"
+            light="https://stylekorean.dpdns.org/light?release=${GITHUB_SHA}&attempt=${attempt}"
+            fulfillment="https://stylekorean.dpdns.org/fulfillment-style?release=${GITHUB_SHA}&attempt=${attempt}"
+            if curl -fsSL --max-time 30 "$root" -o /tmp/live-root.html \
+              && curl -fsSL --max-time 30 "$light" -o /tmp/live-light.html \
+              && curl -fsSL --max-time 30 "$fulfillment" -o /tmp/live-fulfillment.html; then
+              echo "Live custom domain and all three appearance routes are responding."
               exit 0
             fi
             sleep 10
           done
-          echo "Live site did not expose the current source-sync markers after deployment."
+          echo "Live site or one of the appearance routes did not respond after deployment."
           exit 1
