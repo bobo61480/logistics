@@ -1,3 +1,5 @@
+import { detectStrongCarrier, trackingCandidate } from "../lib/domain/carriers";
+
 const LOGISTICS_MASTER_ID = "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc";
 const NATIONAL_SHEET_ID = "12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8";
 const WMS_SHEET_ID = "14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I";
@@ -58,6 +60,36 @@ function parseGviz(text: string) {
   const payload = JSON.parse(text.slice(start, end + 1));
   if (!payload?.table) throw new Error("GViz response missing table");
   return payload.table;
+}
+
+/**
+ * IMPORTS has accumulated a few parcel rows where an ambiguous carrier number
+ * was written in column B while a strong tracking number landed in C or K.
+ * Normalize the read snapshot only; never rewrite the source sheet here.
+ */
+export function normalizeImportsParcelRows(rows: string[][]) {
+  const parcelsIndex = rows.findIndex(
+    (row) => String(row[0] ?? "").trim().toUpperCase() === "PARCELS",
+  );
+  if (parcelsIndex < 0) return rows.map((row) => row.slice());
+
+  return rows.map((sourceRow, index) => {
+    const row = sourceRow.slice();
+    if (index <= parcelsIndex) return row;
+
+    const columnB = row[1] ?? "";
+    const columnC = row[2] ?? "";
+    const columnK = row[10] ?? "";
+    const candidate = trackingCandidate(columnB, columnC, columnK);
+    const strongCarrier = detectStrongCarrier(candidate);
+    if (!strongCarrier) return row;
+
+    row[1] = candidate;
+    if (detectStrongCarrier(columnC) && candidate === String(columnC).replace(/[\s-]+/g, "").toUpperCase()) {
+      row[2] = "";
+    }
+    return row;
+  });
 }
 
 async function timedFetch(name: string, url: URL): Promise<SourceResult<string>> {
@@ -138,12 +170,14 @@ export async function fetchOperationalSources() {
       fetchGvizSource("SKW Stock", LOGISTICS_MASTER_ID, { sheet: "SKW_Stock", range: "A1:J2500", headers: 1 }),
     ]);
 
+  const normalizedImports = imports.data ? normalizeImportsParcelRows(imports.data) : null;
+
   return {
     sourceHealth: [imports, outbound, nationalOutbound, salesOutbound, inventoryDashboardTable, skwInboundTable, skwStockTable].map(
       (entry) => entry.health,
     ),
     sources: {
-      imports: imports.data,
+      imports: normalizedImports,
       outbound: outbound.data,
       nationalOutbound: nationalOutbound.data,
       salesOutbound: salesOutbound.data,
