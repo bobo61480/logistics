@@ -19,11 +19,11 @@ describe("live dashboard style variants", () => {
     expect(source).not.toContain("function VariantNav");
   });
 
-  test("canonical production page exposes the same three-way style switcher", () => {
-    const page = read("app/page.tsx");
+  test("root layout exposes the same three-way style switcher on every route", () => {
+    const layout = read("app/layout.tsx");
     const switcher = read("app/style-switcher.tsx");
-    expect(page).toContain('import { StyleSwitcher } from "./style-switcher"');
-    expect(page).toContain("<StyleSwitcher />");
+    expect(layout).toContain('import { StyleSwitcher } from "./style-switcher"');
+    expect(layout).toContain("<StyleSwitcher />");
     expect(switcher).toContain('href="/"');
     expect(switcher).toContain('href="/light"');
     expect(switcher).toContain('href="/fulfillment-style"');
