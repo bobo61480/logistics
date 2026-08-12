@@ -21,9 +21,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22.13.0
+          cache: npm
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci
 
       - name: Typecheck
         run: npm run typecheck
@@ -40,6 +41,10 @@ jobs:
           set -euo pipefail
           test -f out/index.html
           test -d out/_next
+          test -f out/light/index.html
+          test -f out/light-skin/index.html
+          test -f out/light-full/index.html
+          test -f out/fulfillment-style/index.html
 
       - name: Deploy canonical Worker
         uses: cloudflare/wrangler-action@v3
@@ -48,21 +53,38 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy --config wrangler.toml
 
-      - name: Verify live custom domain
+      - name: Verify live custom domain, appearance routes, and Worker APIs
         shell: bash
         run: |
           set -euo pipefail
           for attempt in 1 2 3 4 5 6; do
-            root="https://stylekorean.dpdns.org/?release=${GITHUB_SHA}&attempt=${attempt}"
-            light="https://stylekorean.dpdns.org/light?release=${GITHUB_SHA}&attempt=${attempt}"
-            fulfillment="https://stylekorean.dpdns.org/fulfillment-style?release=${GITHUB_SHA}&attempt=${attempt}"
-            if curl -fsSL --max-time 30 "$root" -o /tmp/live-root.html \
-              && curl -fsSL --max-time 30 "$light" -o /tmp/live-light.html \
-              && curl -fsSL --max-time 30 "$fulfillment" -o /tmp/live-fulfillment.html; then
-              echo "Live custom domain and all three appearance routes are responding."
+            suffix="?release=${GITHUB_SHA}&attempt=${attempt}"
+            failed=0
+            for route in "/" "/light-skin" "/light" "/light-full" "/fulfillment-style"; do
+              safe_name="$(echo "$route" | tr '/' '_' | sed 's/^_$/root/')"
+              if ! curl -fsSL --max-time 30 "https://stylekorean.dpdns.org${route}${suffix}" -o "/tmp/live-${safe_name}.html"; then
+                echo "Route failed on attempt ${attempt}: ${route}"
+                failed=1
+                break
+              fi
+            done
+
+            if [ "$failed" -eq 0 ] \
+              && curl -fsSL --max-time 30 "https://stylekorean.dpdns.org/api/logistics/health${suffix}" -o /tmp/live-health.json \
+              && curl -fsSL --max-time 60 "https://stylekorean.dpdns.org/api/logistics/snapshot${suffix}" -o /tmp/live-snapshot.json \
+              && grep -Fq '"ok":true' /tmp/live-health.json \
+              && grep -Fq '"ok":true' /tmp/live-snapshot.json \
+              && grep -Fq 'sourceHealth' /tmp/live-snapshot.json \
+              && grep -Fq 'generatedAt' /tmp/live-snapshot.json \
+              && node -e 'const fs=require("fs"); const health=JSON.parse(fs.readFileSync("/tmp/live-health.json","utf8")); const snapshot=JSON.parse(fs.readFileSync("/tmp/live-snapshot.json","utf8")); if(health.ok!==true||snapshot.ok!==true||!Array.isArray(snapshot.sourceHealth)||Number.isNaN(Date.parse(snapshot.generatedAt))) process.exit(1); const core=new Map(snapshot.sourceHealth.map(i=>[i.name,i])); for(const name of ["IMPORTS","Outbound Shipping Schedule"]){if(!core.get(name)?.ok){console.error(`Core source unhealthy: ${name}`);process.exit(1)}} console.log(`Live Worker ${health.version}; snapshot ${snapshot.generatedAt}; ${snapshot.sourceHealth.length} source checks.`);'; then
+              echo "Live custom domain, all five appearance routes, health API, and snapshot API verified."
               exit 0
             fi
+
+            echo "Live verification attempt ${attempt} failed."
+            test -f /tmp/live-health.json && head -c 800 /tmp/live-health.json || true
+            test -f /tmp/live-snapshot.json && head -c 1200 /tmp/live-snapshot.json || true
             sleep 10
           done
-          echo "Live site or one of the appearance routes did not respond after deployment."
+          echo "Production verification failed after six attempts."
           exit 1
