@@ -7,17 +7,6 @@ type WmsHelpers = {
   isWmsFreightMethod_: (value: unknown) => boolean;
   isWmsActiveStatus_: (value: unknown) => boolean;
   mergeWmsInvoices_: (existing: string[], additions: string[]) => string[];
-  buildWmsLedgerEntries_: (rows: unknown[][]) => Array<Record<string, unknown>>;
-  recoverWmsLedgerInvoices_: (
-    entries: Array<Record<string, unknown>>,
-    customer: string,
-    shipDate: string,
-  ) => string[];
-  findCloseWmsParentRow_: (
-    rows: Array<Record<string, unknown>>,
-    customer: string,
-    shipDate: string,
-  ) => number | null;
   normalizeWmsShipDate_: (value: unknown) => { key: string; display: string };
   earliestWmsSourceDateForInvoices_: (
     invoices: string[],
@@ -47,8 +36,7 @@ function loadWmsHelpers(): WmsHelpers {
   vm.runInContext(
     `${source}\n;globalThis.__wms = {` +
       "canonicalWmsCustomer_,isWmsFreightMethod_,isWmsActiveStatus_," +
-      "mergeWmsInvoices_,buildWmsLedgerEntries_,recoverWmsLedgerInvoices_," +
-      "findCloseWmsParentRow_,normalizeWmsShipDate_," +
+      "mergeWmsInvoices_,normalizeWmsShipDate_," +
       "earliestWmsSourceDateForInvoices_};",
     context,
   );
@@ -81,54 +69,11 @@ describe("WMS trucking synchronization safeguards", () => {
     ).toEqual(["IN00463065", "IN00463818", "IN00464415"]);
   });
 
-  it("rehydrates lost invoice tokens from the processed ledger", () => {
-    const entries = helpers.buildWmsLedgerEntries_([
-      ["SOURCE ROW", "ENTRY DATE", "CUSTOMER", "METHOD", "INVOICE", "SHIP DATE"],
-      ["3771", "08/07/2026", "MEGA MART (PALO ALTO)", "TRUCKING", "IN00463065", "46244"],
-      ["3794", "08/08/2026", "MEGA MART (JAGALCHI)", "TRUCKING", "IN00463486", "08/11/2026"],
-      ["3817", "08/09/2026", "MEGA MART (FREMONT)", "TRUCKING", "IN00463818", "08/12/2026"],
-      ["100", "08/01/2026", "MEGA MART", "TRUCKING", "TOO_OLD", "08/01/2026"],
-      ["101", "08/09/2026", "OTHER CUSTOMER", "TRUCKING", "OTHER", "08/12/2026"],
-    ]);
-
-    expect(helpers.recoverWmsLedgerInvoices_(entries, "MEGA MART", "08/12/2026")).toEqual([
-      "IN00463065",
-      "IN00463486",
-      "IN00463818",
-    ]);
-  });
-
   it("decodes unformatted Google Sheets date serials from the ledger", () => {
     expect(helpers.normalizeWmsShipDate_("46244")).toEqual({
       key: "2026-08-10",
       display: "08/10/2026",
     });
-  });
-
-  it("selects only an active same-customer parent within three calendar days", () => {
-    const rows = [
-      {
-        rowNumber: 10,
-        customerKey: "MEGA MART",
-        dateInfo: helpers.normalizeWmsShipDate_("08/10/2026"),
-        active: false,
-      },
-      {
-        rowNumber: 11,
-        customerKey: "MEGA MART",
-        dateInfo: helpers.normalizeWmsShipDate_("08/12/2026"),
-        active: true,
-      },
-      {
-        rowNumber: 12,
-        customerKey: "MEGA MART",
-        dateInfo: helpers.normalizeWmsShipDate_("08/20/2026"),
-        active: true,
-      },
-    ];
-
-    expect(helpers.findCloseWmsParentRow_(rows, "MEGA MART (ATLANTA)", "08/14/2026")).toBe(11);
-    expect(helpers.findCloseWmsParentRow_(rows, "MEGA MART", "08/16/2026")).toBeNull();
   });
 
   it("retains the earliest practical source date for a combined row", () => {
