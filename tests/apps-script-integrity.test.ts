@@ -32,6 +32,14 @@ describe("Apps Script production integrity", () => {
     expect(triggers).toContain('"processLogisticsEmailsV2"');
     expect(triggers).toContain('"scanAndImportWmsTruckingOrders"');
     expect(triggers).toContain('"scanAndImportWmsTruckingOrdersV2"');
+    expect(triggers).not.toContain('{ handler: "scanAndImportWmsTruckingOrdersV2"');
     expect(triggers).not.toContain('{ handler: "requestSiteRedeploy"');
+  });
+
+  it("keeps the WMS trucking importer disabled even if a stale trigger calls it", () => {
+    const importer = read("google-apps-script/WmsTruckingSyncV2.gs");
+
+    expect(importer).toContain("var WMS_TRUCKING_SYNC_ENABLED = false;");
+    expect(importer).toContain('return { ok: true, skipped: "disabled" };');
   });
 });

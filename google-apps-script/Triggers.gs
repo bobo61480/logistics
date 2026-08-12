@@ -14,7 +14,6 @@ var APPS_SCRIPT_DEPLOY_SYNC_VERSION = "2026-08-12-stabilization-v1";
 var TRIGGER_PLAN = [
   { handler: "processLogisticsEmailsV2", minutes: 15 },
   { handler: "processApprovedPending", minutes: 30 },
-  { handler: "scanAndImportWmsTruckingOrdersV2", minutes: 15 },
   { handler: "trackSmallParcelsStatusUpdates", hours: 1 },
   { handler: "syncInventoryModule", hours: 1 },
   { handler: "enrichImportsFromContainerLog", daily: 6 }

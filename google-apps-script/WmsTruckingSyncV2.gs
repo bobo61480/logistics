@@ -11,6 +11,7 @@
  */
 
 var WMS_TRUCKING_IMPORT_MIN_DATE = "2026-08-01";
+var WMS_TRUCKING_SYNC_ENABLED = false;
 
 function wmsImportEligible_(dateInfo) {
   var key = String(dateInfo && dateInfo.key || "").trim();
@@ -50,6 +51,11 @@ function filterWmsInvoicesForGroup_(invoices, groupKey, sourceByInvoice) {
 }
 
 function scanAndImportWmsTruckingOrdersV2() {
+  if (!WMS_TRUCKING_SYNC_ENABLED) {
+    Logger.log("WMS trucking sync is disabled.");
+    return { ok: true, skipped: "disabled" };
+  }
+
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) return { ok: false, error: "Lock timeout" };
 
