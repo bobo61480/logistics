@@ -8,23 +8,26 @@
  *  - support ZIP bundles and use Drive REST conversion as the XLSX/PDF fallback;
  *  - update an existing source row by strong identifiers before applying append validation;
  *  - insert new inbound rows immediately above the literal SCHEDULING marker;
- *  - never silently mark an unsupported/empty extraction as processed.
+ *  - never silently mark an unsupported/empty extraction as processed;
+ *  - canonicalize statuses before strict Sheets validation and bound retries.
  */
 
 /* eslint-disable no-unused-vars */
 
-var GMAIL_PIPELINE_V2_VERSION = "2026-08-11-v3-import-document-folders";
+var GMAIL_PIPELINE_V2_VERSION = "2026-08-12-v4-status-retry-stabilization";
 var GMAIL_V2_LOOKBACK_DAYS = 4;
 var GMAIL_V2_MAX_THREADS = 12;
 var GMAIL_V2_RUNTIME_BUDGET_MS = 210000;
 var GMAIL_V2_SEEN_PREFIX = "GMAIL_V2_SEEN_";
+var GMAIL_V2_ATTEMPT_PREFIX = "GMAIL_V2_ATTEMPT_";
+var GMAIL_V2_RETRY_AT_PREFIX = "GMAIL_V2_RETRY_AT_";
+var GMAIL_V2_MAX_TRANSIENT_ATTEMPTS = 4;
 
 function processLogisticsEmailsV2() {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(5000)) return { skipped: "locked" };
   var runStarted = Date.now();
   try {
-    ensureGmailV2Trigger_();
     var labels = gmailV2Labels_();
     var queries = gmailV2Queries_();
     var threadsById = {};
@@ -36,7 +39,7 @@ function processLogisticsEmailsV2() {
 
     var stats = {
       threads: 0, messages: 0, inserted: 0, updated: 0, noop: 0,
-      pending: 0, errors: 0, deferredThreads: 0, budgetHit: false
+      pending: 0, errors: 0, deferredThreads: 0, retryDeferred: 0, budgetHit: false
     };
     var threadIds = Object.keys(threadsById).slice(0, GMAIL_V2_MAX_THREADS);
     for (var ti = 0; ti < threadIds.length; ti++) {
@@ -59,7 +62,9 @@ function processLogisticsEmailsV2() {
           break;
         }
         var message = messages[mi];
-        if (gmailV2Seen_(message.getId())) continue;
+        var messageId = message.getId();
+        if (gmailV2Seen_(messageId)) continue;
+        if (gmailV2RetryDeferred_(messageId)) { stats.retryDeferred++; continue; }
         if (Date.now() - message.getDate().getTime() > GMAIL_V2_LOOKBACK_DAYS * 86400000) continue;
         stats.messages++;
         try {
@@ -69,11 +74,18 @@ function processLogisticsEmailsV2() {
           stats.noop += result.noop;
           stats.pending += result.pending;
           threadPending = threadPending || result.pending > 0;
-          gmailV2MarkSeen_(message.getId());
+          gmailV2MarkSeen_(messageId);
+          gmailV2ClearRetry_(messageId);
         } catch (err) {
           stats.errors++;
-          threadError = true;
-          writeLog_("GMAIL V2 ERROR", message.getId(), String(err && err.stack || err));
+          var disposition = gmailV2FailureDisposition_(message, err);
+          if (disposition.pending) {
+            stats.pending++;
+            threadPending = true;
+          }
+          if (disposition.seen) gmailV2MarkSeen_(messageId);
+          else threadError = true;
+          writeLog_("GMAIL V2 ERROR", messageId, String(err && err.stack || err));
         }
       }
       if (threadError) thread.addLabel(labels.error);
@@ -84,8 +96,6 @@ function processLogisticsEmailsV2() {
 
     if (stats.inserted || stats.updated) {
       SpreadsheetApp.flush();
-      // Inventory has its own hourly trigger. Run the immediate rebuild only when there is
-      // enough budget left to finish cleanly and still record this cycle's audit entry.
       if (Date.now() - runStarted < GMAIL_V2_RUNTIME_BUDGET_MS - 45000) {
         try { syncInventoryModule(); } catch (syncErr) { writeLog_("GMAIL V2 INVENTORY FOLLOWUP", "warn", String(syncErr)); }
       } else {
@@ -125,17 +135,64 @@ function gmailV2MarkSeen_(messageId) {
   PropertiesService.getScriptProperties().setProperty(GMAIL_V2_SEEN_PREFIX + messageId, String(Date.now()));
 }
 
-function ensureGmailV2Trigger_() {
+function gmailV2RetryDeferred_(messageId) {
+  var value = Number(PropertiesService.getScriptProperties().getProperty(GMAIL_V2_RETRY_AT_PREFIX + messageId) || 0);
+  return value > Date.now();
+}
+
+function gmailV2ClearRetry_(messageId) {
   var props = PropertiesService.getScriptProperties();
-  var wanted = "15m-" + GMAIL_PIPELINE_V2_VERSION;
-  if (props.getProperty("GMAIL_V2_TRIGGER_VERSION") === wanted) return;
-  ScriptApp.getProjectTriggers().forEach(function (trigger) {
-    if (trigger.getHandlerFunction() === "processLogisticsEmails" || trigger.getHandlerFunction() === "processLogisticsEmailsV2") {
-      ScriptApp.deleteTrigger(trigger);
-    }
+  props.deleteProperty(GMAIL_V2_ATTEMPT_PREFIX + messageId);
+  props.deleteProperty(GMAIL_V2_RETRY_AT_PREFIX + messageId);
+}
+
+function gmailV2DeterministicError_(error) {
+  var text = String(error && error.message || error || "");
+  return /data validation|unsupported logistics status|status is not allowed|ambiguous|cannot be safely inserted|outside the .* section|no longer matches/i.test(text);
+}
+
+function gmailV2FailureDisposition_(message, error) {
+  var messageId = message.getId();
+  var props = PropertiesService.getScriptProperties();
+  var prior = Number(props.getProperty(GMAIL_V2_ATTEMPT_PREFIX + messageId) || 0);
+  var attempts = prior + 1;
+  props.setProperty(GMAIL_V2_ATTEMPT_PREFIX + messageId, String(attempts));
+
+  var deterministic = gmailV2DeterministicError_(error);
+  if (!deterministic && attempts < GMAIL_V2_MAX_TRANSIENT_ATTEMPTS) {
+    var delayMinutes = Math.min(120, 15 * Math.pow(2, attempts - 1));
+    props.setProperty(GMAIL_V2_RETRY_AT_PREFIX + messageId, String(Date.now() + delayMinutes * 60000));
+    return { seen: false, pending: false, attempts: attempts };
+  }
+
+  var subject = String(message.getSubject() || "").trim();
+  var body = String(message.getPlainBody() || "");
+  var context = extractEmailContextV2_(subject, body);
+  addPendingRow_({
+    kind: context.kind || "inbound",
+    issues: [deterministic
+      ? "Automation stopped after a deterministic validation/matching failure: " + String(error && error.message || error)
+      : "Automation retry limit reached after " + attempts + " attempts: " + String(error && error.message || error)],
+    record: mergeRecordContextV2_({ parseError: String(error && error.message || error) }, context, {
+      messageId: messageId,
+      subject: subject,
+      body: body,
+      from: message.getFrom(),
+      date: message.getDate(),
+      permalink: "https://mail.google.com/mail/u/0/#all/" + messageId
+    }),
+    meta: { messageId: messageId, subject: subject },
+    driveUrl: ""
   });
-  ScriptApp.newTrigger("processLogisticsEmailsV2").timeBased().everyMinutes(15).create();
-  props.setProperty("GMAIL_V2_TRIGGER_VERSION", wanted);
+  gmailV2ClearRetry_(messageId);
+  return { seen: true, pending: true, attempts: attempts };
+}
+
+/**
+ * Backward-compatible setup helper. Trigger creation is owned by setupAllTriggers().
+ */
+function ensureGmailV2Trigger_() {
+  return GMAIL_PIPELINE_TRIGGER_SYNC_VERSION;
 }
 
 function processLogisticsMessageV2_(message) {
@@ -161,9 +218,7 @@ function processLogisticsMessageV2_(message) {
     documentAttachments.push(attachment);
     var parsed = extractAttachmentRecordsV2_(attachment, name, context, meta);
     if (parsed.supported) supportedSeen = true;
-    parsed.records.forEach(function (record) {
-      records.push(record);
-    });
+    parsed.records.forEach(function (record) { records.push(record); });
   });
 
   if (!records.length && hasStrongLogisticsContextV2_(context)) {
@@ -195,6 +250,11 @@ function processLogisticsMessageV2_(message) {
   records.forEach(function (record) {
     var kind = record.kind || context.kind || guessKindFromRecordV2_(record);
     record.kind = kind;
+    if (record.status) {
+      var normalizedStatus = canonicalLogisticsStatus_(record.status);
+      if (!normalizedStatus) throw new Error("Unsupported logistics status: " + record.status);
+      record.status = normalizedStatus;
+    }
     var upsert = kind === "outbound" ? upsertOutboundEmailV2_(record, false) : upsertInboundEmailV2_(record, false);
     if (upsert.matched) {
       result[upsert.action] = (result[upsert.action] || 0) + 1;
@@ -219,7 +279,6 @@ function processLogisticsMessageV2_(message) {
 
 function extractEmailContextV2_(subject, body) {
   var text = String(subject || "") + "\n" + String(body || "");
-  var upper = text.toUpperCase();
   var context = { kind: "", shipmentNo: "", invoice: "", mbl: "", hbl: "", filing: "", container: "", vessel: "", etd: "", eta: "", shipDate: "", pro: "", status: "", carrier: "", note: "" };
 
   var sty = text.match(/\b(STY[- ]?\d{3,})\b/i);
@@ -261,9 +320,6 @@ function extractEmailContextV2_(subject, body) {
     if (isPlausibleVesselV2_(vesselCandidate)) context.vessel = vesselCandidate;
   }
 
-  // Never derive terminal status from a raw word anywhere in an email body. Legal
-  // disclaimers commonly contain phrases such as "if you received this email in error".
-  // Only explicit logistics-status phrases are allowed to change source status.
   context.status = explicitEmailStatusV2_(subject, body);
 
   if (/UPS/i.test(text)) context.carrier = "UPS";
@@ -297,29 +353,24 @@ function isPlausibleVesselV2_(value) {
   var s = cleanVesselV2_(value);
   if (!s || s.length < 3) return false;
   if (/^(?:DELAY|DELAYS|DELAYED|STATUS|PENDING|RECEIVED|DELIVERED|COMPLETED|CUSTOMS|FDA|NOTES?|REMARKS?)$/i.test(s)) return false;
-  // Air flight identifiers such as SQ-7408 / KE213 / OZ-202.
   if (/^[A-Z]{1,3}-?\d{2,4}$/i.test(s)) return true;
-  // Ocean vessel+voyage strings such as HMM DAON 0022E / SM YANTIAN 2605E.
   if (/\b\d{3,4}[EW]\b/i.test(s) && /[A-Z]{2}/i.test(s)) return true;
-  // Named vessels without a voyage must look like a real multi-token proper name,
-  // not a prose/status fragment accidentally captured after the letters VSL.
   return s.length >= 6 && /\s/.test(s) && !/\b(?:ETA|ETD|DELAY|STATUS|CUSTOMS|FDA|DELIVERY|RECEIVED|COMPLETED)\b/i.test(s);
 }
 
 function explicitEmailStatusV2_(subject, body) {
   var subj = String(subject || "").trim();
   var lines = String(body || "").split(/\r?\n/).map(function (line) { return line.trim(); }).filter(Boolean);
-  // Only retain body lines that look operational. This deliberately excludes footer /
-  // confidentiality prose even when it contains words such as received or delivered.
   var operational = lines.filter(function (line) {
-    return /(?:STATUS|SHIPMENT|PACKAGE|DELIVER|TRANSIT|PICKED UP|PICKUP|FDA|CUSTOMS|HOLD|DETAIN|RELEASE|RESCHEDULE|DELAY|입고|배송|통관|보류|도착)/i.test(line);
+    return /(?:STATUS|SHIPMENT|PACKAGE|DELIVER|TRANSIT|PICKED UP|PICKUP|FDA|FWS|CUSTOMS|HOLD|DETAIN|RELEASE|RESCHEDULE|DELAY|입고|배송|통관|보류|도착)/i.test(line);
   }).slice(0, 80);
   var signal = [subj].concat(operational).join("\n");
 
   if (/\bSHIPMENT\b[^\n]{0,60}\bHAS BEEN COMPLETED\b|\bSTATUS\s*[:=-]?\s*COMPLETED\b|배송\s*완료/i.test(signal)) return "Completed";
   if (/\b(?:PACKAGE|PACKAGES|SHIPMENT|DELIVERY)\b[^\n]{0,70}\b(?:HAS BEEN\s+)?DELIVERED\b|\bSTATUS\s*[:=-]?\s*DELIVERED\b|배송(?:이|은|는)?\s*완료/i.test(signal)) return "Delivered";
   if (/\b(?:STATUS|CURRENT STATUS|WAREHOUSE STATUS)\s*[:=-]?\s*RECEIVED\b|\bSHIPMENT\b[^\n]{0,50}\b(?:HAS BEEN\s+)?RECEIVED\b|입고\s*완료|창고\s*입고/i.test(signal)) return "Received";
-  if (/FDA[^\n]{0,40}\b(?:HOLD|DETAINED?|REVIEW)\b|FDA[^\n]{0,30}보류/i.test(signal)) return "FDA Review/Hold";
+  if (/FDA[^\n]{0,40}\b(?:HOLD|DETAINED?|REVIEW)\b|FDA[^\n]{0,30}보류/i.test(signal)) return "FDA Review / Hold";
+  if (/FWS[^\n]{0,40}\b(?:HOLD|REVIEW|EXAM)\b|USFWS[^\n]{0,40}\b(?:HOLD|REVIEW|EXAM)\b/i.test(signal)) return "FWS Review / Hold";
   if (/CUSTOMS[^\n]{0,40}\b(?:HOLD|CLEARANCE PENDING|UNDER REVIEW)\b|통관[^\n]{0,30}(?:보류|검사|대기)/i.test(signal)) return "Customs Clearance";
   if (/\b(?:STATUS\s*[:=-]?\s*)?(?:IN TRANSIT|SHIPPED)\b|\bSHIPMENT\b[^\n]{0,40}\b(?:PICKED UP|SHIPPED)\b/i.test(signal)) return "Shipping";
   if (/\b(?:DELIVERY|ETA|SHIPMENT)\b[^\n]{0,60}\b(?:RESCHEDULED|DELAYED)\b|\bRESCHEDULED DELIVERY\b/i.test(signal)) return "Delayed";
@@ -467,7 +518,8 @@ function normalizeEmailStatusV2_(value) {
   if (/complete/i.test(s)) return "Completed";
   if (/deliver/i.test(s)) return "Delivered";
   if (/receive/i.test(s)) return "Received";
-  if (/FDA.*(hold|detain|review)/i.test(s)) return "FDA Review/Hold";
+  if (/FDA.*(hold|detain|review)/i.test(s)) return "FDA Review / Hold";
+  if (/FWS.*(hold|review|exam)|USFWS.*(hold|review|exam)/i.test(s)) return "FWS Review / Hold";
   if (/custom/i.test(s)) return "Customs Clearance";
   if (/delay|resched/i.test(s)) return "Delayed";
   if (/ship|transit/i.test(s)) return "Shipping";
@@ -671,7 +723,9 @@ function upsertInboundEmailV2_(record, allowInsert) {
   values[12] = isPlausibleVesselV2_(record.vessel) ? record.vessel : "";
   values[13] = record.etd || "";
   values[14] = record.eta || "";
-  values[27] = record.status || "Work in Progress";
+  var insertStatus = record.status ? canonicalLogisticsStatus_(record.status) : "Work in Progress";
+  if (record.status && !insertStatus) throw new Error("Unsupported logistics status: " + record.status);
+  values[27] = insertStatus || "Work in Progress";
   sheet.getRange(targetRow, 1, 1, 28).setValues([values]);
   setInboundDocsLinkV2_(sheet, targetRow, values[1], record._driveFolder);
   return { matched: true, action: "inserted", row: targetRow };
@@ -718,11 +772,10 @@ function updateInboundRowV2_(sheet, rowNumber, oldRow, record) {
     if (note && existing.indexOf(note) === -1) set(12, existing ? existing + "\n" + note : note, true);
   }
   if (record.status) {
+    var normalizedStatus = canonicalLogisticsStatus_(record.status);
+    if (!normalizedStatus) throw new Error("Unsupported logistics status: " + record.status);
     var current = String(oldRow[27] || "").trim();
-    var terminal = /^(SHIPPED|DELIVERED|RECEIVED|CANCELLED|COMPLETED)$/i.test(current);
-    // Carrier/email automation may advance an active row, but never rewrite a source
-    // row that is already terminal. This prevents Delivered/Received/Completed churn.
-    if (!terminal) set(28, record.status, true);
+    if (canAutoTransitionLogisticsStatus_(current, normalizedStatus)) set(28, normalizedStatus, true);
   }
   if (changed) formatEmailStatusRowV2_(sheet, rowNumber, String(oldRow[27] || record.status || ""));
   return changed;
@@ -770,8 +823,10 @@ function upsertOutboundEmailV2_(record, allowInsert) {
     set(19, record.pro, false);
     if (record.shipDate) set(4, record.shipDate, true);
     if (record.status) {
+      var normalizedOutbound = canonicalLogisticsStatus_(record.status);
+      if (!normalizedOutbound) throw new Error("Unsupported logistics status: " + record.status);
       var currentOutbound = String(old[20] || "").trim();
-      if (!/^(SHIPPED|DELIVERED|RECEIVED|CANCELLED|COMPLETED)$/i.test(currentOutbound)) set(21, record.status, true);
+      if (canAutoTransitionLogisticsStatus_(currentOutbound, normalizedOutbound)) set(21, normalizedOutbound, true);
     }
     var note = emailNoteV2_(record);
     if (note && String(old[19] || "").indexOf(note) === -1) set(20, String(old[19] || "") ? String(old[19]) + "\n" + note : note, true);
@@ -782,7 +837,10 @@ function upsertOutboundEmailV2_(record, allowInsert) {
   if (!record.customer || !record.shipDate || !(record.invoice || record.pro)) return { matched: false, action: "noop" };
   var row = new Array(21).fill("");
   row[0] = record.customer; row[1] = record.invoice || ""; row[3] = record.shipDate;
-  row[16] = record.carrier || ""; row[18] = record.pro || ""; row[19] = emailNoteV2_(record); row[20] = record.status || "Work in Progress";
+  row[16] = record.carrier || ""; row[18] = record.pro || ""; row[19] = emailNoteV2_(record);
+  var outboundInsertStatus = record.status ? canonicalLogisticsStatus_(record.status) : "Work in Progress";
+  if (record.status && !outboundInsertStatus) throw new Error("Unsupported logistics status: " + record.status);
+  row[20] = outboundInsertStatus || "Work in Progress";
   sheet.appendRow(row);
   return { matched: true, action: "inserted", row: sheet.getLastRow() };
 }
@@ -798,13 +856,10 @@ function multilineHasV2_(cellValue, wanted) {
   return wantedKeys.some(function (key) { return cellKeys.indexOf(key) !== -1; });
 }
 function emailNoteV2_(record) {
-  // Keep Gmail provenance in PIPELINE LOG / message metadata only.
-  // Never import email subjects, attachment NOTES/REMARKS, or parser audit text
-  // into operational NOTES columns in IMPORTS or WH Trucking Request.
   return "";
 }
 function formatEmailStatusRowV2_(sheet, rowNumber, status) {
-  var done = /^(SHIPPED|DELIVERED|RECEIVED|CANCELLED|COMPLETED)$/i.test(String(status || "").trim());
+  var done = isTerminalLogisticsStatus_(status);
   var range = sheet.getRange(rowNumber, 1, 1, sheet.getLastColumn());
   if (done) range.setBackground("#E8EAED").setFontColor("#5F6368");
   else range.setBackground(null).setFontColor(null);
