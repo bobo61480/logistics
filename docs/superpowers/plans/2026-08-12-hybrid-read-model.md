@@ -231,23 +231,14 @@ Additional shipment/inventory tables may be introduced in later migrations after
 ### Task 7: Provision D1 binding when credentials permit
 
 **Files:**
-- Modify: `wrangler.toml` after a database id is available.
+- Modify: `wrangler.toml` only after Wrangler returns a real database UUID.
 - Modify: `.github/workflows/deploy-cloudflare.yml` to apply migrations before deploy when D1 is configured.
 
-Expected config once provisioned:
-
-```toml
-[[d1_databases]]
-binding = "DB"
-database_name = "stylekorean-logistics"
-database_id = "<provisioned UUID>"
-migrations_dir = "migrations"
-```
-
-- [ ] Use the existing Cloudflare deployment credentials to create/list the D1 database through Wrangler if the execution environment supports it.
-- [ ] Record the returned UUID in production configuration; never invent it.
-- [ ] Apply `wrangler d1 migrations apply stylekorean-logistics --remote` before Worker deployment.
-- [ ] If database provisioning cannot be performed with available credentials/tools, deploy the API with D1 optional and clearly record D1 activation as the only external provisioning blocker; do not fabricate a binding.
+- [ ] Run `npx wrangler d1 list --json` using the existing production Cloudflare credentials and search for database name `stylekorean-logistics`.
+- [ ] If it does not exist, run `npx wrangler d1 create stylekorean-logistics` exactly once and capture the returned database UUID from Wrangler output.
+- [ ] Add this exact returned UUID as `database_id` under a `[[d1_databases]]` block with `binding = "DB"`, `database_name = "stylekorean-logistics"`, and `migrations_dir = "migrations"`.
+- [ ] Apply `npx wrangler d1 migrations apply stylekorean-logistics --remote` before Worker deployment.
+- [ ] If the available execution environment cannot access the existing Cloudflare credentials, leave `env.DB` optional, deploy the functioning snapshot/status API without D1, and record `D1 binding not provisioned because Cloudflare credentials are inaccessible to the available tools` as the exact external provisioning blocker; do not invent a UUID.
 
 ### Task 8: Switch web client to the real same-origin API
 
