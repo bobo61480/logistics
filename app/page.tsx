@@ -2617,7 +2617,7 @@ export default function Home() {
           <article className="kpi-card kpi-carrier">
             <span>TOP 3 CARRIERS · YTD</span>
             <div className="carrier-table-head" aria-hidden="true">
-              <small>Carrier</small><small>Earnings</small><small>Shipments</small>
+              <small>Carrier</small><small>Freight Spend</small><small>Shipments</small>
             </div>
             <ol className="carrier-ranking">
               {kpis.topCarriers.map((carrier) => (
@@ -2638,7 +2638,7 @@ export default function Home() {
           <article className="kpi-card kpi-average">
             <span>AVG TRUCKING COST · MTD / YTD</span>
             <div className="average-head" aria-hidden="true"><small>Lane</small><small>MTD</small><small>YTD</small></div>
-            <div><small>LOCAL ≤50 MI</small><strong>{money(kpis.avgLocalMtd)}</strong><strong>{money(kpis.avgLocal)}</strong></div>
+            <div><small>LOCAL / REGIONAL HEURISTIC</small><strong>{money(kpis.avgLocalMtd)}</strong><strong>{money(kpis.avgLocal)}</strong></div>
             <div><small>CALIFORNIA</small><strong>{money(kpis.avgCaliforniaMtd)}</strong><strong>{money(kpis.avgCalifornia)}</strong></div>
             <div><small>OUT OF STATE</small><strong>{money(kpis.avgOutOfStateMtd)}</strong><strong>{money(kpis.avgOutOfState)}</strong></div>
           </article>
@@ -2650,9 +2650,9 @@ export default function Home() {
           orders. WMS wholesale sales use Date (column A) and numeric INVOICE AMOUNT (column G);
           text entries such as “FREE SAMPLE,” “FOC,” “Sample,” and operational notes are excluded.
           MTD is the current month through today; YTD begins January 1, 2026. Trucking averages
-          exclude transfers and unclassified destinations; local is within 50 miles of Buena Park.
+          exclude transfers and unclassified destinations; local / regional uses a destination city/ZIP heuristic for the Southern California operating area and is not a measured mileage radius.
           The NJ transfer card includes only TRANSFERS rows whose TO field is NJ or New Jersey.
-          Carrier earnings use the same freight Invoice-first, Rate-fallback cost, and shipment share
+          Carrier freight spend uses the same freight Invoice-first, Rate-fallback cost, and shipment share
           is each carrier’s moves divided by all YTD moves with a named carrier.{" "}
           <a href={NATIONAL_SHEET_URL} target="_blank" rel="noreferrer">
             Open Nationals source
