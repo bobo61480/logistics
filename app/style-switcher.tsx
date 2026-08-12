@@ -14,15 +14,14 @@ export function StyleSwitcher() {
 
   return (
     <nav className={styles.variantNav} aria-label="Dashboard appearance">
-      <span className={styles.variantNavLabel}>Appearance</span>
       {options.map((option) => {
         const active = pathname === option.href;
         return (
           <a
             aria-current={active ? "page" : undefined}
-            className={active ? styles.variantNavActive : undefined}
             href={option.href}
             key={option.href}
+            style={active ? { fontWeight: 900, boxShadow: "inset 0 -2px 0 currentColor" } : undefined}
           >
             {option.label}
           </a>
