@@ -45,13 +45,14 @@ async function handleSnapshot() {
   });
 }
 
-function handleHealth(env: WorkerEnv) {
+function handleHealth() {
   return json({
     ok: true,
     service: "stylekorean-logistics-control-tower",
     version: WORKER_VERSION,
     databaseConfigured: false,
-    statusWriteConfigured: Boolean(env.APPS_SCRIPT_WRITE_URL) || true,
+    statusWriteConfigured: true,
+    statusWriteMode: "Apps Script source-confirmed proxy",
     checkedAt: new Date().toISOString(),
   });
 }
@@ -64,7 +65,7 @@ export default {
       return handleSnapshot();
     }
     if (url.pathname === "/api/logistics/status") return handleStatusCommand(request, env);
-    if (url.pathname === "/api/logistics/health") return handleHealth(env);
+    if (url.pathname === "/api/logistics/health") return handleHealth();
     return env.ASSETS.fetch(request);
   },
 };
