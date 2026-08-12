@@ -9,16 +9,26 @@ describe("live dashboard style variants", () => {
   test.each([
     ["app/light/page.tsx", "styles.light"],
     ["app/fulfillment-style/page.tsx", "styles.fulfillment"],
-  ])("%s reuses the canonical live dashboard", (file, themeClass) => {
+  ])("%s reuses the canonical live dashboard without duplicating navigation", (file, themeClass) => {
     expect(fs.existsSync(path.join(root, file))).toBe(true);
     const source = read(file);
     expect(source).toContain('import Home from "../page"');
     expect(source).toContain('import styles from "../style-variants.module.css"');
     expect(source).toContain(themeClass);
     expect(source).toContain("<Home />");
-    expect(source).toContain('href="/"');
-    expect(source).toContain('href="/light"');
-    expect(source).toContain('href="/fulfillment-style"');
+    expect(source).not.toContain("function VariantNav");
+  });
+
+  test("root layout exposes the same three-way style switcher on every route", () => {
+    const layout = read("app/layout.tsx");
+    const switcher = read("app/style-switcher.tsx");
+    expect(layout).toContain('import { StyleSwitcher } from "./style-switcher"');
+    expect(layout).toContain("<StyleSwitcher />");
+    expect(switcher).toContain('{ href: "/", label: "Original" }');
+    expect(switcher).toContain('{ href: "/light", label: "Light" }');
+    expect(switcher).toContain('{ href: "/fulfillment-style", label: "Fulfillment" }');
+    expect(switcher).toContain("usePathname");
+    expect(switcher).toContain("aria-current={active ? \"page\" : undefined}");
   });
 
   test("variant CSS places TK after the outbound trucking board", () => {
