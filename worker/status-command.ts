@@ -1,9 +1,12 @@
 import { normalizeLogisticsStatus } from "../lib/domain/status";
 
-const DEFAULT_WRITE_ENDPOINT =
-  "https://script.google.com/macros/s/AKfycbz770kmpwqMTA-h-lzeLARgVnDh_VDjh-70OOKk_yE-iXJTmzAsVXUtln17QTOURO1R/exec";
-
-export type StatusCommandEnv = { APPS_SCRIPT_WRITE_URL?: string };
+const MAX_COMMAND_BYTES = 16_384;
+const MAX_FIELD_LENGTH = 500;
+const WRITE_TIMEOUT_MS = 20_000;
+const EDITABLE_SHEETS = new Map([
+  ["inbound", new Set(["IMPORTS"])],
+  ["outbound", new Set(["Outbound Shipping Schedule"])],
+]);
 
 type StatusCommand = {
   kind: "inbound" | "outbound";
@@ -25,25 +28,56 @@ function json(value: unknown, status = 200) {
   return Response.json(value, { status, headers: { "cache-control": "no-store" } });
 }
 
-export async function handleStatusCommand(request: Request, env: StatusCommandEnv) {
+function hasOversizedField(command: StatusCommand) {
+  return Object.values(command).some((value) => typeof value === "string" && value.length > MAX_FIELD_LENGTH);
+}
+
+export async function handleStatusCommand(request: Request, env: Env) {
   if (request.method !== "POST") return json({ ok: false, error: "Method not allowed" }, 405);
-  const command = (await request.json().catch(() => null)) as StatusCommand | null;
+  const origin = request.headers.get("origin");
+  if (origin && origin !== new URL(request.url).origin) {
+    return json({ ok: false, error: "Cross-origin status writes are not allowed" }, 403);
+  }
+  const declaredLength = Number(request.headers.get("content-length") || 0);
+  if (declaredLength > MAX_COMMAND_BYTES) return json({ ok: false, error: "Command is too large" }, 413);
+  const body = await request.text();
+  if (new TextEncoder().encode(body).byteLength > MAX_COMMAND_BYTES) {
+    return json({ ok: false, error: "Command is too large" }, 413);
+  }
+  const command = (() => {
+    try { return JSON.parse(body) as StatusCommand; }
+    catch { return null; }
+  })();
   if (!command || (command.kind !== "inbound" && command.kind !== "outbound")) {
     return json({ ok: false, error: "Invalid relation kind" }, 400);
   }
   if (!command.sourceSheet || !Number.isInteger(Number(command.sourceRow)) || Number(command.sourceRow) < 1) {
     return json({ ok: false, error: "A valid source sheet and row are required" }, 400);
   }
+  if (!EDITABLE_SHEETS.get(command.kind)?.has(command.sourceSheet)) {
+    return json({ ok: false, error: "That source sheet is not editable for this relation kind" }, 400);
+  }
+  if (hasOversizedField(command)) return json({ ok: false, error: "A command field is too large" }, 413);
   const status = normalizeLogisticsStatus(command.status);
   if (!status) return json({ ok: false, error: "Status is not allowed" }, 400);
 
   const correlationId = crypto.randomUUID();
-  const endpoint = env.APPS_SCRIPT_WRITE_URL || DEFAULT_WRITE_ENDPOINT;
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: { "content-type": "text/plain;charset=utf-8" },
-    body: JSON.stringify({ ...command, sourceRow: Number(command.sourceRow), status }),
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), WRITE_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(env.APPS_SCRIPT_WRITE_URL, {
+      method: "POST",
+      headers: { "content-type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ ...command, sourceRow: Number(command.sourceRow), status }),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    console.error("status-write upstream failure", { correlationId, error: String(error) });
+    return json({ ok: false, error: "Status source is unavailable", correlationId }, 502);
+  } finally {
+    clearTimeout(timer);
+  }
   const result = (await response.json().catch(() => null)) as { ok?: boolean; status?: string; error?: string } | null;
   if (!response.ok || result?.ok !== true) {
     return json(

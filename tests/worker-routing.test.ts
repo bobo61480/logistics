@@ -15,14 +15,30 @@ describe("control tower Worker routing", () => {
     expect(wrangler).toContain('main = "worker/index.ts"');
     expect(wrangler).toContain('binding = "ASSETS"');
     expect(wrangler).toContain('run_worker_first = ["/api/*"]');
+    expect(wrangler).toContain('pattern = "stylekorean.dpdns.org"');
+    expect(wrangler).toContain("custom_domain = true");
+    expect(wrangler).toContain("workers_dev = false");
   });
 
   it("keeps the WMS source read-only and proxies writes only to the approved Apps Script endpoint", () => {
     const sources = read("worker/sources.ts");
     const status = read("worker/status-command.ts");
+    const wrangler = read("wrangler.toml");
 
     expect(sources).toContain("14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I");
     expect(sources).not.toMatch(/fetch\([^\n]+method:\s*["']POST/i);
-    expect(status).toContain("AKfycbz770kmpwqMTA-h-lzeLARgVnDh_VDjh-70OOKk_yE-iXJTmzAsVXUtln17QTOURO1R");
+    expect(status).toContain("EDITABLE_SHEETS");
+    expect(status).toContain("Cross-origin status writes are not allowed");
+    expect(status).toContain("MAX_COMMAND_BYTES");
+    expect(status).not.toContain("AKfycbz770kmpwqMTA-h-lzeLARgVnDh_VDjh-70OOKk_yE-iXJTmzAsVXUtln17QTOURO1R");
+    expect(wrangler).toContain("AKfycbz770kmpwqMTA-h-lzeLARgVnDh_VDjh-70OOKk_yE-iXJTmzAsVXUtln17QTOURO1R");
+  });
+
+  it("does not merge distinct trucking source rows in the browser", () => {
+    const page = read("app/page.tsx");
+
+    expect(page).not.toContain("consolidateTruckingItems");
+    expect(page).not.toContain('invoices.join("\\n")');
+    expect(page).toContain("Each source row remains its own operational move");
   });
 });

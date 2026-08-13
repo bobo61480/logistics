@@ -22,6 +22,7 @@
     "wrangler": "^4.120.1"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260813.1",
     "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "22.19.19",

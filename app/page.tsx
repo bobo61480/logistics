@@ -980,7 +980,7 @@ async function fetchLiveKpis() {
   return (await computeLiveKpis()) as unknown as KpiSnapshot;
 }
 
-type DatabaseSnapshot = {
+type WorkerSnapshot = {
   ok: true;
   generatedAt?: string;
   sources: {
@@ -995,16 +995,18 @@ type DatabaseSnapshot = {
   kpis?: KpiSnapshot | null;
 };
 
-async function fetchDatabaseSnapshot(): Promise<DatabaseSnapshot> {
+async function fetchWorkerSnapshot(): Promise<WorkerSnapshot> {
   const response = await fetch(DATA_ENDPOINT, { cache: "no-store" });
-  const payload = await response.json().catch(() => null);
+  const payload = (await response.json().catch(() => null)) as
+    | (Partial<WorkerSnapshot> & { error?: string })
+    | null;
   if (!response.ok || payload?.ok !== true || !payload?.sources) {
-    throw new Error(payload?.error || `Database snapshot unavailable (${response.status}).`);
+    throw new Error(payload?.error || `Worker snapshot unavailable (${response.status}).`);
   }
   if (!Array.isArray(payload.sources.imports) || !Array.isArray(payload.sources.outbound)) {
-    throw new Error("Database snapshot is missing required imports/outbound sources.");
+    throw new Error("Worker snapshot is missing required imports/outbound sources.");
   }
-  return payload as DatabaseSnapshot;
+  return payload as WorkerSnapshot;
 }
 
 async function fetchSheetSnapshot() {
@@ -1041,23 +1043,23 @@ async function fetchSheetSnapshot() {
 
 async function fetchOperationalSnapshot() {
   try {
-    const database = await fetchDatabaseSnapshot();
-    const sources = database.sources;
+    const snapshot = await fetchWorkerSnapshot();
+    const sources = snapshot.sources;
     return {
       imports: sources.imports!,
       outbound: sources.outbound!,
       nationalOutbound: sources.nationalOutbound ?? { cols: [], rows: [] },
       salesOutbound: sources.salesOutbound ?? { cols: [], rows: [] },
-      liveKpis: database.kpis ?? (await fetchLiveKpis()),
+      liveKpis: snapshot.kpis ?? (await fetchLiveKpis()),
       inventoryDashboardTable: sources.inventoryDashboardTable ?? null,
       skwInboundTable: sources.skwInboundTable ?? null,
       skwStockTable: sources.skwStockTable ?? null,
-      source: "database" as const,
+      source: "worker" as const,
     };
-  } catch (databaseError) {
-    // Migration-safe fallback: the existing Sheets integration stays available
-    // until PostgreSQL has received its first successful snapshot.
-    console.warn("Database snapshot unavailable; falling back to Google Sheets.", databaseError);
+  } catch (workerError) {
+    // Keep a read-only direct-Sheets fallback so the schedule remains visible
+    // during a Worker routing incident. Status writes still require the Worker.
+    console.warn("Worker snapshot unavailable; falling back to Google Sheets.", workerError);
     return { ...(await fetchSheetSnapshot()), source: "sheets" as const };
   }
 }
@@ -1784,74 +1786,6 @@ function salesOutboundItems(table: any): ScheduleItem[] {
   });
 }
 
-function consolidateTruckingItems(records: ScheduleItem[]) {
-  const groups = new Map<string, ScheduleItem[]>();
-  const ungrouped: ScheduleItem[] = [];
-
-  records.forEach((item) => {
-    if (
-      item.direction !== "outbound" ||
-      item.isSmallParcel ||
-      !/^trucking$/i.test(item.shippingMethod ?? "")
-    ) {
-      ungrouped.push(item);
-      return;
-    }
-    const customerKey = normalizedIdentifier(item.customer || item.customerNo || item.title);
-    const dateKey = item.date ? dayKey(item.date) : normalizedIdentifier(item.shipDate || item.dateText);
-    if (!customerKey || !dateKey) {
-      ungrouped.push(item);
-      return;
-    }
-    const key = `${customerKey}___${dateKey}`;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key)!.push(item);
-  });
-
-  const invoiceKeys = (items: ScheduleItem[]) => new Set(
-    items.flatMap((item) => splitValues(item.invoice ?? "")).map(normalizedIdentifier).filter(Boolean),
-  );
-  const groupEntries = [...groups.entries()];
-  const scheduleGroups = groupEntries.filter(([, items]) =>
-    items.some((item) => item.sourceSheet === "Outbound Shipping Schedule"),
-  );
-  const absorbed = new Set<string>();
-  groupEntries.forEach(([key, items]) => {
-    if (items.some((item) => item.sourceSheet === "Outbound Shipping Schedule")) return;
-    const invoices = invoiceKeys(items);
-    if (!invoices.size) return;
-    const matches = scheduleGroups.filter(([, scheduled]) =>
-      [...invoiceKeys(scheduled)].some((invoice) => invoices.has(invoice)),
-    );
-    if (matches.length !== 1) return;
-    matches[0][1].push(...items);
-    absorbed.add(key);
-  });
-
-  const consolidated = groupEntries.filter(([key]) => !absorbed.has(key)).map(([key, items]) => {
-    const primary =
-      items.find((item) => item.sourceSheet === "Outbound Shipping Schedule") ??
-      items.find((item) => item.editable) ??
-      items[0];
-    const invoices = Array.from(new Set(
-      items.flatMap((item) => splitValues(item.invoice ?? "")).map((value) => value.trim()).filter(Boolean),
-    ));
-    const warningStatus = items.find((item) => /pending|delay|hold|review/i.test(item.status));
-    const secondary = Array.from(new Set(items.map((item) => item.secondary).filter(Boolean))).join(" · ");
-    const invoice = invoices.join("\n");
-    return {
-      ...primary,
-      id: `trucking-${key}`,
-      invoice,
-      reference: invoice || primary.reference,
-      secondary,
-      status: warningStatus?.status ?? primary.status,
-    };
-  });
-
-  return [...ungrouped, ...consolidated];
-}
-
 async function postStatus(item: ScheduleItem, status: string) {
   const payload = {
     kind: item.direction,
@@ -1870,7 +1804,9 @@ async function postStatus(item: ScheduleItem, status: string) {
   };
 
   const parseConfirmation = async (response: Response) => {
-    const result = await response.json().catch(() => null);
+    const result = (await response.json().catch(() => null)) as
+      | { ok?: boolean; error?: string; status?: string }
+      | null;
     if (!response.ok || result?.ok === false) {
       const error = new Error(result?.error || `Status update failed (${response.status}).`);
       (error as Error & { status?: number }).status = response.status;
@@ -2289,13 +2225,15 @@ export default function Home() {
         skwInboundTable,
         skwStockTable,
       } = await fetchOperationalSnapshot();
-      setItems(consolidateTruckingItems([
+      // Each source row remains its own operational move. Do not infer or merge
+      // loads merely because customer names and dates happen to match.
+      setItems([
         ...pendingImportItems(imports),
         ...inboundParcelItems(imports),
         ...outboundItems(outbound),
         ...nationalOutboundItems(nationalOutbound),
         ...salesOutboundItems(salesOutbound),
-      ]));
+      ]);
       setKpis(liveKpis);
       const dashboardInventory = dashboardInventoryItems(inventoryDashboardTable);
       setInboundInventory(uniqueInventoryItems([
@@ -2571,7 +2509,7 @@ export default function Home() {
         <article>
           <span>DUE TODAY</span>
           <strong>{counts.dueToday}</strong>
-          <small>combined moves</small>
+          <small>tracked moves</small>
         </article>
         <article className={counts.exceptions ? "metric-alert" : ""}>
           <span>EXCEPTIONS</span>
