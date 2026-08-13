@@ -5,8 +5,8 @@ compatibility_flags = ["nodejs_compat"]
 workers_dev = false
 
 [[routes]]
-pattern = "stylekorean.dpdns.org"
-custom_domain = true
+pattern = "stylekorean.dpdns.org/*"
+zone_name = "dpdns.org"
 
 [vars]
 APPS_SCRIPT_WRITE_URL = "https://script.google.com/macros/s/AKfycbz770kmpwqMTA-h-lzeLARgVnDh_VDjh-70OOKk_yE-iXJTmzAsVXUtln17QTOURO1R/exec"

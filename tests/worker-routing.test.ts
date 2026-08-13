@@ -16,8 +16,9 @@ describe("control tower Worker routing", () => {
     expect(wrangler).toContain('main = "worker/index.ts"');
     expect(wrangler).toContain('binding = "ASSETS"');
     expect(wrangler).toContain('run_worker_first = ["/api/*"]');
-    expect(wrangler).toContain('pattern = "stylekorean.dpdns.org"');
-    expect(wrangler).toContain("custom_domain = true");
+    expect(wrangler).toContain('pattern = "stylekorean.dpdns.org/*"');
+    expect(wrangler).toContain('zone_name = "dpdns.org"');
+    expect(wrangler).not.toContain("custom_domain = true");
     expect(wrangler).toContain("workers_dev = false");
   });
 
