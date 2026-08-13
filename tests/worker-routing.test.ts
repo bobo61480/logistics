@@ -29,9 +29,27 @@ describe("control tower Worker routing", () => {
     expect(sources).not.toMatch(/fetch\([^\n]+method:\s*["']POST/i);
     expect(status).toContain("EDITABLE_SHEETS");
     expect(status).toContain("Cross-origin status writes are not allowed");
+    expect(status).toContain("Cross-site status writes are not allowed");
+    expect(status).toContain("Content-Type must be application/json");
     expect(status).toContain("MAX_COMMAND_BYTES");
     expect(status).not.toContain("AKfycbz770kmpwqMTA-h-lzeLARgVnDh_VDjh-70OOKk_yE-iXJTmzAsVXUtln17QTOURO1R");
     expect(wrangler).toContain("AKfycbz770kmpwqMTA-h-lzeLARgVnDh_VDjh-70OOKk_yE-iXJTmzAsVXUtln17QTOURO1R");
+  });
+
+  it("keeps the last good snapshot available during a short source outage", () => {
+    const worker = read("worker/index.ts");
+    expect(worker).toContain("SNAPSHOT_STALE_SECONDS");
+    expect(worker).toContain('x-stylekorean-cache", "STALE"');
+    expect(worker).toContain("Response is stale");
+    expect(worker).toContain("staleReason");
+  });
+
+  it("adds baseline security headers to APIs and static assets", () => {
+    const worker = read("worker/index.ts");
+    expect(worker).toContain("content-security-policy");
+    expect(worker).toContain("strict-transport-security");
+    expect(worker).toContain("x-content-type-options");
+    expect(worker).toContain("x-frame-options");
   });
 
   it("does not merge distinct trucking source rows in the browser", () => {

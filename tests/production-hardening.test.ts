@@ -15,6 +15,8 @@ describe("production hardening", () => {
     expect(workflow).toContain("/api/logistics/snapshot");
     expect(workflow).toContain('"ok":true');
     expect(workflow).toContain("sourceHealth");
+    expect(workflow).toContain("worker-v4-resilient-snapshot");
+    expect(workflow).toContain("x-content-type-options: nosniff");
   });
 
   it("ships a reusable production smoke verifier", () => {
@@ -25,6 +27,7 @@ describe("production hardening", () => {
     expect(script).toContain("/api/logistics/snapshot");
     expect(script).toContain("/light-skin");
     expect(script).toContain("/light-full");
+    expect(script).toContain("x-frame-options");
   });
 
   it("keeps Cloudflare as the only site deployment path", () => {

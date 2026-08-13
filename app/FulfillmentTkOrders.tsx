@@ -200,7 +200,7 @@ function DimensionEditor({ detail, onSaved }: { detail: OrderDetail; onSaved: ()
               {(["l", "w", "h", "wt"] as const).map((field) => (
                 <label key={field}><span>{field === "wt" ? "Weight" : field.toUpperCase()}</span><input inputMode="decimal" value={row[field] ?? ""} onChange={(e) => setField(index, field, e.target.value)} /></label>
               ))}
-              <button className={styles.removeButton} onClick={() => setRows((current) => current.filter((_, i) => i !== index))}>×</button>
+              <button aria-label={`Remove pallet ${index + 1}`} className={styles.removeButton} onClick={() => setRows((current) => current.filter((_, i) => i !== index))}>×</button>
             </div>
           ))}
           <button className={styles.addDimButton} onClick={() => setRows((current) => [...current, { l: null, w: null, h: null, wt: null }])}>+ Add pallet</button>
@@ -219,6 +219,8 @@ function DetailModal({ invoice, onClose, onChanged }: { invoice: string; onClose
   const [detail, setDetail] = useState<OrderDetail | null>(null);
   const [error, setError] = useState("");
   const [savingMove, setSavingMove] = useState(false);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const modalRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
     setError("");
@@ -232,10 +234,30 @@ function DetailModal({ invoice, onClose, onChanged }: { invoice: string; onClose
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
-    const handler = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    const handler = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(modalRef.current?.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ) ?? []);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
     document.addEventListener("keydown", handler);
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
+    closeButtonRef.current?.focus();
     return () => { document.removeEventListener("keydown", handler); document.body.style.overflow = previous; };
   }, [onClose]);
 
@@ -264,8 +286,8 @@ function DetailModal({ invoice, onClose, onChanged }: { invoice: string; onClose
 
   return (
     <div className={styles.overlay} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <div className={styles.modal} role="dialog" aria-modal="true" aria-label={`Fulfillment details ${invoice}`}>
-        <button className={styles.closeButton} onClick={onClose}>×</button>
+      <div ref={modalRef} className={styles.modal} role="dialog" aria-modal="true" aria-label={`Fulfillment details ${invoice}`}>
+        <button ref={closeButtonRef} aria-label={`Close fulfillment details for ${invoice}`} className={styles.closeButton} onClick={onClose}>×</button>
         {!detail && !error && <div className={styles.modalLoading}>Loading {invoice}…</div>}
         {error && <div className={styles.errorBox}>{error}</div>}
         {detail && (
@@ -377,6 +399,16 @@ export default function FulfillmentTkOrders() {
     window.localStorage.setItem(METHOD_FILTER_KEY, method);
   };
 
+  const closeDetail = () => {
+    const invoice = openInvoice;
+    setOpenInvoice("");
+    window.requestAnimationFrame(() => {
+      Array.from(document.querySelectorAll<HTMLButtonElement>("button[data-invoice-detail]"))
+        .find((button) => button.dataset.invoiceDetail === invoice)
+        ?.focus();
+    });
+  };
+
   const filtered = useMemo(() => {
     const needle = query.trim().toUpperCase();
     return jobs.filter((order) => {
@@ -398,8 +430,8 @@ export default function FulfillmentTkOrders() {
           <span className={styles.cartIcon}>🛒</span>
           <div><h2 id="fulfillment-tk-heading">Fulfillment Orders</h2><p>Live WMS fulfillment status · all shipping methods</p></div>
           <div className="fulfillment-method-filter-wrap">
-            <button className={styles.methodPill} onClick={() => setMethodMenuOpen((open) => !open)} aria-expanded={methodMenuOpen}>Method: {methodFilter} ▾</button>
-            {methodMenuOpen && <div className="fulfillment-method-menu" role="menu">
+            <button className={styles.methodPill} onClick={() => setMethodMenuOpen((open) => !open)} aria-expanded={methodMenuOpen} aria-controls="fulfillment-method-options">Method: {methodFilter} ▾</button>
+            {methodMenuOpen && <div id="fulfillment-method-options" className="fulfillment-method-menu" role="group" aria-label="Shipping method filter">
               <button className={methodFilter === "ALL" ? "active" : ""} onClick={() => chooseMethod("ALL")}>ALL <b>{jobs.length}</b></button>
               {methodCounts.map(([method, count]) => <button className={methodFilter === method ? "active" : ""} key={method} onClick={() => chooseMethod(method)}>{method} <b>{count}</b></button>)}
             </div>}
@@ -412,7 +444,7 @@ export default function FulfillmentTkOrders() {
         </div>
       </div>
 
-      <div className={styles.syncBar}><span><i className={`${styles.syncDot} ${styles[syncState]}`} />{syncText}</span><button onClick={() => void load(false)}>↻ Refresh</button></div>
+      <div className={styles.syncBar}><span role="status" aria-live="polite"><i className={`${styles.syncDot} ${styles[syncState]}`} />{syncText}</span><button onClick={() => void load(false)}>↻ Refresh</button></div>
       <ProgressBoard jobs={jobs} />
 
       <div className={styles.toolbar}>
@@ -435,7 +467,7 @@ export default function FulfillmentTkOrders() {
                 <td><InspectionBadge order={order} /></td>
                 <td><span className={`${styles.badge} ${order.movedToPacking ? styles.green : styles.gray}`}>{order.movedToPacking ? "✓ Yes" : "No"}</span></td>
                 <td><DimensionsBadge order={order} /></td>
-                <td><button className={`${styles.detailLink} ${inspectionState(order.inspection) === "issues" ? styles.issueLink : ""}`} onClick={() => setOpenInvoice(order.invoice)}>{inspectionState(order.inspection) === "issues" ? "Issues →" : "View →"}</button></td>
+                <td><button data-invoice-detail={order.invoice} className={`${styles.detailLink} ${inspectionState(order.inspection) === "issues" ? styles.issueLink : ""}`} onClick={() => setOpenInvoice(order.invoice)}>{inspectionState(order.inspection) === "issues" ? "Issues →" : "View →"}</button></td>
               </tr>
             ))}
             {!loading && !pageRows.length && <tr><td className={styles.emptyRow} colSpan={10}>No orders match the current filters.</td></tr>}
@@ -450,7 +482,7 @@ export default function FulfillmentTkOrders() {
       </div>
 
       <a className={styles.footerLink} href={SOURCE_URL} target="_blank" rel="noreferrer">View Source Orders →</a>
-      {openInvoice && <DetailModal invoice={openInvoice} onClose={() => setOpenInvoice("")} onChanged={async () => { await load(true); }} />}
+      {openInvoice && <DetailModal invoice={openInvoice} onClose={closeDetail} onChanged={async () => { await load(true); }} />}
     </section>
   );
 }

@@ -38,11 +38,14 @@
   color: #86efac;
 }
 
+.item strong[data-state="GOOGLE SHEETS"] {
+  color: #86efac;
+}
+
 .item strong[data-state="UNAVAILABLE"] {
   color: #fca5a5;
 }
 
-.item strong[data-state="OPTIONAL / UNBOUND"],
 .item strong[data-state="UNKNOWN"],
 .item strong[data-state="CHECKING"] {
   color: #fde68a;
