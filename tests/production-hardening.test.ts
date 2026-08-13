@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const read = (path: string) => readFileSync(path, "utf8");
@@ -24,5 +25,11 @@ describe("production hardening", () => {
     expect(script).toContain("/api/logistics/snapshot");
     expect(script).toContain("/light-skin");
     expect(script).toContain("/light-full");
+  });
+
+  it("keeps Cloudflare as the only site deployment path", () => {
+    expect(existsSync(".github/workflows/deploy-planner.yml")).toBe(false);
+    expect(existsSync(".github/workflows/build-style-variants.yml")).toBe(false);
+    expect(existsSync("public/CNAME")).toBe(false);
   });
 });

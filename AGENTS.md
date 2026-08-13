@@ -1,6 +1,6 @@
 # StyleKorean Logistics Planner — Agent Instructions
 
-**What this is:** A static Next.js app that displays live inbound/outbound shipment schedules, inventory panels, and sales KPIs for StyleKorean. It reads Google Sheets via client-side CSV fetches and writes status updates back through a Google Apps Script endpoint.
+**What this is:** A static Next.js app served by a Cloudflare Worker. The Worker reads Google Sheets, exposes the same-origin snapshot/status APIs, serves the static export, and proxies approved status updates to Google Apps Script.
 
 Live site: `stylekorean.dpdns.org`
 
@@ -30,15 +30,15 @@ Run `typecheck` and `npm test` before every commit. The project uses `"strict": 
   failure banner. In sandboxes with a pre-installed Chromium, run with
   `PLAYWRIGHT_CHROMIUM_EXECUTABLE=/opt/pw-browsers/chromium`; CI uses
   `npx playwright install chromium`.
-- CI: `.github/workflows/tests.yml` runs both suites on PRs and main;
-  the Pages deploy in `deploy-planner.yml` is additionally gated on the
-  unit suite.
+- CI: `.github/workflows/ci-pr.yml` runs unit tests, type checking, and the
+  production build on pull requests. `.github/workflows/deploy-cloudflare.yml`
+  repeats those checks before the canonical production deploy.
 
 ## Architecture
 
-- **`output: "export"`** — fully static. No server components, no API routes. All data is fetched **client-side**.
-- Data source: Google Sheets via `docs.google.com/spreadsheets/.../gviz/tq?tqx=out:csv` (CORS-enabled).
-- Status writes: `WRITE_ENDPOINT` in `app/page.tsx` → Apps Script `/exec` (doPost). **This URL must be updated manually** whenever `google-apps-script/Code.gs` is redeployed — Apps Script generates a new URL each time.
+- **`output: "export"`** — the UI is a static export. Cloudflare handles server-side API routes and assets; do not add Next.js API routes.
+- Primary data path: browser → same-origin Worker snapshot API → Google Sheets. The browser has a read-only direct-Sheets fallback for routing incidents.
+- Status writes: browser → same-origin Worker status API → approved Apps Script deployment. The canonical deployment URL is configured once in `wrangler.toml`.
 - Auto-refresh: every 30 minutes (`AUTO_REFRESH_MS`).
 
 ## Key Files
@@ -73,17 +73,15 @@ Inbound adds: `"N/A" | "Customs Clearance" | "FDA Review/Hold" | "FWS Review/Hol
 
 ## Deployment
 
-Push to `main` → `.github/workflows/deploy-planner.yml` runs automatically:
-1. Deploys `google-apps-script/` via clasp (only when `.gs` files changed). Requires `CLASP_ACCESS_TOKEN` repo secret.
-2. Runs `npm run build` and publishes `out/` to GitHub Pages.
+Push to `main` → `.github/workflows/deploy-cloudflare.yml` validates and deploys the Worker plus static export to the custom domain configured in `wrangler.toml`. Changes under `google-apps-script/` independently run `.github/workflows/deploy-apps-script.yml`.
 
-**One-time setup required:** GitHub repo Settings → Pages → Source must be set to **"GitHub Actions"** (not "Deploy from a branch").
+GitHub Pages is not a production target. Keep the repository's Pages feature disabled so it cannot contend for the Cloudflare hostname.
 
 ## Common Pitfalls
 
-- **`WRITE_ENDPOINT`** in `app/page.tsx` becomes stale after every Apps Script redeploy. Always verify the URL matches the current deployment in the Apps Script editor.
+- Update `APPS_SCRIPT_WRITE_URL` in `wrangler.toml` only if the Apps Script deployment ID is intentionally replaced. Normal clasp deployments update the existing ID.
 - Do **not** add `export const runtime = "edge"` or any server-side constructs — `output: "export"` will break the build.
-- The root `CNAME` file is unused; `public/CNAME` (`stylekorean.dpdns.org`) is the one that matters.
+- Do not add a Pages `CNAME`; `wrangler.toml` is the production hostname source of truth.
 - `archive/legacy-static-site/` contains the old `app.js`, `index.html`, etc. Do not edit these — they are not deployed.
 - `inbound-pallets.ts` is manually maintained from packing list spreadsheets. When new shipments arrive, pallet data must be added here by hand.
 
