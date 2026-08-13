@@ -42,6 +42,10 @@
   color: #86efac;
 }
 
+.item strong[data-state="D1 + SHEETS"] {
+  color: #86efac;
+}
+
 .item strong[data-state="UNAVAILABLE"] {
   color: #fca5a5;
 }

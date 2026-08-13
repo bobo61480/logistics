@@ -11,6 +11,7 @@ describe("control tower Worker routing", () => {
     expect(worker).toContain('url.pathname === "/api/logistics/snapshot"');
     expect(worker).toContain('url.pathname === "/api/logistics/status"');
     expect(worker).toContain('url.pathname === "/api/logistics/health"');
+    expect(worker).toContain('url.pathname === "/api/logistics/reconciliation"');
     expect(worker).toContain("env.ASSETS.fetch(request)");
     expect(wrangler).toContain('main = "worker/index.ts"');
     expect(wrangler).toContain('binding = "ASSETS"');
@@ -38,7 +39,7 @@ describe("control tower Worker routing", () => {
 
   it("keeps the last good snapshot available during a short source outage", () => {
     const worker = read("worker/index.ts");
-    expect(worker).toContain("SNAPSHOT_STALE_SECONDS");
+    expect(worker).toContain("SNAPSHOT_REFRESH_SECONDS");
     expect(worker).toContain('x-stylekorean-cache", "STALE"');
     expect(worker).toContain("Response is stale");
     expect(worker).toContain("staleReason");

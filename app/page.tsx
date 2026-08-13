@@ -984,6 +984,7 @@ type WorkerSnapshot = {
   ok: true;
   generatedAt?: string;
   version?: string;
+  storage?: "d1" | "sheets";
   stale?: boolean;
   staleReason?: string;
   sourceHealth?: Array<{ name: string; ok: boolean; error?: string }>;
@@ -1060,6 +1061,7 @@ async function fetchOperationalSnapshot() {
       skwStockTable: sources.skwStockTable ?? null,
       connection: {
         mode: snapshot.stale ? "stale" as const : "worker" as const,
+        storage: snapshot.storage,
         version: snapshot.version,
         detail: snapshot.staleReason,
         degradedSources: (snapshot.sourceHealth ?? []).filter((source) => !source.ok).length,
@@ -1073,6 +1075,7 @@ async function fetchOperationalSnapshot() {
       ...(await fetchSheetSnapshot()),
       connection: {
         mode: "sheets" as const,
+        storage: "sheets" as const,
         version: undefined,
         detail: workerError instanceof Error ? workerError.message : "Worker snapshot unavailable",
         degradedSources: 0,
@@ -2511,7 +2514,9 @@ export default function Home() {
                     ? "Last good snapshot · live sources reconnecting"
                     : connection?.degradedSources
                       ? `${connection.degradedSources} optional source${connection.degradedSources === 1 ? "" : "s"} unavailable`
-                      : "Worker snapshot · 3 live workbooks connected"}
+                      : connection?.storage === "d1"
+                        ? "D1 snapshot · Sheets fallback ready"
+                        : "Worker snapshot · 3 live workbooks connected"}
           </span>
           <span className="mono">
             AUTO SYNC 30 MIN · LAST SYNC {updatedAt ? updatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "America/Los_Angeles" }) : "—"}

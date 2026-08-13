@@ -53,7 +53,13 @@ for (const route of routes) {
 
 const health = await get(`/api/logistics/health?verify=${Date.now()}`, true);
 if (health.ok !== true) throw new Error(`health: ${JSON.stringify(health).slice(0, 500)}`);
-if (health.dataStore !== "Google Sheets") throw new Error(`health: unexpected data store ${health.dataStore}`);
+if (typeof health.databaseConfigured !== "boolean") throw new Error("health: databaseConfigured is missing");
+if (health.databaseConfigured && !String(health.dataStore).includes("D1")) {
+  throw new Error(`health: configured D1 is not reflected by data store ${health.dataStore}`);
+}
+if (!health.databaseConfigured && health.dataStore !== "Google Sheets") {
+  throw new Error(`health: unexpected fallback data store ${health.dataStore}`);
+}
 const healthHeaders = await getHeaders(`/api/logistics/health?headers=${Date.now()}`);
 if (healthHeaders.get("x-content-type-options") !== "nosniff") throw new Error("health: nosniff header missing");
 if (healthHeaders.get("x-frame-options") !== "DENY") throw new Error("health: frame protection header missing");
@@ -62,6 +68,12 @@ const snapshot = await get(`/api/logistics/snapshot?verify=${Date.now()}`, true)
 if (snapshot.ok !== true) throw new Error(`snapshot: ${JSON.stringify(snapshot).slice(0, 500)}`);
 if (Number.isNaN(Date.parse(snapshot.generatedAt))) throw new Error("snapshot: generatedAt is invalid");
 if (!Array.isArray(snapshot.sourceHealth)) throw new Error("snapshot: sourceHealth is missing");
+
+const reconciliation = await get(`/api/logistics/reconciliation?verify=${Date.now()}`, true);
+if (reconciliation.ok !== true || reconciliation.databaseConfigured !== health.databaseConfigured) {
+  throw new Error(`reconciliation: ${JSON.stringify(reconciliation).slice(0, 500)}`);
+}
+if (health.databaseConfigured && reconciliation.ready !== true) throw new Error("reconciliation: D1 is not ready");
 
 const sources = new Map(snapshot.sourceHealth.map((item) => [item.name, item]));
 for (const name of ["IMPORTS", "Outbound Shipping Schedule"]) {
@@ -77,6 +89,7 @@ console.log(
       workerVersion: health.version,
       generatedAt: snapshot.generatedAt,
       sourcesChecked: snapshot.sourceHealth.length,
+      databaseConfigured: health.databaseConfigured,
     },
     null,
     2,
