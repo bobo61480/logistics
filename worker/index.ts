@@ -8,7 +8,7 @@ import {
 import { fetchOperationalSources } from "./sources";
 import { handleStatusCommand } from "./status-command";
 
-const WORKER_VERSION = "2026-08-12-worker-v5-d1-ready";
+const WORKER_VERSION = "2026-08-12-worker-v6-d1-active";
 const SNAPSHOT_CACHE_URL = "https://stylekorean.internal/api/logistics/snapshot";
 const SNAPSHOT_CACHE_SECONDS = 60;
 const SNAPSHOT_REFRESH_SECONDS = 15 * 60;
@@ -32,7 +32,9 @@ function json(value: unknown, status = 200, cacheControl = "no-store") {
 async function buildSnapshotPayload(): Promise<OperationalSnapshot> {
   const generatedAt = new Date().toISOString();
   const snapshot = await fetchOperationalSources();
-  if (!snapshot.sources.imports || !snapshot.sources.outbound) {
+  const outboundMeta = snapshot.sources.outboundMeta as { rowCount?: number } | undefined;
+  const hasOutboundRows = Number(outboundMeta?.rowCount ?? 0) > 0;
+  if (!snapshot.sources.imports || !hasOutboundRows) {
     throw new Error("Core Logistics Master sources are unavailable");
   }
 

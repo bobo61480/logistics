@@ -53,13 +53,8 @@ for (const route of routes) {
 
 const health = await get(`/api/logistics/health?verify=${Date.now()}`, true);
 if (health.ok !== true) throw new Error(`health: ${JSON.stringify(health).slice(0, 500)}`);
-if (typeof health.databaseConfigured !== "boolean") throw new Error("health: databaseConfigured is missing");
-if (health.databaseConfigured && !String(health.dataStore).includes("D1")) {
-  throw new Error(`health: configured D1 is not reflected by data store ${health.dataStore}`);
-}
-if (!health.databaseConfigured && health.dataStore !== "Google Sheets") {
-  throw new Error(`health: unexpected fallback data store ${health.dataStore}`);
-}
+if (health.databaseConfigured !== true) throw new Error("health: production D1 binding is missing");
+if (!String(health.dataStore).includes("D1")) throw new Error(`health: D1 is not reflected by ${health.dataStore}`);
 const healthHeaders = await getHeaders(`/api/logistics/health?headers=${Date.now()}`);
 if (healthHeaders.get("x-content-type-options") !== "nosniff") throw new Error("health: nosniff header missing");
 if (healthHeaders.get("x-frame-options") !== "DENY") throw new Error("health: frame protection header missing");
@@ -73,11 +68,17 @@ const reconciliation = await get(`/api/logistics/reconciliation?verify=${Date.no
 if (reconciliation.ok !== true || reconciliation.databaseConfigured !== health.databaseConfigured) {
   throw new Error(`reconciliation: ${JSON.stringify(reconciliation).slice(0, 500)}`);
 }
-if (health.databaseConfigured && reconciliation.ready !== true) throw new Error("reconciliation: D1 is not ready");
+if (reconciliation.ready !== true) throw new Error("reconciliation: D1 is not ready");
+if (snapshot.storage !== "d1") throw new Error(`snapshot: expected D1 storage, received ${snapshot.storage}`);
 
 const sources = new Map(snapshot.sourceHealth.map((item) => [item.name, item]));
-for (const name of ["IMPORTS", "Outbound Shipping Schedule"]) {
-  if (!sources.get(name)?.ok) throw new Error(`snapshot: core source unhealthy: ${name}`);
+if (!sources.get("IMPORTS")?.ok) throw new Error("snapshot: IMPORTS source is unhealthy");
+const outboundMeta = snapshot.sources?.outboundMeta;
+if (!["Outbound Shipping Schedule", "WH Trucking Request"].includes(outboundMeta?.sheetName)) {
+  throw new Error("snapshot: effective outbound source metadata is missing");
+}
+if (!sources.get(outboundMeta.sheetName)?.ok) {
+  throw new Error(`snapshot: effective outbound source is unhealthy: ${outboundMeta.sheetName}`);
 }
 
 console.log(
