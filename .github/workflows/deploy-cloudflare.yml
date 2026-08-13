@@ -46,6 +46,62 @@ jobs:
           test -f out/light-full/index.html
           test -f out/fulfillment-style/index.html
 
+      - name: Resolve production Worker route zone
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          api="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}"
+          auth="Authorization: Bearer ${CLOUDFLARE_API_TOKEN}"
+          worker="stylekorean-logistics-planner"
+          hostname="stylekorean.dpdns.org"
+
+          routes="$(curl -fsS -H "$auth" \
+            "${api}/workers/services/${worker}/environments/production/routes?show_zonename=true" || echo '{}')"
+          domains="$(curl -fsS -H "$auth" \
+            "${api}/workers/domains/records?page=0&per_page=100&service=${worker}&environment=production" || echo '{}')"
+
+          zone_id="$(ROUTES="$routes" DOMAINS="$domains" HOSTNAME="$hostname" node <<'NODE'
+          const payloads = [process.env.ROUTES, process.env.DOMAINS].map((value) => {
+            try { return JSON.parse(value || "{}"); } catch { return {}; }
+          });
+          const rows = payloads.flatMap((payload) => {
+            const result = payload?.result;
+            if (Array.isArray(result)) return result;
+            if (Array.isArray(result?.routes)) return result.routes;
+            if (Array.isArray(result?.domains)) return result.domains;
+            return [];
+          });
+          const hostname = process.env.HOSTNAME;
+          const match = rows.find((row) =>
+            row?.hostname === hostname ||
+            row?.pattern === `${hostname}/*` ||
+            row?.route === `${hostname}/*`
+          );
+          process.stdout.write(match?.zone_id || match?.zoneId || "");
+          NODE
+          )"
+
+          if ! [[ "$zone_id" =~ ^[0-9a-f]{32}$ ]]; then
+            echo "Unable to resolve the Cloudflare zone ID for ${hostname}." >&2
+            exit 1
+          fi
+
+          ZONE_ID="$zone_id" node <<'NODE'
+          const fs = require("fs");
+          const path = "wrangler.toml";
+          const source = fs.readFileSync(path, "utf8");
+          const updated = source.replace(
+            'zone_name = "dpdns.org"',
+            `zone_id = "${process.env.ZONE_ID}"`,
+          );
+          if (updated === source) throw new Error("Production route zone placeholder was not found");
+          fs.writeFileSync(path, updated);
+          NODE
+          echo "Resolved the production Worker route to its existing Cloudflare zone."
+
       - name: Prepare production D1 binding when permitted
         id: database
         shell: bash
