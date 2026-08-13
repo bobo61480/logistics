@@ -34,8 +34,23 @@ describe("control tower Worker routing", () => {
     expect(status).toContain("Cross-site status writes are not allowed");
     expect(status).toContain("Content-Type must be application/json");
     expect(status).toContain("MAX_COMMAND_BYTES");
+    expect(status).toContain("STATUS_WRITE_RATE_LIMITER.limit");
+    expect(status).toContain("Status write rate limit exceeded");
+    expect(status).toContain('"retry-after": "60"');
+    expect(status).toContain('event: "status-write-confirmed"');
     expect(status).not.toContain("AKfycbz770kmpwqMTA-h-lzeLARgVnDh_VDjh-70OOKk_yE-iXJTmzAsVXUtln17QTOURO1R");
     expect(wrangler).toContain("AKfycbz770kmpwqMTA-h-lzeLARgVnDh_VDjh-70OOKk_yE-iXJTmzAsVXUtln17QTOURO1R");
+    expect(wrangler).toContain('name = "STATUS_WRITE_RATE_LIMITER"');
+    expect(wrangler).toContain("limit = 30");
+    expect(wrangler).toContain("period = 60");
+  });
+
+  it("reports the intentionally public access policy without presenting safeguards as authentication", () => {
+    const worker = read("worker/index.ts");
+
+    expect(worker).toContain('accessPolicy: "public"');
+    expect(worker).toContain('statusWriteAuthentication: "none"');
+    expect(worker).toContain('statusWriteRateLimit: "30 requests per 60 seconds per client IP and Cloudflare location"');
   });
 
   it("keeps the last good snapshot available during a short source outage", () => {

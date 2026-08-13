@@ -54,6 +54,13 @@ for (const route of routes) {
 
 const health = await get(`/api/logistics/health?verify=${Date.now()}`, true);
 if (health.ok !== true) throw new Error(`health: ${JSON.stringify(health).slice(0, 500)}`);
+if (health.accessPolicy !== "public") throw new Error(`health: unexpected access policy ${health.accessPolicy}`);
+if (health.statusWriteAuthentication !== "none") {
+  throw new Error(`health: unexpected status-write authentication ${health.statusWriteAuthentication}`);
+}
+if (!String(health.statusWriteRateLimit).includes("30 requests per 60 seconds")) {
+  throw new Error(`health: status-write rate limit is not reported: ${health.statusWriteRateLimit}`);
+}
 if (requireD1 && health.databaseConfigured !== true) throw new Error("health: production D1 binding is required but missing");
 if (health.databaseConfigured && !String(health.dataStore).includes("D1")) {
   throw new Error(`health: D1 is not reflected by ${health.dataStore}`);

@@ -16,7 +16,7 @@ describe("production hardening", () => {
     expect(workflow).toContain("/api/logistics/reconciliation");
     expect(workflow).toContain('"ok":true');
     expect(workflow).toContain("sourceHealth");
-    expect(workflow).toContain("worker-v7-hybrid-ready");
+    expect(workflow).toContain("worker-v8-public-guardrails");
     expect(workflow).toContain("d1 migrations apply");
     expect(workflow).toContain('binding = "DB"');
     expect(workflow).toContain("EXPECTED_DATABASE_CONFIGURED");

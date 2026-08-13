@@ -8,7 +8,7 @@ import {
 import { fetchOperationalSources } from "./sources";
 import { handleStatusCommand } from "./status-command";
 
-const WORKER_VERSION = "2026-08-12-worker-v7-hybrid-ready";
+const WORKER_VERSION = "2026-08-13-worker-v8-public-guardrails";
 const SNAPSHOT_CACHE_URL = "https://stylekorean.internal/api/logistics/snapshot";
 const SNAPSHOT_CACHE_SECONDS = 60;
 const SNAPSHOT_REFRESH_SECONDS = 15 * 60;
@@ -167,8 +167,11 @@ function handleHealth(env: Env) {
     version: WORKER_VERSION,
     dataStore: hasDatabase(env) ? "Cloudflare D1 + Google Sheets fallback" : "Google Sheets",
     databaseConfigured: hasDatabase(env),
+    accessPolicy: "public",
     statusWriteConfigured: Boolean(env.APPS_SCRIPT_WRITE_URL),
     statusWriteMode: "Apps Script source-confirmed proxy",
+    statusWriteAuthentication: "none",
+    statusWriteRateLimit: "30 requests per 60 seconds per client IP and Cloudflare location",
     checkedAt: new Date().toISOString(),
   });
 }

@@ -50,6 +50,15 @@ export async function handleStatusCommand(request: Request, env: Env, context?: 
   if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
     return json({ ok: false, error: "Content-Type must be application/json" }, 415);
   }
+  const clientIp = request.headers.get("cf-connecting-ip")?.trim() || "unknown";
+  const rateLimit = await env.STATUS_WRITE_RATE_LIMITER.limit({ key: `status-write:${clientIp}` });
+  if (!rateLimit.success) {
+    console.warn(JSON.stringify({ event: "status-write-rate-limited", clientIpPresent: clientIp !== "unknown" }));
+    return Response.json(
+      { ok: false, error: "Status write rate limit exceeded. Try again in one minute." },
+      { status: 429, headers: { "cache-control": "no-store", "retry-after": "60" } },
+    );
+  }
   const declaredLength = Number(request.headers.get("content-length") || 0);
   if (declaredLength > MAX_COMMAND_BYTES) return json({ ok: false, error: "Command is too large" }, 413);
   const body = await request.text();
@@ -100,6 +109,16 @@ export async function handleStatusCommand(request: Request, env: Env, context?: 
   if (normalizeLogisticsStatus(result.status) !== status) {
     return json({ ok: false, error: "Persisted status did not match the command", correlationId }, 502);
   }
+  console.log(JSON.stringify({
+    event: "status-write-confirmed",
+    correlationId,
+    kind: command.kind,
+    sourceSheet: command.sourceSheet,
+    sourceRow: Number(command.sourceRow),
+    previousStatus: command.currentStatus || null,
+    status,
+    auditedInD1: Boolean(hasDatabase(env) && context),
+  }));
   if (hasDatabase(env) && context) {
     const entityId = command.shipmentNo || command.invoice || command.container || `${command.sourceSheet}:${command.sourceRow}`;
     context.waitUntil(recordConfirmedStatusWrite(env.DB, {
