@@ -1,6 +1,9 @@
 name: Provision production D1 read model
 
 on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/provision-d1.yml]
   workflow_dispatch:
 
 permissions:
