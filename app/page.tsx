@@ -983,6 +983,10 @@ async function fetchLiveKpis() {
 type WorkerSnapshot = {
   ok: true;
   generatedAt?: string;
+  version?: string;
+  stale?: boolean;
+  staleReason?: string;
+  sourceHealth?: Array<{ name: string; ok: boolean; error?: string }>;
   sources: {
     imports?: string[][];
     outbound?: string[][];
@@ -1054,15 +1058,30 @@ async function fetchOperationalSnapshot() {
       inventoryDashboardTable: sources.inventoryDashboardTable ?? null,
       skwInboundTable: sources.skwInboundTable ?? null,
       skwStockTable: sources.skwStockTable ?? null,
-      source: "worker" as const,
+      connection: {
+        mode: snapshot.stale ? "stale" as const : "worker" as const,
+        version: snapshot.version,
+        detail: snapshot.staleReason,
+        degradedSources: (snapshot.sourceHealth ?? []).filter((source) => !source.ok).length,
+      },
     };
   } catch (workerError) {
     // Keep a read-only direct-Sheets fallback so the schedule remains visible
     // during a Worker routing incident. Status writes still require the Worker.
     console.warn("Worker snapshot unavailable; falling back to Google Sheets.", workerError);
-    return { ...(await fetchSheetSnapshot()), source: "sheets" as const };
+    return {
+      ...(await fetchSheetSnapshot()),
+      connection: {
+        mode: "sheets" as const,
+        version: undefined,
+        detail: workerError instanceof Error ? workerError.message : "Worker snapshot unavailable",
+        degradedSources: 0,
+      },
+    };
   }
 }
+
+type ConnectionState = Awaited<ReturnType<typeof fetchOperationalSnapshot>>["connection"];
 
 function normalizeStatus(value: string) {
   const normalized = clean(value).toLowerCase();
@@ -2197,6 +2216,7 @@ export default function Home() {
   const [inboundInventory, setInboundInventory] = useState<InventoryItem[]>([]);
   const [warehouseStock, setWarehouseStock] = useState<InventoryItem[]>([]);
   const [selectedInventory, setSelectedInventory] = useState<InventoryItem | null>(null);
+  const [connection, setConnection] = useState<ConnectionState | null>(null);
   const loadInFlight = useRef(false);
   const lastRefreshAt = useRef(0);
 
@@ -2224,6 +2244,7 @@ export default function Home() {
         inventoryDashboardTable,
         skwInboundTable,
         skwStockTable,
+        connection: nextConnection,
       } = await fetchOperationalSnapshot();
       // Each source row remains its own operational move. Do not infer or merge
       // loads merely because customer names and dates happen to match.
@@ -2244,6 +2265,7 @@ export default function Home() {
         ...dashboardInventory.inStock,
         ...skwStockItems(skwStockTable),
       ], false));
+      setConnection(nextConnection);
       const refreshedAt = new Date();
       lastRefreshAt.current = refreshedAt.getTime();
       setUpdatedAt(refreshedAt);
@@ -2478,15 +2500,36 @@ export default function Home() {
         </div>
         <div className="sync-strip" role="status" aria-live="polite">
           <span>
-            <b className={error ? "sync-dot error" : loading ? "sync-dot loading" : "sync-dot"} />
-            {error ? "Workbook connection needs attention" : loading ? "Syncing live records…" : "3 live workbooks connected"}
+            <b className={error ? "sync-dot error" : loading ? "sync-dot loading" : connection?.mode !== "worker" || connection?.degradedSources ? "sync-dot warning" : "sync-dot"} />
+            {error
+              ? "Workbook connection needs attention"
+              : loading
+                ? "Syncing live records…"
+                : connection?.mode === "sheets"
+                  ? "Direct Sheets fallback · Worker reconnecting"
+                  : connection?.mode === "stale"
+                    ? "Last good snapshot · live sources reconnecting"
+                    : connection?.degradedSources
+                      ? `${connection.degradedSources} optional source${connection.degradedSources === 1 ? "" : "s"} unavailable`
+                      : "Worker snapshot · 3 live workbooks connected"}
           </span>
           <span className="mono">
             AUTO SYNC 30 MIN · LAST SYNC {updatedAt ? updatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "America/Los_Angeles" }) : "—"}
             {" · "}NEXT CHECK {nextRefreshAt ? nextRefreshAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "America/Los_Angeles" }) : "—"}
+            {connection?.version ? ` · ${connection.version}` : ""}
           </span>
         </div>
       </header>
+
+      {!error && connection && connection.mode !== "worker" && (
+        <div className="alert warning" role="status">
+          <strong>{connection.mode === "stale" ? "Continuity mode." : "Fallback mode."}</strong>{" "}
+          {connection.mode === "stale"
+            ? "The last verified snapshot is still available while live workbook sources recover."
+            : "The dashboard is reading Google Sheets directly; status writes still require the Worker."}
+          {connection.detail ? ` ${connection.detail}` : ""}
+        </div>
+      )}
 
       {error && (
         <div className="alert" role="alert">

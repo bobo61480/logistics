@@ -38,6 +38,13 @@ export async function handleStatusCommand(request: Request, env: Env) {
   if (origin && origin !== new URL(request.url).origin) {
     return json({ ok: false, error: "Cross-origin status writes are not allowed" }, 403);
   }
+  const fetchSite = request.headers.get("sec-fetch-site");
+  if (fetchSite === "cross-site") {
+    return json({ ok: false, error: "Cross-site status writes are not allowed" }, 403);
+  }
+  if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
+    return json({ ok: false, error: "Content-Type must be application/json" }, 415);
+  }
   const declaredLength = Number(request.headers.get("content-length") || 0);
   if (declaredLength > MAX_COMMAND_BYTES) return json({ ok: false, error: "Command is too large" }, 413);
   const body = await request.text();
@@ -73,7 +80,7 @@ export async function handleStatusCommand(request: Request, env: Env) {
       signal: controller.signal,
     });
   } catch (error) {
-    console.error("status-write upstream failure", { correlationId, error: String(error) });
+    console.error(JSON.stringify({ event: "status-write-upstream-failure", correlationId, error: String(error) }));
     return json({ ok: false, error: "Status source is unavailable", correlationId }, 502);
   } finally {
     clearTimeout(timer);

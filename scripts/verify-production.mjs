@@ -28,6 +28,24 @@ async function get(path, expectJson = false) {
   }
 }
 
+async function getHeaders(path) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${base}${path}`, {
+      cache: "no-store",
+      redirect: "follow",
+      signal: controller.signal,
+      headers: { "user-agent": "StyleKorean-Production-Verifier/2026-08-12" },
+    });
+    if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`);
+    await response.body?.cancel();
+    return response.headers;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 for (const route of routes) {
   const html = await get(`${route}?verify=${Date.now()}`);
   if (!/StyleKorean/i.test(html)) throw new Error(`${route}: StyleKorean application marker missing`);
@@ -35,6 +53,10 @@ for (const route of routes) {
 
 const health = await get(`/api/logistics/health?verify=${Date.now()}`, true);
 if (health.ok !== true) throw new Error(`health: ${JSON.stringify(health).slice(0, 500)}`);
+if (health.dataStore !== "Google Sheets") throw new Error(`health: unexpected data store ${health.dataStore}`);
+const healthHeaders = await getHeaders(`/api/logistics/health?headers=${Date.now()}`);
+if (healthHeaders.get("x-content-type-options") !== "nosniff") throw new Error("health: nosniff header missing");
+if (healthHeaders.get("x-frame-options") !== "DENY") throw new Error("health: frame protection header missing");
 
 const snapshot = await get(`/api/logistics/snapshot?verify=${Date.now()}`, true);
 if (snapshot.ok !== true) throw new Error(`snapshot: ${JSON.stringify(snapshot).slice(0, 500)}`);

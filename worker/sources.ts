@@ -10,11 +10,41 @@ const TRUCKING_GID = 1418033635;
 const TRANSFERS_GID = 1834454901;
 const NATIONAL_GID = 99300389;
 const WMS_GID = 0;
+const MAX_SOURCE_BYTES = 4 * 1024 * 1024;
 
 export type SourceHealth = { name: string; ok: boolean; fetchedAt: string; latencyMs: number; error?: string };
 export type SourceResult<T> = { health: SourceHealth; data: T | null };
 
 type GvizTable = { cols?: Array<{ label?: string }>; rows?: Array<{ c?: Array<{ v?: unknown; f?: string } | null> }> };
+
+export async function readBoundedText(response: Response, maxBytes = MAX_SOURCE_BYTES) {
+  const declaredLength = Number(response.headers.get("content-length") || 0);
+  if (declaredLength > maxBytes) {
+    await response.body?.cancel();
+    throw new Error(`Source response exceeds ${maxBytes} bytes`);
+  }
+  if (!response.body) return "";
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let received = 0;
+  let text = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.byteLength;
+      if (received > maxBytes) {
+        await reader.cancel();
+        throw new Error(`Source response exceeds ${maxBytes} bytes`);
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    return text + decoder.decode();
+  } finally {
+    reader.releaseLock();
+  }
+}
 
 function parseCsv(text: string) {
   const rows: string[][] = [];
@@ -79,7 +109,7 @@ async function timedFetch(name: string, url: URL): Promise<SourceResult<string>>
   try {
     const response = await fetch(url, { headers: { "user-agent": "StyleKorean-Control-Tower/2026-08-12" }, signal: controller.signal });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return { data: await response.text(), health: { name, ok: true, fetchedAt: new Date().toISOString(), latencyMs: Date.now() - started } };
+    return { data: await readBoundedText(response), health: { name, ok: true, fetchedAt: new Date().toISOString(), latencyMs: Date.now() - started } };
   } catch (error) {
     return { data: null, health: { name, ok: false, fetchedAt: new Date().toISOString(), latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) } };
   } finally { clearTimeout(timer); }

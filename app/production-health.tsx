@@ -6,7 +6,7 @@ import styles from "./production-health.module.css";
 type ProductionHealthPayload = {
   ok?: boolean;
   version?: string;
-  databaseConfigured?: boolean;
+  dataStore?: string;
   statusWriteConfigured?: boolean;
   statusWriteMode?: string;
   checkedAt?: string;
@@ -36,7 +36,7 @@ export function ProductionHealth() {
       if (payload.ok !== true) throw new Error("Worker health check failed");
       setState({ payload, error: false });
     } catch {
-      setState((current) => ({ payload: current.payload, error: true }));
+      setState({ payload: null, error: true });
     } finally {
       window.clearTimeout(timer);
     }
@@ -56,11 +56,7 @@ export function ProductionHealth() {
     : state.error
       ? "UNKNOWN"
       : "CHECKING";
-  const databaseStatus = state.payload
-    ? state.payload.databaseConfigured
-      ? "CONNECTED"
-      : "OPTIONAL / UNBOUND"
-    : "CHECKING";
+  const dataStatus = state.payload?.dataStore ?? (state.error ? "UNKNOWN" : "CHECKING");
 
   return (
     <section className={styles.strip} aria-label="Production health">
@@ -72,7 +68,7 @@ export function ProductionHealth() {
         WRITE PROXY <strong data-state={writeStatus}>{writeStatus}</strong>
       </span>
       <span className={styles.item}>
-        DATABASE <strong data-state={databaseStatus}>{databaseStatus}</strong>
+        DATA <strong data-state={dataStatus.toUpperCase()}>{dataStatus.toUpperCase()}</strong>
       </span>
       {state.payload?.version && <span className={styles.version}>{state.payload.version}</span>}
     </section>

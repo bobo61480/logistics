@@ -116,7 +116,7 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
 }
 
 .manifest-actions { display: grid; gap: 7px; min-width: 210px; }
-.source-buttons { display: grid; grid-template-columns: repeat(4, 1fr); }
+.source-buttons { display: grid; grid-template-columns: repeat(3, 1fr); }
 .source-buttons .button {
   min-height: 38px;
   padding-inline: 10px;
@@ -150,6 +150,7 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
 .sync-dot { width: 7px; height: 7px; border-radius: 50%; background: #66d19e; box-shadow: 0 0 0 4px rgba(102, 209, 158, .12); }
 .sync-dot.loading { background: #f2b94b; }
 .sync-dot.error { background: #f0705f; }
+.sync-dot.warning { background: #f2b94b; box-shadow: 0 0 0 4px rgba(242, 185, 75, .14); }
 .mono { font-family: "IBM Plex Mono", monospace; }
 
 .alert {
@@ -162,9 +163,15 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
   line-height: 1.5;
 }
 
+.alert.warning {
+  border-color: #d6a84f;
+  background: #fff8e7;
+  color: #694f13;
+}
+
 .metrics {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 7px;
   margin-top: 8px;
 }
