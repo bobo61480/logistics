@@ -21,6 +21,12 @@ describe("production hardening", () => {
     expect(workflow).toContain("worker-v8-public-guardrails");
     expect(workflow).toContain("d1 migrations apply");
     expect(workflow).toContain('binding = "DB"');
+    expect(workflow).toContain("wrangler versions upload");
+    expect(workflow).toContain("wrangler versions deploy");
+    expect(workflow).toContain("wrangler triggers deploy");
+    expect(workflow).toContain('release_tag="release-${GITHUB_SHA}"');
+    expect(workflow).toContain("The version deployment config still contains a route block");
+    expect(workflow).not.toContain("wrangler deploy --config .wrangler.production.toml");
     expect(workflow).toContain("EXPECTED_DATABASE_CONFIGURED");
     expect(workflow).toContain("D1 permission is unavailable");
     expect(workflow).toContain("Account > D1 > Edit");
