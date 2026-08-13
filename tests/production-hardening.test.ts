@@ -21,8 +21,7 @@ describe("production hardening", () => {
     expect(workflow).toContain('binding = "DB"');
     expect(workflow).toContain("EXPECTED_DATABASE_CONFIGURED");
     expect(workflow).toContain("D1 permission is unavailable");
-    expect(workflow).toContain("/workers/domains/records");
-    expect(workflow).toContain('zone_id = "${process.env.ZONE_ID}"');
+    expect(workflow).toContain("CLOUDFLARE_ZONE_ID: 5d128576939145a0274370efd693dafe");
     expect(workflow).toContain("/dns_records");
     expect(workflow).toContain('content: "192.0.2.1"');
     expect(workflow).toContain("proxied: true");

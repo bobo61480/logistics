@@ -6,7 +6,7 @@ workers_dev = false
 
 [[routes]]
 pattern = "stylekorean.dpdns.org/*"
-zone_name = "dpdns.org"
+zone_id = "5d128576939145a0274370efd693dafe"
 
 [vars]
 APPS_SCRIPT_WRITE_URL = "https://script.google.com/macros/s/AKfycbz770kmpwqMTA-h-lzeLARgVnDh_VDjh-70OOKk_yE-iXJTmzAsVXUtln17QTOURO1R/exec"
