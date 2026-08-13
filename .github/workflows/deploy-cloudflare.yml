@@ -122,12 +122,42 @@ jobs:
           EXPECTED_DATABASE_CONFIGURED: ${{ steps.database.outputs.configured }}
         run: |
           set -euo pipefail
+          fetch_route() {
+            local url="$1"
+            local body_file="$2"
+            local headers_file="$3"
+            local status
+
+            status="$(curl -sSL --max-time 30 \
+              -H 'Accept: text/html,application/xhtml+xml' \
+              -H 'User-Agent: StyleKorean-Production-Smoke/1.0' \
+              -D "$headers_file" \
+              -o "$body_file" \
+              -w '%{http_code}' \
+              "$url")" || status="curl-error"
+
+            if [[ "$status" == 2* ]]; then
+              return 0
+            fi
+
+            echo "Route request failed with HTTP ${status}: ${url}"
+            echo "Response headers:"
+            sed -n '1,40p' "$headers_file" 2>/dev/null || true
+            echo "Response body (first 1,200 bytes):"
+            head -c 1200 "$body_file" 2>/dev/null || true
+            echo
+            return 1
+          }
+
           for attempt in 1 2 3 4 5 6; do
             suffix="?release=${GITHUB_SHA}&attempt=${attempt}"
             failed=0
             for route in "/" "/light-skin" "/light" "/light-full" "/fulfillment-style"; do
               safe_name="$(echo "$route" | tr '/' '_' | sed 's/^_$/root/')"
-              if ! curl -fsSL --max-time 30 "https://stylekorean.dpdns.org${route}${suffix}" -o "/tmp/live-${safe_name}.html"; then
+              if ! fetch_route \
+                "https://stylekorean.dpdns.org${route}${suffix}" \
+                "/tmp/live-${safe_name}.html" \
+                "/tmp/live-${safe_name}.headers"; then
                 echo "Route failed on attempt ${attempt}: ${route}"
                 failed=1
                 break
