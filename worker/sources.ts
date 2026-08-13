@@ -14,6 +14,13 @@ const MAX_SOURCE_BYTES = 4 * 1024 * 1024;
 
 export type SourceHealth = { name: string; ok: boolean; fetchedAt: string; latencyMs: number; error?: string };
 export type SourceResult<T> = { health: SourceHealth; data: T | null };
+export type OutboundSourceMeta = {
+  sheetName: "Outbound Shipping Schedule" | "WH Trucking Request";
+  headerRow: number;
+  rowCount: number;
+  fallback: boolean;
+  reason?: string;
+};
 
 type GvizTable = { cols?: Array<{ label?: string }>; rows?: Array<{ c?: Array<{ v?: unknown; f?: string } | null> }> };
 
@@ -102,6 +109,51 @@ export function normalizeImportsParcelRows(rows: string[][]) {
   });
 }
 
+function populatedOutboundRows(rows: string[][] | null, headerRow: number) {
+  if (!rows) return 0;
+  return rows.slice(headerRow).filter((row) => {
+    const customer = String(row[0] ?? "").trim();
+    const shipDate = String(row[3] ?? "").trim();
+    return Boolean(customer && shipDate);
+  }).length;
+}
+
+export function selectOutboundSource(
+  scheduleRows: string[][] | null,
+  truckingRows: string[][] | null,
+): { rows: string[][] | null; meta: OutboundSourceMeta } {
+  const scheduleRowCount = populatedOutboundRows(scheduleRows, 3);
+  const truckingRowCount = populatedOutboundRows(truckingRows, 2);
+  if (scheduleRowCount > 0) {
+    return {
+      rows: scheduleRows,
+      meta: { sheetName: "Outbound Shipping Schedule", headerRow: 3, rowCount: scheduleRowCount, fallback: false },
+    };
+  }
+  if (truckingRowCount > 0) {
+    return {
+      rows: truckingRows,
+      meta: {
+        sheetName: "WH Trucking Request",
+        headerRow: 2,
+        rowCount: truckingRowCount,
+        fallback: true,
+        reason: "Outbound Shipping Schedule has no shipment rows",
+      },
+    };
+  }
+  return {
+    rows: scheduleRows ?? truckingRows,
+    meta: {
+      sheetName: scheduleRows ? "Outbound Shipping Schedule" : "WH Trucking Request",
+      headerRow: scheduleRows ? 3 : 2,
+      rowCount: 0,
+      fallback: Boolean(truckingRows),
+      reason: "No populated outbound shipment rows are available",
+    },
+  };
+}
+
 async function timedFetch(name: string, url: URL): Promise<SourceResult<string>> {
   const started = Date.now();
   const controller = new AbortController();
@@ -153,11 +205,21 @@ export async function fetchOperationalSources() {
     fetchGvizSource("SKW Stock", LOGISTICS_MASTER_ID, { sheet: "SKW_Stock", range: "A1:J2500", headers: 1 }),
   ]);
 
+  const effectiveOutbound = selectOutboundSource(outbound.data, trucking.data);
+  const outboundHealth = effectiveOutbound.meta.fallback
+    ? {
+        ...outbound.health,
+        ok: false,
+        error: effectiveOutbound.meta.reason,
+      }
+    : outbound.health;
+
   return {
-    sourceHealth: [imports, outbound, trucking, transfers, nationalOutbound, salesOutbound, inventoryDashboardTable, skwInboundTable, skwStockTable].map((entry) => entry.health),
+    sourceHealth: [imports, { health: outboundHealth }, trucking, transfers, nationalOutbound, salesOutbound, inventoryDashboardTable, skwInboundTable, skwStockTable].map((entry) => entry.health),
     sources: {
       imports: imports.data ? normalizeImportsParcelRows(imports.data) : null,
-      outbound: outbound.data,
+      outbound: effectiveOutbound.rows,
+      outboundMeta: effectiveOutbound.meta,
       nationalOutbound: nationalOutbound.data,
       salesOutbound: salesOutbound.data,
       inventoryDashboardTable: inventoryDashboardTable.data,

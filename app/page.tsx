@@ -19,6 +19,7 @@ const SALES_SHEET_ID =
   "14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I";
 const IMPORTS_GID = Number(process.env.NEXT_PUBLIC_IMPORTS_GID ?? 1497250700);
 const OUTBOUND_GID = Number(process.env.NEXT_PUBLIC_OUTBOUND_GID ?? 20260708);
+const TRUCKING_GID = Number(process.env.NEXT_PUBLIC_TRUCKING_GID ?? 1418033635);
 const NATIONAL_GID = Number(process.env.NEXT_PUBLIC_NATIONAL_GID ?? 99300389);
 const SALES_GID = Number(process.env.NEXT_PUBLIC_WMS_GID ?? 0);
 const NATIONAL_SHEET_URL = `https://docs.google.com/spreadsheets/d/${NATIONAL_SHEET_ID}/edit?gid=${NATIONAL_GID}#gid=${NATIONAL_GID}`;
@@ -349,6 +350,9 @@ function sourceRowUrl(item: ScheduleItem) {
   }
   if (item.sourceSheet === "Outbound Shipping Schedule") {
     return `${SHEET_URL}?gid=${OUTBOUND_GID}&range=A${item.sourceRow}#gid=${OUTBOUND_GID}&range=A${item.sourceRow}`;
+  }
+  if (item.sourceSheet === "WH Trucking Request") {
+    return `${SHEET_URL}?gid=${TRUCKING_GID}&range=A${item.sourceRow}#gid=${TRUCKING_GID}&range=A${item.sourceRow}`;
   }
   if (item.sourceSheet === "NATIONAL ORDER PROGRESS") {
     return `https://docs.google.com/spreadsheets/d/${NATIONAL_SHEET_ID}/edit?gid=${NATIONAL_GID}&range=A${item.sourceRow}#gid=${NATIONAL_GID}&range=A${item.sourceRow}`;
@@ -991,6 +995,7 @@ type WorkerSnapshot = {
   sources: {
     imports?: string[][];
     outbound?: string[][];
+    outboundMeta?: OutboundSourceMeta;
     nationalOutbound?: any;
     salesOutbound?: any;
     inventoryDashboardTable?: any;
@@ -999,6 +1004,25 @@ type WorkerSnapshot = {
   };
   kpis?: KpiSnapshot | null;
 };
+
+type OutboundSourceMeta = {
+  sheetName: "Outbound Shipping Schedule" | "WH Trucking Request";
+  headerRow: number;
+  rowCount: number;
+  fallback: boolean;
+  reason?: string;
+};
+
+const OUTBOUND_SCHEDULE_META: OutboundSourceMeta = {
+  sheetName: "Outbound Shipping Schedule",
+  headerRow: 3,
+  rowCount: 0,
+  fallback: false,
+};
+
+function populatedOutboundRows(rows: string[][], headerRow: number) {
+  return rows.slice(headerRow).some((row) => Boolean(cell(row, 0) && cell(row, 3)));
+}
 
 async function fetchWorkerSnapshot(): Promise<WorkerSnapshot> {
   const response = await fetch(DATA_ENDPOINT, { cache: "no-store" });
@@ -1018,6 +1042,7 @@ async function fetchSheetSnapshot() {
   const [
     imports,
     outbound,
+    trucking,
     nationalOutbound,
     salesOutbound,
     liveKpis,
@@ -1027,6 +1052,7 @@ async function fetchSheetSnapshot() {
   ] = await Promise.all([
     fetchCsvRows(SHEET_ID, IMPORTS_GID),
     fetchCsvRows(SHEET_ID, OUTBOUND_GID),
+    fetchCsvRows(SHEET_ID, TRUCKING_GID),
     fetchTable(NATIONAL_SHEET_ID, NATIONAL_GID, "A1:U3500", 1),
     fetchTable(SALES_SHEET_ID, SALES_GID, "A2:AF4200", 1),
     fetchLiveKpis(),
@@ -1034,9 +1060,20 @@ async function fetchSheetSnapshot() {
     fetchOptionalSheet("SKW_Inbound", "A1:R2500"),
     fetchOptionalSheet("SKW_Stock", "A1:J2500"),
   ]);
+  const useSchedule = populatedOutboundRows(outbound, OUTBOUND_SCHEDULE_META.headerRow);
+  const outboundMeta: OutboundSourceMeta = useSchedule
+    ? { ...OUTBOUND_SCHEDULE_META, rowCount: outbound.slice(OUTBOUND_SCHEDULE_META.headerRow).filter((row) => Boolean(cell(row, 0) && cell(row, 3))).length }
+    : {
+        sheetName: "WH Trucking Request",
+        headerRow: 2,
+        rowCount: trucking.slice(2).filter((row) => Boolean(cell(row, 0) && cell(row, 3))).length,
+        fallback: true,
+        reason: "Outbound Shipping Schedule has no shipment rows",
+      };
   return {
     imports,
-    outbound,
+    outbound: useSchedule ? outbound : trucking,
+    outboundMeta,
     nationalOutbound,
     salesOutbound,
     liveKpis,
@@ -1053,6 +1090,7 @@ async function fetchOperationalSnapshot() {
     return {
       imports: sources.imports!,
       outbound: sources.outbound!,
+      outboundMeta: sources.outboundMeta ?? OUTBOUND_SCHEDULE_META,
       nationalOutbound: sources.nationalOutbound ?? { cols: [], rows: [] },
       salesOutbound: sources.salesOutbound ?? { cols: [], rows: [] },
       liveKpis: snapshot.kpis ?? (await fetchLiveKpis()),
@@ -1652,10 +1690,13 @@ function resolveOutboundSource(records: OutboundSourceRecord[], item: ScheduleIt
   );
 }
 
-function outboundItems(rows: string[][]): ScheduleItem[] {
+function outboundItems(
+  rows: string[][],
+  meta: OutboundSourceMeta = OUTBOUND_SCHEDULE_META,
+): ScheduleItem[] {
   return rows.flatMap((row, index) => {
     const sourceRow = index + 1;
-    if (sourceRow < 4) return [];
+    if (sourceRow <= meta.headerRow) return [];
     const customer = cell(row, 0);
     const invoice = cell(row, 1);
     const shipDate = cell(row, 3);
@@ -1675,7 +1716,7 @@ function outboundItems(rows: string[][]): ScheduleItem[] {
         reference: invoice || cell(row, 18) || "Outbound shipment",
         secondary: [cell(row, 16), cell(row, 18)].filter(Boolean).join(" · "),
         status,
-        sourceSheet: "Outbound Shipping Schedule",
+        sourceSheet: meta.sheetName,
         sourceRow,
         sourceUrl: SHEET_URL,
         editable: true,
@@ -2241,6 +2282,7 @@ export default function Home() {
       const {
         imports,
         outbound,
+        outboundMeta,
         nationalOutbound,
         salesOutbound,
         liveKpis,
@@ -2254,7 +2296,7 @@ export default function Home() {
       setItems([
         ...pendingImportItems(imports),
         ...inboundParcelItems(imports),
-        ...outboundItems(outbound),
+        ...outboundItems(outbound, outboundMeta),
         ...nationalOutboundItems(nationalOutbound),
         ...salesOutboundItems(salesOutbound),
       ]);

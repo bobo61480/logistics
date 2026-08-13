@@ -3,7 +3,9 @@ import type { SourceHealth } from "./sources";
 // A chunk is at most 512 KiB even when every UTF-16 code unit encodes to four
 // UTF-8 bytes, leaving generous room below D1's 1 MB row limit.
 const PART_CHARACTERS = 128 * 1024;
-const MAX_PARTS = 900;
+// Each part insert is one D1 query. Keep the publication transaction plus
+// retention below the 50-query Worker invocation limit on the Free plan.
+const MAX_PARTS = 44;
 const RETAINED_SNAPSHOTS = 4;
 
 export type OperationalSnapshot = {
