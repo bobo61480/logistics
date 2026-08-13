@@ -13,9 +13,10 @@ describe("production hardening", () => {
     }
     expect(workflow).toContain("/api/logistics/health");
     expect(workflow).toContain("/api/logistics/snapshot");
+    expect(workflow).toContain("/api/logistics/reconciliation");
     expect(workflow).toContain('"ok":true');
     expect(workflow).toContain("sourceHealth");
-    expect(workflow).toContain("worker-v4-resilient-snapshot");
+    expect(workflow).toContain("worker-v5-d1-ready");
     expect(workflow).toContain("x-content-type-options: nosniff");
   });
 

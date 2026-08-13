@@ -7,6 +7,7 @@ type ProductionHealthPayload = {
   ok?: boolean;
   version?: string;
   dataStore?: string;
+  databaseConfigured?: boolean;
   statusWriteConfigured?: boolean;
   statusWriteMode?: string;
   checkedAt?: string;
@@ -56,7 +57,9 @@ export function ProductionHealth() {
     : state.error
       ? "UNKNOWN"
       : "CHECKING";
-  const dataStatus = state.payload?.dataStore ?? (state.error ? "UNKNOWN" : "CHECKING");
+  const dataStatus = state.payload
+    ? state.payload.databaseConfigured ? "D1 + SHEETS" : state.payload.dataStore ?? "UNKNOWN"
+    : state.error ? "UNKNOWN" : "CHECKING";
 
   return (
     <section className={styles.strip} aria-label="Production health">

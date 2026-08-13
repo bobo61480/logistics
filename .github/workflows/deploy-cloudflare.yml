@@ -71,6 +71,7 @@ jobs:
 
             if [ "$failed" -eq 0 ] \
               && curl -fsSL --max-time 30 -D /tmp/live-health.headers "https://stylekorean.dpdns.org/api/logistics/health${suffix}" -o /tmp/live-health.json \
+              && curl -fsSL --max-time 30 "https://stylekorean.dpdns.org/api/logistics/reconciliation${suffix}" -o /tmp/live-reconciliation.json \
               && curl -fsSL --max-time 60 "https://stylekorean.dpdns.org/api/logistics/snapshot${suffix}" -o /tmp/live-snapshot.json \
               && grep -Fq '"ok":true' /tmp/live-health.json \
               && grep -Fq '"ok":true' /tmp/live-snapshot.json \
@@ -78,7 +79,7 @@ jobs:
               && grep -Fq 'generatedAt' /tmp/live-snapshot.json \
               && grep -Fiq 'x-content-type-options: nosniff' /tmp/live-health.headers \
               && grep -Fiq 'x-frame-options: DENY' /tmp/live-health.headers \
-              && node -e 'const fs=require("fs"); const health=JSON.parse(fs.readFileSync("/tmp/live-health.json","utf8")); const snapshot=JSON.parse(fs.readFileSync("/tmp/live-snapshot.json","utf8")); if(health.ok!==true||health.version!=="2026-08-12-worker-v4-resilient-snapshot"||health.dataStore!=="Google Sheets"||snapshot.ok!==true||!Array.isArray(snapshot.sourceHealth)||Number.isNaN(Date.parse(snapshot.generatedAt))) process.exit(1); const core=new Map(snapshot.sourceHealth.map(i=>[i.name,i])); for(const name of ["IMPORTS","Outbound Shipping Schedule"]){if(!core.get(name)?.ok){console.error(`Core source unhealthy: ${name}`);process.exit(1)}} console.log(`Live Worker ${health.version}; snapshot ${snapshot.generatedAt}; ${snapshot.sourceHealth.length} source checks.`);'; then
+              && node -e 'const fs=require("fs"); const health=JSON.parse(fs.readFileSync("/tmp/live-health.json","utf8")); const reconciliation=JSON.parse(fs.readFileSync("/tmp/live-reconciliation.json","utf8")); const snapshot=JSON.parse(fs.readFileSync("/tmp/live-snapshot.json","utf8")); if(health.ok!==true||health.version!=="2026-08-12-worker-v5-d1-ready"||typeof health.databaseConfigured!=="boolean"||reconciliation.ok!==true||reconciliation.databaseConfigured!==health.databaseConfigured||snapshot.ok!==true||!Array.isArray(snapshot.sourceHealth)||Number.isNaN(Date.parse(snapshot.generatedAt))) process.exit(1); if(health.databaseConfigured&&(!String(health.dataStore).includes("D1")||reconciliation.ready!==true)) process.exit(1); if(!health.databaseConfigured&&health.dataStore!=="Google Sheets") process.exit(1); const core=new Map(snapshot.sourceHealth.map(i=>[i.name,i])); for(const name of ["IMPORTS","Outbound Shipping Schedule"]){if(!core.get(name)?.ok){console.error(`Core source unhealthy: ${name}`);process.exit(1)}} console.log(`Live Worker ${health.version}; D1 configured=${health.databaseConfigured}; snapshot ${snapshot.generatedAt}; ${snapshot.sourceHealth.length} source checks.`);'; then
               echo "Live custom domain, all five appearance routes, health API, and snapshot API verified."
               exit 0
             fi

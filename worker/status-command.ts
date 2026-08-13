@@ -1,4 +1,5 @@
 import { normalizeLogisticsStatus } from "../lib/domain/status";
+import { recordConfirmedStatusWrite } from "./database";
 
 const MAX_COMMAND_BYTES = 16_384;
 const MAX_FIELD_LENGTH = 500;
@@ -24,6 +25,10 @@ type StatusCommand = {
   status: string;
 };
 
+function hasDatabase(env: Env): env is Env & { DB: D1Database } {
+  return "DB" in env;
+}
+
 function json(value: unknown, status = 200) {
   return Response.json(value, { status, headers: { "cache-control": "no-store" } });
 }
@@ -32,7 +37,7 @@ function hasOversizedField(command: StatusCommand) {
   return Object.values(command).some((value) => typeof value === "string" && value.length > MAX_FIELD_LENGTH);
 }
 
-export async function handleStatusCommand(request: Request, env: Env) {
+export async function handleStatusCommand(request: Request, env: Env, context?: ExecutionContext) {
   if (request.method !== "POST") return json({ ok: false, error: "Method not allowed" }, 405);
   const origin = request.headers.get("origin");
   if (origin && origin !== new URL(request.url).origin) {
@@ -94,6 +99,20 @@ export async function handleStatusCommand(request: Request, env: Env) {
   }
   if (normalizeLogisticsStatus(result.status) !== status) {
     return json({ ok: false, error: "Persisted status did not match the command", correlationId }, 502);
+  }
+  if (hasDatabase(env) && context) {
+    const entityId = command.shipmentNo || command.invoice || command.container || `${command.sourceSheet}:${command.sourceRow}`;
+    context.waitUntil(recordConfirmedStatusWrite(env.DB, {
+      correlationId,
+      entityType: command.kind,
+      entityId,
+      previousStatus: command.currentStatus,
+      status,
+      sourceSheet: command.sourceSheet,
+      sourceRow: Number(command.sourceRow),
+    }).catch((error) => {
+      console.error(JSON.stringify({ event: "status-write-audit-failure", correlationId, error: String(error) }));
+    }));
   }
   return json({ ...result, status, correlationId });
 }
