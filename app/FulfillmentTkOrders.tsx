@@ -6,7 +6,7 @@ import styles from "./fulfillment-tk-orders.module.css";
 const SOURCE_URL = "https://sk-b2b-mobile.github.io/fulfillment/sales.html";
 const DEFAULT_GAS_URL = "https://script.google.com/macros/s/AKfycbykK9DWjem9ORHxfR_mpdZl5DVh-en0D6JpCdIuel305QmfqxoNU_NqSnjkhFk401hI/exec";
 const GAS_URL = process.env.NEXT_PUBLIC_FULFILLMENT_GAS_URL ?? DEFAULT_GAS_URL;
-const AUTO_SYNC_MS = 30_000;
+const AUTO_SYNC_MS = 30 * 60 * 1000;
 const METHOD_FILTER_KEY = "fulfillment-orders-method";
 const FINISHED_STATES = ["COMPLETED", "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED"];
 const REAL_ISSUES = new Set(["EXP", "NF", "DMG", "OOS", "SKUMIS"]);
@@ -134,7 +134,7 @@ function ProgressBoard({ jobs }: { jobs: OverviewJob[] }) {
   ] as const;
 
   return (
-    <div className={styles.progressBoard} aria-label="TK fulfillment progress">
+    <div className={styles.progressBoard} aria-label="Fulfillment progress">
       {stages.map(([label, done, tone], index) => {
         const pct = total ? Math.round((done / total) * 100) : 0;
         return (
@@ -347,6 +347,7 @@ export default function FulfillmentTkOrders() {
   const [pageSize, setPageSize] = useState(10);
   const [openInvoice, setOpenInvoice] = useState("");
   const loadingRef = useRef(false);
+  const jobsRef = useRef<OverviewJob[]>([]);
 
   const load = useCallback(async (silent = false) => {
     if (loadingRef.current) return;
@@ -358,17 +359,19 @@ export default function FulfillmentTkOrders() {
     if (!result.ok) {
       // Match the source page: keep the last good dataset on transient refresh failures.
       setSyncState("err");
-      setSyncText(jobs.length ? "Reconnecting…" : "Could not load data");
+      setSyncText(jobsRef.current.length ? "Reconnecting…" : "Could not load data");
       setLoading(false);
       loadingRef.current = false;
       return;
     }
-    setJobs(result.jobs ?? []);
+    const nextJobs = result.jobs ?? [];
+    jobsRef.current = nextJobs;
+    setJobs(nextJobs);
     setSyncState("ok");
     setSyncText(`Connected · ${new Date().toLocaleTimeString("en-US", { hour12: false })}`);
     setLoading(false);
     loadingRef.current = false;
-  }, [jobs.length]);
+  }, []);
 
   useEffect(() => { void load(false); }, [load]);
   useEffect(() => {
@@ -424,7 +427,7 @@ export default function FulfillmentTkOrders() {
   const totalAmount = jobs.reduce((sum, order) => sum + (Number(order.amount) || 0), 0);
 
   return (
-    <section className={styles.card} aria-labelledby="fulfillment-tk-heading">
+    <section className={`${styles.card} fulfillment-tk-panel`} aria-labelledby="fulfillment-tk-heading">
       <div className={styles.cardHeader}>
         <div className={styles.titleGroup}>
           <span className={styles.cartIcon}>🛒</span>

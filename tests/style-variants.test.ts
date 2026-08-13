@@ -45,32 +45,29 @@ describe("live dashboard style variants", () => {
   });
 
   test("fulfillment money fields render as USD with a dollar sign", () => {
-    const source = read("app/fulfillment-tk-panel.tsx");
-    expect(source).toContain("function formatFulfillmentValue");
+    const source = read("app/FulfillmentTkOrders.tsx");
+    expect(source).toContain("function money");
     expect(source).toContain('style: "currency"');
     expect(source).toContain('currency: "USD"');
   });
 
-  test("Fulfillment TK card carries source-style dark and amber treatment", () => {
-    const css = read("app/fulfillment-tk-source.css");
-    expect(css).toContain(".fulfillment-tk-panel");
-    expect(css).toContain("--fulfillment-source-bg");
-    expect(css).toContain("--fulfillment-source-surface");
-    expect(css).toContain("--fulfillment-source-border");
-    expect(css).toContain("--fulfillment-source-amber");
-    expect(css).toContain(".fulfillment-tk-method");
-    expect(css).toContain(".fulfillment-tk-status");
-    expect(css).toContain(".fulfillment-tk-source-link");
+  test("canonical fulfillment card carries the dark source treatment", () => {
+    const css = read("app/fulfillment-tk-orders.module.css");
+    expect(css).toContain("--tk-bg");
+    expect(css).toContain("--tk-surface");
+    expect(css).toContain("--tk-border");
+    expect(css).toContain("--tk-amber");
+    expect(css).toContain(".methodPill");
+    expect(css).toContain(".badge");
   });
 
-  test("Fulfillment TK rows expose semantic classes for method, status, and money", () => {
-    const source = read("app/fulfillment-tk-panel.tsx");
-    expect(source).toContain('import "./fulfillment-tk-source.css"');
-    expect(source).toContain("function fulfillmentCellClass");
-    expect(source).toContain('"fulfillment-tk-method"');
-    expect(source).toContain('"fulfillment-tk-status"');
-    expect(source).toContain('"fulfillment-tk-money"');
-    expect(source).toContain('className="fulfillment-tk-source-link"');
+  test("canonical fulfillment card receives variant placement and keeps its mobile method filter", () => {
+    const source = read("app/FulfillmentTkOrders.tsx");
+    const css = read("app/fulfillment-tk-orders.module.css");
+    expect(source).toContain("fulfillment-tk-panel");
+    expect(source).toContain("fulfillment-finished-row");
+    expect(source).toContain("30 * 60 * 1000");
+    expect(css).not.toMatch(/\.methodPill\s*\{[^}]*display:\s*none/);
   });
 
   test("inbound small parcels derive carrier from tracking signature before section heading", () => {

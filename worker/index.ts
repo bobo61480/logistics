@@ -8,7 +8,7 @@ import {
 import { fetchOperationalSources } from "./sources";
 import { handleStatusCommand } from "./status-command";
 
-const WORKER_VERSION = "2026-08-12-worker-v6-d1-active";
+const WORKER_VERSION = "2026-08-12-worker-v7-hybrid-ready";
 const SNAPSHOT_CACHE_URL = "https://stylekorean.internal/api/logistics/snapshot";
 const SNAPSHOT_CACHE_SECONDS = 60;
 const SNAPSHOT_REFRESH_SECONDS = 15 * 60;
