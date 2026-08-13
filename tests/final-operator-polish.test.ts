@@ -15,6 +15,8 @@ describe("final operator polish", () => {
     expect(health).toContain("WRITE PROXY");
     expect(health).toContain("DATA");
     expect(health).toContain("dataStore");
+    expect(health).toContain("databaseReady");
+    expect(health).toContain("databaseState");
   });
 
   it("does not describe freight spend as carrier earnings or local heuristics as exact miles", () => {
@@ -30,5 +32,13 @@ describe("final operator polish", () => {
     const css = read("app/globals.css");
     expect(css).toContain(".source-buttons { display: grid; grid-template-columns: repeat(3, 1fr); }");
     expect(css).toMatch(/\.metrics \{[\s\S]*?grid-template-columns: repeat\(4, 1fr\);/);
+  });
+
+  it("keeps fulfillment polling stable and releases request timers", () => {
+    const fulfillment = read("app/FulfillmentTkOrders.tsx");
+    expect(fulfillment).toContain("const jobsRef = useRef<OverviewJob[]>([])");
+    expect(fulfillment).toContain("jobsRef.current = nextJobs");
+    expect(fulfillment).not.toContain("}, [jobs.length]);");
+    expect(fulfillment.match(/finally \{\s*window\.clearTimeout\(timer\);\s*\}/g)).toHaveLength(2);
   });
 });

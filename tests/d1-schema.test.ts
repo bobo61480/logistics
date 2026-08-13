@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
-import { joinPayload, splitPayload } from "../worker/database";
+import { describe, expect, it, vi } from "vitest";
+import { joinPayload, readCurrentSnapshot, splitPayload } from "../worker/database";
 
 const sql = readFileSync("migrations/0001_hybrid_read_model.sql", "utf8");
 const snapshotSql = readFileSync("migrations/0002_operational_snapshots.sql", "utf8");
@@ -30,5 +30,40 @@ describe("hybrid read model schema", () => {
     expect(chunks.length).toBeGreaterThan(1);
     expect(Math.max(...chunks.map((chunk) => new TextEncoder().encode(chunk).byteLength))).toBeLessThanOrEqual(524_288);
     expect(joinPayload(chunks)).toEqual(value);
+  });
+
+  it("rejects snapshot parts whose persisted byte count does not match their payload", async () => {
+    const payloads = [
+      ["sourceHealth", JSON.stringify([])],
+      ["sources", JSON.stringify({})],
+      ["kpis", JSON.stringify(null)],
+      ["kpiError", JSON.stringify(null)],
+    ] as const;
+    const parts = payloads.map(([part_name, payload_text]) => ({
+      part_name,
+      part_index: 0,
+      payload_text,
+      payload_bytes: new TextEncoder().encode(payload_text).byteLength,
+    }));
+    parts[1].payload_bytes += 1;
+    const db = {
+      prepare: vi.fn(() => ({})),
+      batch: vi.fn(async () => [
+        {
+          results: [{
+            id: "snapshot-1",
+            generated_at: "2026-08-13T06:00:00.000Z",
+            version: "test",
+            source_count: 0,
+            part_count: parts.length,
+            payload_bytes: parts.reduce((sum, part) => sum + part.payload_bytes, 0),
+            created_at: "2026-08-13 06:00:00",
+          }],
+        },
+        { results: parts },
+      ]),
+    } as unknown as D1Database;
+
+    await expect(readCurrentSnapshot(db)).rejects.toThrow("failed integrity validation");
   });
 });

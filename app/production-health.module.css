@@ -51,8 +51,13 @@
 }
 
 .item strong[data-state="UNKNOWN"],
-.item strong[data-state="CHECKING"] {
+.item strong[data-state="CHECKING"],
+.item strong[data-state="SHEETS · D1 INITIALIZING"] {
   color: #fde68a;
+}
+
+.item strong[data-state="SHEETS · D1 UNAVAILABLE"] {
+  color: #fca5a5;
 }
 
 .version {

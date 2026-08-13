@@ -23,7 +23,13 @@ describe("production hardening", () => {
     expect(workflow).toContain('binding = "DB"');
     expect(workflow).toContain("EXPECTED_DATABASE_CONFIGURED");
     expect(workflow).toContain("D1 permission is unavailable");
+    expect(workflow).toContain("Account > D1 > Edit");
+    expect(workflow).toContain("same account as CLOUDFLARE_ACCOUNT_ID");
+    expect(workflow).toContain('snapshot.storage!=="d1"');
     expect(workflow).toContain("x-content-type-options: nosniff");
+    const worker = read("worker/index.ts");
+    expect(worker).toContain('databaseState: "unbound" | "initializing" | "ready" | "unavailable"');
+    expect(worker).toContain('databaseReady: databaseState === "ready"');
   });
 
   it("ships a reusable production smoke verifier", () => {
@@ -43,5 +49,13 @@ describe("production hardening", () => {
     expect(existsSync(".github/workflows/deploy-planner.yml")).toBe(false);
     expect(existsSync(".github/workflows/build-style-variants.yml")).toBe(false);
     expect(existsSync("public/CNAME")).toBe(false);
+  });
+
+  it("publishes the first D1 snapshot before reporting database storage", () => {
+    const worker = read("worker/index.ts");
+    expect(worker).toContain("const persisted = await persistSnapshot(env.DB, initialPayload)");
+    expect(worker).toContain('storage: "d1"');
+    expect(worker).toContain('"D1-INITIALIZED"');
+    expect(worker).not.toContain("context.waitUntil(persistSnapshot(env.DB, initialPayload)");
   });
 });

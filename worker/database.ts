@@ -33,7 +33,7 @@ type SnapshotRow = {
   created_at: string;
 };
 
-type PartRow = { part_name: string; part_index: number; payload_text: string };
+type PartRow = { part_name: string; part_index: number; payload_text: string; payload_bytes: number };
 
 function byteLength(value: string) {
   return new TextEncoder().encode(value).byteLength;
@@ -110,7 +110,7 @@ export async function readCurrentSnapshot(db: D1Database): Promise<StoredSnapsho
       FROM operational_state state
       JOIN operational_snapshots s ON s.id = state.snapshot_id
       WHERE state.key = 'current_snapshot'`),
-    db.prepare(`SELECT p.part_name, p.part_index, p.payload_text
+    db.prepare(`SELECT p.part_name, p.part_index, p.payload_text, p.payload_bytes
       FROM operational_state state
       JOIN operational_snapshot_parts p ON p.snapshot_id = state.snapshot_id
       WHERE state.key = 'current_snapshot'
@@ -120,6 +120,16 @@ export async function readCurrentSnapshot(db: D1Database): Promise<StoredSnapsho
   if (!metadata) return null;
   const rows = partsResult.results as PartRow[];
   if (rows.length !== metadata.part_count) throw new Error("Current D1 snapshot is incomplete");
+  const actualPayloadBytes = rows.reduce((total, row) => {
+    const actualPartBytes = byteLength(row.payload_text);
+    if (actualPartBytes !== row.payload_bytes) {
+      throw new Error(`Current D1 snapshot part ${row.part_name}:${row.part_index} failed integrity validation`);
+    }
+    return total + actualPartBytes;
+  }, 0);
+  if (actualPayloadBytes !== metadata.payload_bytes) {
+    throw new Error("Current D1 snapshot byte count failed integrity validation");
+  }
 
   const grouped = new Map<string, string[]>();
   for (const row of rows) {
@@ -134,11 +144,15 @@ export async function readCurrentSnapshot(db: D1Database): Promise<StoredSnapsho
     }
     return joinPayload(chunks);
   };
+  const sourceHealth = decode("sourceHealth") as SourceHealth[];
+  if (!Array.isArray(sourceHealth) || sourceHealth.length !== metadata.source_count) {
+    throw new Error("Current D1 snapshot source count failed integrity validation");
+  }
   return {
     ok: true,
     generatedAt: metadata.generated_at,
     version: metadata.version,
-    sourceHealth: decode("sourceHealth") as SourceHealth[],
+    sourceHealth,
     sources: decode("sources") as Record<string, unknown>,
     kpis: decode("kpis"),
     kpiError: (decode("kpiError") as string | null) ?? undefined,
