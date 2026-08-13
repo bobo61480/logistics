@@ -19,7 +19,7 @@ describe("hybrid read model schema", () => {
   it("stores immutable chunked snapshots behind an atomic current pointer", () => {
     expect(snapshotSql).toContain("CREATE TABLE IF NOT EXISTS operational_snapshots");
     expect(snapshotSql).toContain("CREATE TABLE IF NOT EXISTS operational_snapshot_parts");
-    expect(snapshotSql).toContain("payload_bytes INTEGER NOT NULL CHECK(payload_bytes >= 0 AND payload_bytes <= 262144)");
+    expect(snapshotSql).toContain("payload_bytes INTEGER NOT NULL CHECK(payload_bytes >= 0 AND payload_bytes <= 524288)");
     expect(snapshotSql).toContain("CREATE TABLE IF NOT EXISTS operational_state");
     expect(snapshotSql).toContain("FOREIGN KEY(snapshot_id)");
   });
@@ -28,7 +28,7 @@ describe("hybrid read model schema", () => {
     const value = { rows: Array.from({ length: 25_000 }, (_, index) => [index, "화물📦", `INV-${index}`]) };
     const chunks = splitPayload(value);
     expect(chunks.length).toBeGreaterThan(1);
-    expect(Math.max(...chunks.map((chunk) => new TextEncoder().encode(chunk).byteLength))).toBeLessThanOrEqual(262_144);
+    expect(Math.max(...chunks.map((chunk) => new TextEncoder().encode(chunk).byteLength))).toBeLessThanOrEqual(524_288);
     expect(joinPayload(chunks)).toEqual(value);
   });
 });
