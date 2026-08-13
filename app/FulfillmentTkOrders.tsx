@@ -7,6 +7,8 @@ const SOURCE_URL = "https://sk-b2b-mobile.github.io/fulfillment/sales.html";
 const DEFAULT_GAS_URL = "https://script.google.com/macros/s/AKfycbykK9DWjem9ORHxfR_mpdZl5DVh-en0D6JpCdIuel305QmfqxoNU_NqSnjkhFk401hI/exec";
 const GAS_URL = process.env.NEXT_PUBLIC_FULFILLMENT_GAS_URL ?? DEFAULT_GAS_URL;
 const AUTO_SYNC_MS = 30_000;
+const METHOD_FILTER_KEY = "fulfillment-orders-method";
+const FINISHED_STATES = ["COMPLETED", "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED"];
 const REAL_ISSUES = new Set(["EXP", "NF", "DMG", "OOS", "SKUMIS"]);
 const REASON_LABEL: Record<string, string> = {
   EXP: "Expired",
@@ -27,6 +29,7 @@ type OverviewJob = {
   method?: string;
   amount?: number;
   inspection?: string;
+  status?: string;
   movedToPacking?: boolean;
   dimsCount?: number;
   dimsLinkedTo?: string;
@@ -312,6 +315,8 @@ function DetailModal({ invoice, onClose, onChanged }: { invoice: string; onClose
 
 export default function FulfillmentTkOrders() {
   const [jobs, setJobs] = useState<OverviewJob[]>([]);
+  const [methodFilter, setMethodFilter] = useState("ALL");
+  const [methodMenuOpen, setMethodMenuOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [syncState, setSyncState] = useState<"busy" | "ok" | "err">("busy");
   const [syncText, setSyncText] = useState("Connecting…");
@@ -326,7 +331,7 @@ export default function FulfillmentTkOrders() {
     loadingRef.current = true;
     if (!silent) setLoading(true);
     setSyncState("busy");
-    setSyncText("Syncing TK orders…");
+    setSyncText("Syncing fulfillment orders…");
     const result = await gasGet<{ jobs?: OverviewJob[] }>({ op: "getSalesOverview" });
     if (!result.ok) {
       // Match the source page: keep the last good dataset on transient refresh failures.
@@ -336,8 +341,7 @@ export default function FulfillmentTkOrders() {
       loadingRef.current = false;
       return;
     }
-    const tkJobs = (result.jobs ?? []).filter((order) => String(order.method ?? "").trim().toUpperCase() === "TK");
-    setJobs(tkJobs);
+    setJobs(result.jobs ?? []);
     setSyncState("ok");
     setSyncText(`Connected · ${new Date().toLocaleTimeString("en-US", { hour12: false })}`);
     setLoading(false);
@@ -346,6 +350,10 @@ export default function FulfillmentTkOrders() {
 
   useEffect(() => { void load(false); }, [load]);
   useEffect(() => {
+    const saved = window.localStorage.getItem(METHOD_FILTER_KEY);
+    if (saved) setMethodFilter(saved);
+  }, []);
+  useEffect(() => {
     const tick = () => { if (!document.hidden && !openInvoice) void load(true); };
     const timer = window.setInterval(tick, AUTO_SYNC_MS);
     const visibility = () => { if (!document.hidden && !openInvoice) void load(true); };
@@ -353,11 +361,30 @@ export default function FulfillmentTkOrders() {
     return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", visibility); };
   }, [load, openInvoice]);
 
+  const methodCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    jobs.forEach((order) => {
+      const method = String(order.method ?? "").trim().toUpperCase() || "UNSPECIFIED";
+      counts.set(method, (counts.get(method) ?? 0) + 1);
+    });
+    return [...counts.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
+  }, [jobs]);
+
+  const chooseMethod = (method: string) => {
+    setMethodFilter(method);
+    setMethodMenuOpen(false);
+    setPage(1);
+    window.localStorage.setItem(METHOD_FILTER_KEY, method);
+  };
+
   const filtered = useMemo(() => {
     const needle = query.trim().toUpperCase();
-    if (!needle) return jobs;
-    return jobs.filter((order) => String(order.invoice ?? "").toUpperCase().includes(needle) || String(order.remarks ?? "").toUpperCase().includes(needle));
-  }, [jobs, query]);
+    return jobs.filter((order) => {
+      const method = String(order.method ?? "").trim().toUpperCase() || "UNSPECIFIED";
+      if (methodFilter !== "ALL" && method !== methodFilter) return false;
+      return !needle || String(order.invoice ?? "").toUpperCase().includes(needle) || String(order.remarks ?? "").toUpperCase().includes(needle);
+    });
+  }, [jobs, methodFilter, query]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
@@ -369,11 +396,17 @@ export default function FulfillmentTkOrders() {
       <div className={styles.cardHeader}>
         <div className={styles.titleGroup}>
           <span className={styles.cartIcon}>🛒</span>
-          <div><h2 id="fulfillment-tk-heading">Fulfillment TK Orders</h2><p>Live WMS fulfillment status · Method: TK only</p></div>
-          <span className={styles.methodPill}>Method: TK Only</span>
+          <div><h2 id="fulfillment-tk-heading">Fulfillment Orders</h2><p>Live WMS fulfillment status · all shipping methods</p></div>
+          <div className="fulfillment-method-filter-wrap">
+            <button className={styles.methodPill} onClick={() => setMethodMenuOpen((open) => !open)} aria-expanded={methodMenuOpen}>Method: {methodFilter} ▾</button>
+            {methodMenuOpen && <div className="fulfillment-method-menu" role="menu">
+              <button className={methodFilter === "ALL" ? "active" : ""} onClick={() => chooseMethod("ALL")}>ALL <b>{jobs.length}</b></button>
+              {methodCounts.map(([method, count]) => <button className={methodFilter === method ? "active" : ""} key={method} onClick={() => chooseMethod(method)}>{method} <b>{count}</b></button>)}
+            </div>}
+          </div>
         </div>
         <div className={styles.headerStats}>
-          <span className={styles.countPill}>{jobs.length.toLocaleString()} TK Orders</span>
+          <span className={styles.countPill}>{filtered.length.toLocaleString()} of {jobs.length.toLocaleString()} Orders</span>
           <strong>{money(totalAmount)}</strong>
           <a href={SOURCE_URL} target="_blank" rel="noreferrer">View Source ↗</a>
         </div>
@@ -392,12 +425,12 @@ export default function FulfillmentTkOrders() {
           <thead><tr><th>Invoice #</th><th>Customer</th><th>Ship Out</th><th>Picking</th><th>Method</th><th>Amount</th><th>Fulfillment Status</th><th>Moved to Packing</th><th>Dimensions</th><th>Details</th></tr></thead>
           <tbody>
             {pageRows.map((order) => (
-              <tr key={order.invoice}>
+              <tr key={order.invoice} className={FINISHED_STATES.some((state) => String(order.status ?? order.inspection ?? "").toUpperCase().includes(state)) ? "fulfillment-finished-row" : ""}>
                 <td className={styles.monoStrong}>{order.invoice}</td>
                 <td title={order.remarks || ""}>{order.remarks || "—"}</td>
                 <td className={styles.dimText}>{order.shipDate || "—"}</td>
                 <td><PickingBadge order={order} /></td>
-                <td><span className={`${styles.badge} ${styles.tk}`}>TK</span></td>
+                <td><span className={`${styles.badge} ${styles.tk}`}>{order.method || "—"}</span></td>
                 <td className={styles.mono}>{money(order.amount)}</td>
                 <td><InspectionBadge order={order} /></td>
                 <td><span className={`${styles.badge} ${order.movedToPacking ? styles.green : styles.gray}`}>{order.movedToPacking ? "✓ Yes" : "No"}</span></td>
@@ -405,8 +438,8 @@ export default function FulfillmentTkOrders() {
                 <td><button className={`${styles.detailLink} ${inspectionState(order.inspection) === "issues" ? styles.issueLink : ""}`} onClick={() => setOpenInvoice(order.invoice)}>{inspectionState(order.inspection) === "issues" ? "Issues →" : "View →"}</button></td>
               </tr>
             ))}
-            {!loading && !pageRows.length && <tr><td className={styles.emptyRow} colSpan={10}>No matching TK orders.</td></tr>}
-            {loading && !jobs.length && <tr><td className={styles.emptyRow} colSpan={10}>Loading TK fulfillment data…</td></tr>}
+            {!loading && !pageRows.length && <tr><td className={styles.emptyRow} colSpan={10}>No orders match the current filters.</td></tr>}
+            {loading && !jobs.length && <tr><td className={styles.emptyRow} colSpan={10}>Loading fulfillment data…</td></tr>}
           </tbody>
         </table>
       </div>
@@ -416,7 +449,7 @@ export default function FulfillmentTkOrders() {
         <div><button disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>‹ Prev</button><b>Page {page} / {totalPages}</b><button disabled={page >= totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>Next ›</button></div>
       </div>
 
-      <a className={styles.footerLink} href={SOURCE_URL} target="_blank" rel="noreferrer">View All TK Orders →</a>
+      <a className={styles.footerLink} href={SOURCE_URL} target="_blank" rel="noreferrer">View Source Orders →</a>
       {openInvoice && <DetailModal invoice={openInvoice} onClose={() => setOpenInvoice("")} onChanged={async () => { await load(true); }} />}
     </section>
   );
