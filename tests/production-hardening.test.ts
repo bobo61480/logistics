@@ -21,6 +21,8 @@ describe("production hardening", () => {
     expect(workflow).toContain('binding = "DB"');
     expect(workflow).toContain("EXPECTED_DATABASE_CONFIGURED");
     expect(workflow).toContain("D1 permission is unavailable");
+    expect(workflow).toContain("/workers/domains/records");
+    expect(workflow).toContain('zone_id = "${process.env.ZONE_ID}"');
     expect(workflow).toContain("x-content-type-options: nosniff");
   });
 
