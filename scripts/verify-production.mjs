@@ -1,5 +1,6 @@
 const base = (process.env.PRODUCTION_BASE_URL || "https://stylekorean.dpdns.org").replace(/\/$/, "");
 const timeoutMs = Number(process.env.PRODUCTION_VERIFY_TIMEOUT_MS || 60000);
+const requireD1 = process.env.REQUIRE_D1 === "true";
 const routes = ["/", "/light-skin", "/light", "/light-full", "/fulfillment-style"];
 
 async function get(path, expectJson = false) {
@@ -53,8 +54,10 @@ for (const route of routes) {
 
 const health = await get(`/api/logistics/health?verify=${Date.now()}`, true);
 if (health.ok !== true) throw new Error(`health: ${JSON.stringify(health).slice(0, 500)}`);
-if (health.databaseConfigured !== true) throw new Error("health: production D1 binding is missing");
-if (!String(health.dataStore).includes("D1")) throw new Error(`health: D1 is not reflected by ${health.dataStore}`);
+if (requireD1 && health.databaseConfigured !== true) throw new Error("health: production D1 binding is required but missing");
+if (health.databaseConfigured && !String(health.dataStore).includes("D1")) {
+  throw new Error(`health: D1 is not reflected by ${health.dataStore}`);
+}
 const healthHeaders = await getHeaders(`/api/logistics/health?headers=${Date.now()}`);
 if (healthHeaders.get("x-content-type-options") !== "nosniff") throw new Error("health: nosniff header missing");
 if (healthHeaders.get("x-frame-options") !== "DENY") throw new Error("health: frame protection header missing");
@@ -68,8 +71,15 @@ const reconciliation = await get(`/api/logistics/reconciliation?verify=${Date.no
 if (reconciliation.ok !== true || reconciliation.databaseConfigured !== health.databaseConfigured) {
   throw new Error(`reconciliation: ${JSON.stringify(reconciliation).slice(0, 500)}`);
 }
-if (reconciliation.ready !== true) throw new Error("reconciliation: D1 is not ready");
-if (snapshot.storage !== "d1") throw new Error(`snapshot: expected D1 storage, received ${snapshot.storage}`);
+if (health.databaseConfigured) {
+  if (reconciliation.ready !== true) throw new Error("reconciliation: D1 is not ready");
+  if (snapshot.storage !== "d1") throw new Error(`snapshot: expected D1 storage, received ${snapshot.storage}`);
+} else {
+  if (reconciliation.ready !== false || reconciliation.activationRequired !== true) {
+    throw new Error(`reconciliation: unbound D1 state is not explicit: ${JSON.stringify(reconciliation).slice(0, 500)}`);
+  }
+  if (snapshot.storage !== "sheets") throw new Error(`snapshot: expected Sheets fallback, received ${snapshot.storage}`);
+}
 
 const sources = new Map(snapshot.sourceHealth.map((item) => [item.name, item]));
 if (!sources.get("IMPORTS")?.ok) throw new Error("snapshot: IMPORTS source is unhealthy");

@@ -16,10 +16,11 @@ describe("production hardening", () => {
     expect(workflow).toContain("/api/logistics/reconciliation");
     expect(workflow).toContain('"ok":true');
     expect(workflow).toContain("sourceHealth");
-    expect(workflow).toContain("worker-v6-d1-active");
+    expect(workflow).toContain("worker-v7-hybrid-ready");
     expect(workflow).toContain("d1 migrations apply");
     expect(workflow).toContain('binding = "DB"');
-    expect(workflow).toContain('snapshot.storage!=="d1"');
+    expect(workflow).toContain("EXPECTED_DATABASE_CONFIGURED");
+    expect(workflow).toContain("D1 permission is unavailable");
     expect(workflow).toContain("x-content-type-options: nosniff");
   });
 
@@ -32,6 +33,8 @@ describe("production hardening", () => {
     expect(script).toContain("/light-skin");
     expect(script).toContain("/light-full");
     expect(script).toContain("x-frame-options");
+    expect(script).toContain("REQUIRE_D1");
+    expect(script).toContain('snapshot.storage !== "sheets"');
   });
 
   it("keeps Cloudflare as the only site deployment path", () => {
