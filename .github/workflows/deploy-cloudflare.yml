@@ -47,6 +47,7 @@ jobs:
           test -f out/fulfillment-style/index.html
 
       - name: Resolve production Worker route zone
+        id: zone
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -89,6 +90,8 @@ jobs:
             exit 1
           fi
 
+          echo "zone_id=$zone_id" >> "$GITHUB_OUTPUT"
+
           ZONE_ID="$zone_id" node <<'NODE'
           const fs = require("fs");
           const path = "wrangler.toml";
@@ -101,6 +104,62 @@ jobs:
           fs.writeFileSync(path, updated);
           NODE
           echo "Resolved the production Worker route to its existing Cloudflare zone."
+
+      - name: Repair production hostname DNS for Worker routing
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID: ${{ steps.zone.outputs.zone_id }}
+          PRODUCTION_HOSTNAME: stylekorean.dpdns.org
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          const token = process.env.CLOUDFLARE_API_TOKEN;
+          const zoneId = process.env.CLOUDFLARE_ZONE_ID;
+          const hostname = process.env.PRODUCTION_HOSTNAME;
+          const api = `https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records`;
+          const headers = {
+            authorization: `Bearer ${token}`,
+            "content-type": "application/json",
+          };
+
+          async function cloudflare(path = "", init = {}) {
+            const response = await fetch(`${api}${path}`, { ...init, headers: { ...headers, ...init.headers } });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok || payload.success === false) {
+              const detail = (payload.errors || []).map((error) => `${error.code}: ${error.message}`).join("; ");
+              throw new Error(detail || `Cloudflare DNS request failed with HTTP ${response.status}`);
+            }
+            return payload;
+          }
+
+          const query = new URLSearchParams({ name: hostname, per_page: "100" });
+          const listed = await cloudflare(`?${query}`);
+          const records = (Array.isArray(listed.result) ? listed.result : []).filter(
+            (record) => record.name === hostname && ["A", "AAAA", "CNAME"].includes(record.type),
+          );
+          console.log("Existing production web records:", records.map(({ type, content, proxied }) => ({ type, content, proxied })));
+
+          const primary = records.find((record) => record.type === "A");
+          for (const record of records) {
+            if (record.id === primary?.id) continue;
+            await cloudflare(`/${record.id}`, { method: "DELETE" });
+          }
+
+          const body = JSON.stringify({
+            type: "A",
+            name: hostname,
+            content: "192.0.2.1",
+            proxied: true,
+            ttl: 1,
+          });
+          if (primary) {
+            await cloudflare(`/${primary.id}`, { method: "PUT", body });
+          } else {
+            await cloudflare("", { method: "POST", body });
+          }
+          console.log(`Production DNS repaired: ${hostname} -> proxied Worker placeholder.`);
+          NODE
 
       - name: Prepare production D1 binding when permitted
         id: database

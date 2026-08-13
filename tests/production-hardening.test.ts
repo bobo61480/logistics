@@ -23,6 +23,9 @@ describe("production hardening", () => {
     expect(workflow).toContain("D1 permission is unavailable");
     expect(workflow).toContain("/workers/domains/records");
     expect(workflow).toContain('zone_id = "${process.env.ZONE_ID}"');
+    expect(workflow).toContain("/dns_records");
+    expect(workflow).toContain('content: "192.0.2.1"');
+    expect(workflow).toContain("proxied: true");
     expect(workflow).toContain("x-content-type-options: nosniff");
   });
 
