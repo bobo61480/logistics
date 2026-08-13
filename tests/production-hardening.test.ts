@@ -11,6 +11,8 @@ describe("production hardening", () => {
     for (const route of ["/light-skin", "/light", "/light-full", "/fulfillment-style"]) {
       expect(workflow).toContain(route);
     }
+    expect(workflow).toContain("StyleKorean application marker missing");
+    expect(workflow).toContain("grep -Fiq 'StyleKorean'");
     expect(workflow).toContain("/api/logistics/health");
     expect(workflow).toContain("/api/logistics/snapshot");
     expect(workflow).toContain("/api/logistics/reconciliation");

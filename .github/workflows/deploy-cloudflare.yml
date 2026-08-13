@@ -162,6 +162,13 @@ jobs:
                 failed=1
                 break
               fi
+              if ! grep -Fiq 'StyleKorean' "/tmp/live-${safe_name}.html"; then
+                echo "StyleKorean application marker missing on attempt ${attempt}: ${route}"
+                head -c 1200 "/tmp/live-${safe_name}.html" || true
+                echo
+                failed=1
+                break
+              fi
             done
 
             if [ "$failed" -eq 0 ] \
