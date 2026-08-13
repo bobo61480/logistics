@@ -1,8 +1,8 @@
 import type { SourceHealth } from "./sources";
 
-// A chunk is at most 80 KiB even when every UTF-16 code unit encodes to four
-// UTF-8 bytes. That stays below both the D1 row and SQL request limits.
-const PART_CHARACTERS = 20 * 1024;
+// A chunk is at most 512 KiB even when every UTF-16 code unit encodes to four
+// UTF-8 bytes, leaving generous room below D1's 1 MB row limit.
+const PART_CHARACTERS = 128 * 1024;
 const MAX_PARTS = 900;
 const RETAINED_SNAPSHOTS = 4;
 
