@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS operational_snapshot_parts (
   part_name TEXT NOT NULL,
   part_index INTEGER NOT NULL CHECK(part_index >= 0),
   payload_text TEXT NOT NULL,
-  payload_bytes INTEGER NOT NULL CHECK(payload_bytes >= 0 AND payload_bytes <= 262144),
+  payload_bytes INTEGER NOT NULL CHECK(payload_bytes >= 0 AND payload_bytes <= 524288),
   PRIMARY KEY(snapshot_id, part_name, part_index),
   FOREIGN KEY(snapshot_id) REFERENCES operational_snapshots(id) ON DELETE CASCADE
 );
