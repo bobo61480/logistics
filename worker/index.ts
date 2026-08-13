@@ -122,15 +122,32 @@ async function handleSnapshot(env: Env, context: ExecutionContext) {
       }
 
       const initialPayload = await buildSnapshotPayload();
-      context.waitUntil(persistSnapshot(env.DB, initialPayload).then((result) => {
-        console.log(JSON.stringify({ event: "d1-snapshot-initialized", generatedAt: initialPayload.generatedAt, ...result }));
-      }).catch((error) => {
+      try {
+        const persisted = await persistSnapshot(env.DB, initialPayload);
+        console.log(JSON.stringify({
+          event: "d1-snapshot-initialized",
+          generatedAt: initialPayload.generatedAt,
+          ...persisted,
+        }));
+        const initial = snapshotResponse({
+          ...initialPayload,
+          storage: "d1",
+          storedAt: new Date().toISOString(),
+        });
+        cacheSnapshot(context, initial);
+        initial.headers.set("x-stylekorean-cache", "D1-INITIALIZED");
+        return initial;
+      } catch (error) {
         console.error(JSON.stringify({ event: "d1-initialization-failed", error: String(error) }));
-      }));
-      const initial = snapshotResponse({ ...initialPayload, storage: "sheets", databaseInitializing: true });
-      cacheSnapshot(context, initial);
-      initial.headers.set("x-stylekorean-cache", "D1-INITIALIZING");
-      return initial;
+        const fallback = snapshotResponse({
+          ...initialPayload,
+          storage: "sheets",
+          databaseInitializing: false,
+          databaseError: "The durable snapshot could not be initialized",
+        });
+        fallback.headers.set("x-stylekorean-cache", "D1-INITIALIZATION-FAILED");
+        return fallback;
+      }
     } catch (error) {
       console.error(JSON.stringify({ event: "d1-snapshot-read-failed", error: String(error) }));
     }
@@ -160,14 +177,33 @@ async function handleSnapshot(env: Env, context: ExecutionContext) {
   }
 }
 
-function handleHealth(env: Env) {
+async function handleHealth(env: Env) {
+  let databaseState: "unbound" | "initializing" | "ready" | "unavailable" = "unbound";
+  let databaseAgeSeconds: number | undefined;
+  if (hasDatabase(env)) {
+    try {
+      const health = await readDatabaseHealth(env.DB);
+      databaseState = health.ready ? "ready" : "initializing";
+      databaseAgeSeconds = health.ready ? health.ageSeconds : undefined;
+    } catch (error) {
+      databaseState = "unavailable";
+      console.error(JSON.stringify({ event: "d1-health-summary-failed", error: String(error) }));
+    }
+  }
   return json({
     ok: true,
     service: "stylekorean-logistics-control-tower",
     version: WORKER_VERSION,
-    dataStore: hasDatabase(env) ? "Cloudflare D1 + Google Sheets fallback" : "Google Sheets",
+    dataStore: databaseState === "ready"
+      ? "Cloudflare D1 + Google Sheets fallback"
+      : databaseState === "unbound"
+        ? "Google Sheets"
+        : `Google Sheets fallback (D1 ${databaseState})`,
     databaseConfigured: hasDatabase(env),
     accessPolicy: "public",
+    databaseReady: databaseState === "ready",
+    databaseState,
+    databaseAgeSeconds,
     statusWriteConfigured: Boolean(env.APPS_SCRIPT_WRITE_URL),
     statusWriteMode: "Apps Script source-confirmed proxy",
     statusWriteAuthentication: "none",
@@ -215,7 +251,7 @@ export default {
       response = await handleStatusCommand(request, env, context);
     } else if (url.pathname === "/api/logistics/health") {
       response = request.method === "GET"
-        ? handleHealth(env)
+        ? await handleHealth(env)
         : json({ ok: false, error: "Method not allowed" }, 405);
     } else if (url.pathname.startsWith("/api/")) {
       response = json({ ok: false, error: "API route not found" }, 404);

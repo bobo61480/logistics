@@ -75,28 +75,30 @@ function inspectionState(value: unknown) {
 }
 
 async function gasGet<T>(params: Record<string, string>): Promise<ApiResult<T>> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 25_000);
   try {
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), 25_000);
     const query = new URLSearchParams({ t: String(Date.now()), ...params });
     const response = await fetch(`${GAS_URL}?${query.toString()}`, { cache: "no-store", signal: controller.signal });
-    window.clearTimeout(timer);
     return (await response.json()) as ApiResult<T>;
   } catch (error) {
     return { ok: false, error: error instanceof DOMException && error.name === "AbortError" ? "Request timed out (25s)" : String(error) };
+  } finally {
+    window.clearTimeout(timer);
   }
 }
 
 async function gasPost<T>(op: string, data: unknown): Promise<ApiResult<T>> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 25_000);
   try {
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), 25_000);
     const body = new URLSearchParams({ op, data: JSON.stringify(data) });
     const response = await fetch(GAS_URL, { method: "POST", body, signal: controller.signal });
-    window.clearTimeout(timer);
     return (await response.json()) as ApiResult<T>;
   } catch (error) {
     return { ok: false, error: error instanceof DOMException && error.name === "AbortError" ? "Request timed out (25s)" : String(error) };
+  } finally {
+    window.clearTimeout(timer);
   }
 }
 

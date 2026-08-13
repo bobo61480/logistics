@@ -8,6 +8,8 @@ type ProductionHealthPayload = {
   version?: string;
   dataStore?: string;
   databaseConfigured?: boolean;
+  databaseReady?: boolean;
+  databaseState?: "unbound" | "initializing" | "ready" | "unavailable";
   statusWriteConfigured?: boolean;
   statusWriteMode?: string;
   checkedAt?: string;
@@ -58,7 +60,11 @@ export function ProductionHealth() {
       ? "UNKNOWN"
       : "CHECKING";
   const dataStatus = state.payload
-    ? state.payload.databaseConfigured ? "D1 + SHEETS" : state.payload.dataStore ?? "UNKNOWN"
+    ? state.payload.databaseReady
+      ? "D1 + SHEETS"
+      : state.payload.databaseConfigured
+        ? `SHEETS · D1 ${state.payload.databaseState?.toUpperCase() || "NOT READY"}`
+        : state.payload.dataStore ?? "UNKNOWN"
     : state.error ? "UNKNOWN" : "CHECKING";
 
   return (

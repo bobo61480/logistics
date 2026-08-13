@@ -60,13 +60,18 @@ jobs:
           cp wrangler.toml "$production_config"
           cp wrangler.toml "$database_config"
 
-          if ! databases="$(npx wrangler d1 list --json 2>/tmp/d1-list.log)"; then
-            echo "::warning::D1 permission is unavailable; deploying the verified Google Sheets fallback without a database binding."
-            sed -n '1,80p' /tmp/d1-list.log
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] || [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            echo "::warning::CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID must both be configured; deploying the verified Google Sheets fallback without a database binding."
             echo "configured=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
+          if ! databases="$(npx wrangler d1 list --json 2>/tmp/d1-list.log)"; then
+            echo "::warning::D1 permission is unavailable; the token must contain Account > D1 > Edit and target the same account as CLOUDFLARE_ACCOUNT_ID. Deploying the verified Google Sheets fallback without a database binding."
+            sed -n '1,80p' /tmp/d1-list.log
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           database_id="$(DATABASES="$databases" DATABASE_NAME="$database_name" node -e 'const rows=JSON.parse(process.env.DATABASES); const match=rows.find((row)=>row.name===process.env.DATABASE_NAME); process.stdout.write(match?.uuid || "")')"
 
           if [ -z "$database_id" ]; then
