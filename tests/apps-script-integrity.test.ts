@@ -11,7 +11,8 @@ describe("Apps Script production integrity", () => {
     expect(code).toContain("readSnapshotRows_");
     expect(code).toContain("NATIONAL_SPREADSHEET_ID");
     expect(code).toContain('trucking: readSnapshotRows_(master, "WH Trucking Request"');
-    expect(code.match(/SpreadsheetApp\.openById\(/g)).toHaveLength(4);
+    expect(code).toContain("const master = SpreadsheetApp.openById(SPREADSHEET_ID);");
+    expect(code).not.toContain("readSnapshotRows_(SPREADSHEET_ID,");
     expect(code).toContain("function readSnapshotRows_(spreadsheet,");
   });
 
