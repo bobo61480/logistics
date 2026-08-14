@@ -115,7 +115,7 @@ async function handleSnapshot(env: Env, context: ExecutionContext) {
           staleReason: stale ? "The durable snapshot is refreshing in the background" : undefined,
           servedAt: new Date().toISOString(),
         });
-        cacheSnapshot(context, response);
+        if (!stale) cacheSnapshot(context, response);
         response.headers.set("x-stylekorean-cache", "D1");
         if (stale) response.headers.set("warning", '110 - "Response is stale"');
         return response;
