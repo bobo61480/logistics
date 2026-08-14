@@ -1,8 +1,8 @@
 import type { SourceHealth } from "./sources";
 
-// A chunk is at most 512 KiB even when every UTF-16 code unit encodes to four
-// UTF-8 bytes, leaving generous room below D1's 1 MB row limit.
-const PART_CHARACTERS = 128 * 1024;
+// Keep every chunk within the schema's 512 KiB byte constraint while packing
+// ASCII-heavy operational data densely enough to preserve the D1 query budget.
+const PART_BYTES = 512 * 1024;
 // Each part insert is one D1 query. Keep the publication transaction plus
 // retention below the 50-query Worker invocation limit on the Free plan.
 const MAX_PARTS = 44;
@@ -43,13 +43,16 @@ export function splitPayload(value: unknown) {
   const serialized = JSON.stringify(value);
   if (serialized === undefined) throw new Error("Snapshot value is not JSON serializable");
   const chunks: string[] = [];
+  const encoder = new TextEncoder();
   let start = 0;
   while (start < serialized.length) {
-    let end = Math.min(start + PART_CHARACTERS, serialized.length);
-    const finalCode = serialized.charCodeAt(end - 1);
-    if (end < serialized.length && finalCode >= 0xd800 && finalCode <= 0xdbff) end -= 1;
-    chunks.push(serialized.slice(start, end));
-    start = end;
+    const buffer = new Uint8Array(PART_BYTES);
+    const { read, written } = encoder.encodeInto(serialized.slice(start), buffer);
+    if (!read || !written) throw new Error("Snapshot payload could not be chunked");
+    const chunk = serialized.slice(start, start + read);
+    if (byteLength(chunk) !== written) throw new Error("Snapshot chunk byte count is inconsistent");
+    chunks.push(chunk);
+    start += read;
   }
   return chunks.length ? chunks : [""];
 }

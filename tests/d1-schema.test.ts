@@ -4,6 +4,7 @@ import { joinPayload, readCurrentSnapshot, splitPayload } from "../worker/databa
 
 const sql = readFileSync("migrations/0001_hybrid_read_model.sql", "utf8");
 const snapshotSql = readFileSync("migrations/0002_operational_snapshots.sql", "utf8");
+const MAX_SAFE_PARTS_FOR_TEST = 44;
 
 describe("hybrid read model schema", () => {
   it("stores source provenance and append-only automation audit records", () => {
@@ -28,6 +29,14 @@ describe("hybrid read model schema", () => {
     const value = { rows: Array.from({ length: 25_000 }, (_, index) => [index, "화물📦", `INV-${index}`]) };
     const chunks = splitPayload(value);
     expect(chunks.length).toBeGreaterThan(1);
+    expect(Math.max(...chunks.map((chunk) => new TextEncoder().encode(chunk).byteLength))).toBeLessThanOrEqual(524_288);
+    expect(joinPayload(chunks)).toEqual(value);
+  });
+
+  it("packs large ASCII-heavy snapshots within the D1 query budget", () => {
+    const value = { payload: "x".repeat(6 * 1024 * 1024) };
+    const chunks = splitPayload(value);
+    expect(chunks.length).toBeLessThan(MAX_SAFE_PARTS_FOR_TEST);
     expect(Math.max(...chunks.map((chunk) => new TextEncoder().encode(chunk).byteLength))).toBeLessThanOrEqual(524_288);
     expect(joinPayload(chunks)).toEqual(value);
   });
