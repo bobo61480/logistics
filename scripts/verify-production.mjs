@@ -65,6 +65,13 @@ if (requireD1 && health.databaseConfigured !== true) throw new Error("health: pr
 if (health.databaseConfigured && !String(health.dataStore).includes("D1")) {
   throw new Error(`health: D1 is not reflected by ${health.dataStore}`);
 }
+if (health.databaseConfigured && (
+  health.databaseReady !== true
+  || !Number.isFinite(health.databaseAgeSeconds)
+  || health.databaseAgeSeconds > 30 * 60
+)) {
+  throw new Error(`health: D1 snapshot is not fresh: ${JSON.stringify(health).slice(0, 500)}`);
+}
 const healthHeaders = await getHeaders(`/api/logistics/health?headers=${Date.now()}`);
 if (healthHeaders.get("x-content-type-options") !== "nosniff") throw new Error("health: nosniff header missing");
 if (healthHeaders.get("x-frame-options") !== "DENY") throw new Error("health: frame protection header missing");
@@ -73,6 +80,7 @@ const snapshot = await get(`/api/logistics/snapshot?verify=${Date.now()}`, true)
 if (snapshot.ok !== true) throw new Error(`snapshot: ${JSON.stringify(snapshot).slice(0, 500)}`);
 if (Number.isNaN(Date.parse(snapshot.generatedAt))) throw new Error("snapshot: generatedAt is invalid");
 if (!Array.isArray(snapshot.sourceHealth)) throw new Error("snapshot: sourceHealth is missing");
+if (health.databaseConfigured && snapshot.stale === true) throw new Error("snapshot: D1 payload is stale");
 
 const reconciliation = await get(`/api/logistics/reconciliation?verify=${Date.now()}`, true);
 if (reconciliation.ok !== true || reconciliation.databaseConfigured !== health.databaseConfigured) {
