@@ -29,9 +29,9 @@ function json(value: unknown, status = 200, cacheControl = "no-store") {
   });
 }
 
-async function buildSnapshotPayload(): Promise<OperationalSnapshot> {
+async function buildSnapshotPayload(env: Env): Promise<OperationalSnapshot> {
   const generatedAt = new Date().toISOString();
-  const snapshot = await fetchOperationalSources();
+  const snapshot = await fetchOperationalSources(env.APPS_SCRIPT_WRITE_URL);
   const outboundMeta = snapshot.sources.outboundMeta as { rowCount?: number } | undefined;
   const hasOutboundRows = Number(outboundMeta?.rowCount ?? 0) > 0;
   if (!snapshot.sources.imports || !hasOutboundRows) {
@@ -59,7 +59,7 @@ async function buildSnapshotPayload(): Promise<OperationalSnapshot> {
 
 async function refreshDatabaseSnapshot(env: DatabaseEnv) {
   const startedAt = Date.now();
-  const snapshot = await buildSnapshotPayload();
+  const snapshot = await buildSnapshotPayload(env);
   const persisted = await persistSnapshot(env.DB, snapshot);
   console.log(JSON.stringify({
     event: "d1-snapshot-refreshed",
@@ -121,7 +121,7 @@ async function handleSnapshot(env: Env, context: ExecutionContext) {
         return response;
       }
 
-      const initialPayload = await buildSnapshotPayload();
+      const initialPayload = await buildSnapshotPayload(env);
       try {
         const persisted = await persistSnapshot(env.DB, initialPayload);
         console.log(JSON.stringify({
@@ -154,7 +154,7 @@ async function handleSnapshot(env: Env, context: ExecutionContext) {
   }
 
   try {
-    const live = snapshotResponse({ ...(await buildSnapshotPayload()), storage: "sheets" });
+    const live = snapshotResponse({ ...(await buildSnapshotPayload(env)), storage: "sheets" });
     cacheSnapshot(context, live);
     live.headers.set("x-stylekorean-cache", hasDatabase(env) ? "D1-FALLBACK" : "MISS");
     return live;
