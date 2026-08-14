@@ -11,6 +11,7 @@ const TRANSFERS_GID = 1834454901;
 const NATIONAL_GID = 99300389;
 const WMS_GID = 0;
 const MAX_SOURCE_BYTES = 4 * 1024 * 1024;
+const MAX_GATEWAY_BYTES = 32 * 1024 * 1024;
 
 export type SourceHealth = { name: string; ok: boolean; fetchedAt: string; latencyMs: number; error?: string };
 export type SourceResult<T> = { health: SourceHealth; data: T | null };
@@ -23,6 +24,21 @@ export type OutboundSourceMeta = {
 };
 
 type GvizTable = { cols?: Array<{ label?: string }>; rows?: Array<{ c?: Array<{ v?: unknown; f?: string } | null> }> };
+type AppsScriptSnapshot = {
+  ok?: boolean;
+  generatedAt?: string;
+  sources?: {
+    imports?: string[][];
+    outbound?: string[][];
+    trucking?: string[][];
+    transfers?: string[][];
+    nationalOutbound?: string[][];
+    salesOutbound?: string[][];
+    inventoryDashboardTable?: string[][];
+    skwInboundTable?: string[][];
+    skwStockTable?: string[][];
+  };
+};
 
 export async function readBoundedText(response: Response, maxBytes = MAX_SOURCE_BYTES) {
   const declaredLength = Number(response.headers.get("content-length") || 0);
@@ -154,14 +170,14 @@ export function selectOutboundSource(
   };
 }
 
-async function timedFetch(name: string, url: URL): Promise<SourceResult<string>> {
+async function timedFetch(name: string, url: URL, maxBytes = MAX_SOURCE_BYTES): Promise<SourceResult<string>> {
   const started = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20_000);
   try {
     const response = await fetch(url, { headers: { "user-agent": "StyleKorean-Control-Tower/2026-08-12" }, signal: controller.signal });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return { data: await readBoundedText(response), health: { name, ok: true, fetchedAt: new Date().toISOString(), latencyMs: Date.now() - started } };
+    return { data: await readBoundedText(response, maxBytes), health: { name, ok: true, fetchedAt: new Date().toISOString(), latencyMs: Date.now() - started } };
   } catch (error) {
     return { data: null, health: { name, ok: false, fetchedAt: new Date().toISOString(), latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) } };
   } finally { clearTimeout(timer); }
@@ -192,7 +208,81 @@ export async function fetchGvizSource(name: string, spreadsheetId: string, optio
   catch (error) { return { data: null, health: { ...result.health, ok: false, error: String(error) } }; }
 }
 
-export async function fetchOperationalSources() {
+function rowsToGvizTable(rows: string[][] | undefined): GvizTable | null {
+  if (!rows?.length) return null;
+  return {
+    cols: rows[0].map((label) => ({ label })),
+    rows: rows.slice(1).map((row) => ({ c: row.map((value) => ({ v: value })) })),
+  };
+}
+
+async function fetchAppsScriptSnapshot(endpoint: string) {
+  const url = new URL(endpoint);
+  url.searchParams.set("action", "snapshot");
+  url.searchParams.set("_", String(Date.now()));
+  const result = await timedFetch("Apps Script Snapshot", url, MAX_GATEWAY_BYTES);
+  if (!result.data) return null;
+  try {
+    const payload = JSON.parse(result.data) as AppsScriptSnapshot;
+    return payload.ok && payload.sources ? { payload, health: result.health } : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchOperationalSources(appsScriptUrl?: string) {
+  if (appsScriptUrl) {
+    const gateway = await fetchAppsScriptSnapshot(appsScriptUrl);
+    if (gateway) {
+      const raw = gateway.payload.sources!;
+      const effectiveOutbound = selectOutboundSource(raw.outbound ?? null, raw.trucking ?? null);
+      const healthFor = (name: string, value: unknown) => ({
+        name,
+        ok: value !== null && value !== undefined,
+        fetchedAt: gateway.payload.generatedAt || gateway.health.fetchedAt,
+        latencyMs: gateway.health.latencyMs,
+        error: value === null || value === undefined ? `${name} is missing from the Apps Script snapshot` : undefined,
+      });
+      const outboundHealth = effectiveOutbound.meta.fallback
+        ? { ...healthFor("Outbound Shipping Schedule", raw.outbound), ok: false, error: effectiveOutbound.meta.reason }
+        : healthFor("Outbound Shipping Schedule", raw.outbound);
+      const nationalTable = rowsToGvizTable(raw.nationalOutbound);
+      const salesTable = rowsToGvizTable(raw.salesOutbound);
+      const inventoryTable = rowsToGvizTable(raw.inventoryDashboardTable);
+      const inboundTable = rowsToGvizTable(raw.skwInboundTable);
+      const stockTable = rowsToGvizTable(raw.skwStockTable);
+      return {
+        sourceHealth: [
+          healthFor("IMPORTS", raw.imports),
+          outboundHealth,
+          healthFor("WH Trucking Request", raw.trucking),
+          healthFor("TRANSFERS", raw.transfers),
+          healthFor("Nationals", nationalTable),
+          healthFor("WMS Stylekorean", salesTable),
+          healthFor("Inventory", inventoryTable),
+          healthFor("SKW Inbound", inboundTable),
+          healthFor("SKW Stock", stockTable),
+        ],
+        sources: {
+          imports: raw.imports ? normalizeImportsParcelRows(raw.imports) : null,
+          outbound: effectiveOutbound.rows,
+          outboundMeta: effectiveOutbound.meta,
+          nationalOutbound: nationalTable,
+          salesOutbound: salesTable,
+          inventoryDashboardTable: inventoryTable,
+          skwInboundTable: inboundTable,
+          skwStockTable: stockTable,
+        },
+        kpiRows: {
+          nationalRows: raw.nationalOutbound ?? [],
+          wmsRows: raw.salesOutbound ?? [],
+          truckingRows: raw.trucking ?? [],
+          transferRows: raw.transfers ?? [],
+        },
+      };
+    }
+  }
+
   const [imports, outbound, trucking, transfers, nationalOutbound, salesOutbound, inventoryDashboardTable, skwInboundTable, skwStockTable] = await Promise.all([
     fetchCsvSource("IMPORTS", LOGISTICS_MASTER_ID, IMPORTS_GID),
     fetchCsvSource("Outbound Shipping Schedule", LOGISTICS_MASTER_ID, OUTBOUND_GID),

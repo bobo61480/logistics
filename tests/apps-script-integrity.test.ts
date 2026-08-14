@@ -4,6 +4,15 @@ import { describe, expect, it } from "vitest";
 const read = (path: string) => readFileSync(path, "utf8");
 
 describe("Apps Script production integrity", () => {
+  it("serves an owner-authorized read snapshot for the private production workbooks", () => {
+    const code = read("google-apps-script/Code.gs");
+    expect(code).toContain("function doGet(e)");
+    expect(code).toContain('action !== "snapshot"');
+    expect(code).toContain("readSnapshotRows_");
+    expect(code).toContain("NATIONAL_SPREADSHEET_ID");
+    expect(code).toContain('trucking: readSnapshotRows_(SPREADSHEET_ID, "WH Trucking Request"');
+  });
+
   it("uses the spreadsheet-compatible canonical FDA/FWS status vocabulary", () => {
     const code = read("google-apps-script/Code.gs");
     const gmail = read("google-apps-script/GmailPipelineV2.gs");

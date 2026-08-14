@@ -26,6 +26,7 @@
 
 const SPREADSHEET_ID = "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc";
 const WMS_SPREADSHEET_ID = "14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I";
+const NATIONAL_SPREADSHEET_ID = "12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8";
 
 const OUTBOUND_STATUS = ["", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "SHIPPING", "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED"];
 const INBOUND_STATUS = ["", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "SHIPPING", "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED", "N/A", "Customs Clearance", "FDA Review / Hold", "FWS Review / Hold", "RECEIVED/FDA HOLD/REVIEW", "FDA Detained", "AQI Examination", "Delayed"];
@@ -41,6 +42,44 @@ const INVENTORY_TRANSFER_STATUSES = ["DELIVERED", "RECEIVED", "COMPLETED"];
 const SKW_INBOUND_SHEET = "SKW_Inbound";
 const SKW_STOCK_SHEET = "SKW_Stock";
 const WMS_TRUCKING_LEDGER_SHEET = "WMS Trucking Processed";
+
+function doGet(e) {
+  try {
+    const action = String((e && e.parameter && e.parameter.action) || "").trim().toLowerCase();
+    if (action !== "snapshot") return json_({ ok: false, error: "Unsupported action." });
+    return json_({
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      sources: {
+        imports: readSnapshotRows_(SPREADSHEET_ID, "IMPORTS", null, 1, 2500, 30),
+        outbound: readSnapshotRows_(SPREADSHEET_ID, "Outbound Shipping Schedule", null, 1, 1500, 30),
+        trucking: readSnapshotRows_(SPREADSHEET_ID, "WH Trucking Request", null, 1, 25000, 32),
+        transfers: readSnapshotRows_(SPREADSHEET_ID, "TRANSFERS", null, 1, 2500, 29),
+        nationalOutbound: readSnapshotRows_(NATIONAL_SPREADSHEET_ID, null, 99300389, 1, 3500, 21),
+        salesOutbound: readSnapshotRows_(WMS_SPREADSHEET_ID, null, 0, 2, 4199, 32),
+        inventoryDashboardTable: readSnapshotRows_(SPREADSHEET_ID, "INVENTORY", null, 1, 6500, 15),
+        skwInboundTable: readSnapshotRows_(SPREADSHEET_ID, "SKW_Inbound", null, 1, 2500, 18),
+        skwStockTable: readSnapshotRows_(SPREADSHEET_ID, "SKW_Stock", null, 1, 2500, 10)
+      }
+    });
+  } catch (error) {
+    return json_({ ok: false, error: String(error.message || error) });
+  }
+}
+
+function readSnapshotRows_(spreadsheetId, sheetName, sheetId, startRow, maxRows, maxColumns) {
+  const spreadsheet = SpreadsheetApp.openById(spreadsheetId);
+  let sheet = sheetName ? spreadsheet.getSheetByName(sheetName) : null;
+  if (!sheet && sheetId !== null && sheetId !== undefined) {
+    sheet = spreadsheet.getSheets().find(function (candidate) { return candidate.getSheetId() === sheetId; }) || null;
+  }
+  if (!sheet) throw new Error("Snapshot source sheet is unavailable.");
+  const firstRow = Math.max(1, Number(startRow) || 1);
+  const lastRow = Math.min(sheet.getLastRow(), firstRow + Math.max(1, Number(maxRows) || 1) - 1);
+  const lastColumn = Math.min(sheet.getLastColumn(), Math.max(1, Number(maxColumns) || 1));
+  if (lastRow < firstRow || lastColumn < 1) return [];
+  return sheet.getRange(firstRow, 1, lastRow - firstRow + 1, lastColumn).getDisplayValues();
+}
 
 function doPost(e) {
   const lock = LockService.getScriptLock();
