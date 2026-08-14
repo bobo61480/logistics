@@ -32,10 +32,13 @@ describe("production hardening", () => {
     expect(workflow).toContain("Account > D1 > Edit");
     expect(workflow).toContain("same account as CLOUDFLARE_ACCOUNT_ID");
     expect(workflow).toContain('snapshot.storage!=="d1"');
+    expect(workflow).toContain("Number(health.databaseAgeSeconds)>30*60");
+    expect(workflow).toContain("snapshot.stale===true");
     expect(workflow).toContain("x-content-type-options: nosniff");
     const worker = read("worker/index.ts");
     expect(worker).toContain('databaseState: "unbound" | "initializing" | "ready" | "unavailable"');
     expect(worker).toContain('databaseReady: databaseState === "ready"');
+    expect(worker).toContain("if (!stale) cacheSnapshot(context, response)");
   });
 
   it("ships a reusable production smoke verifier", () => {
