@@ -47,19 +47,22 @@ function doGet(e) {
   try {
     const action = String((e && e.parameter && e.parameter.action) || "").trim().toLowerCase();
     if (action !== "snapshot") return json_({ ok: false, error: "Unsupported action." });
+    const master = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const national = SpreadsheetApp.openById(NATIONAL_SPREADSHEET_ID);
+    const wms = SpreadsheetApp.openById(WMS_SPREADSHEET_ID);
     return json_({
       ok: true,
       generatedAt: new Date().toISOString(),
       sources: {
-        imports: readSnapshotRows_(SPREADSHEET_ID, "IMPORTS", null, 1, 2500, 30),
-        outbound: readSnapshotRows_(SPREADSHEET_ID, "Outbound Shipping Schedule", null, 1, 1500, 30),
-        trucking: readSnapshotRows_(SPREADSHEET_ID, "WH Trucking Request", null, 1, 25000, 32),
-        transfers: readSnapshotRows_(SPREADSHEET_ID, "TRANSFERS", null, 1, 2500, 29),
-        nationalOutbound: readSnapshotRows_(NATIONAL_SPREADSHEET_ID, null, 99300389, 1, 3500, 21),
-        salesOutbound: readSnapshotRows_(WMS_SPREADSHEET_ID, null, 0, 2, 4199, 32),
-        inventoryDashboardTable: readSnapshotRows_(SPREADSHEET_ID, "INVENTORY", null, 1, 6500, 15),
-        skwInboundTable: readSnapshotRows_(SPREADSHEET_ID, "SKW_Inbound", null, 1, 2500, 18),
-        skwStockTable: readSnapshotRows_(SPREADSHEET_ID, "SKW_Stock", null, 1, 2500, 10)
+        imports: readSnapshotRows_(master, "IMPORTS", null, 1, 2500, 30),
+        outbound: readSnapshotRows_(master, "Outbound Shipping Schedule", null, 1, 1500, 30),
+        trucking: readSnapshotRows_(master, "WH Trucking Request", null, 1, 25000, 32),
+        transfers: readSnapshotRows_(master, "TRANSFERS", null, 1, 2500, 29),
+        nationalOutbound: readSnapshotRows_(national, null, 99300389, 1, 3500, 21),
+        salesOutbound: readSnapshotRows_(wms, null, 0, 2, 4199, 32),
+        inventoryDashboardTable: readSnapshotRows_(master, "INVENTORY", null, 1, 6500, 15),
+        skwInboundTable: readSnapshotRows_(master, "SKW_Inbound", null, 1, 2500, 18),
+        skwStockTable: readSnapshotRows_(master, "SKW_Stock", null, 1, 2500, 10)
       }
     });
   } catch (error) {
@@ -67,8 +70,7 @@ function doGet(e) {
   }
 }
 
-function readSnapshotRows_(spreadsheetId, sheetName, sheetId, startRow, maxRows, maxColumns) {
-  const spreadsheet = SpreadsheetApp.openById(spreadsheetId);
+function readSnapshotRows_(spreadsheet, sheetName, sheetId, startRow, maxRows, maxColumns) {
   let sheet = sheetName ? spreadsheet.getSheetByName(sheetName) : null;
   if (!sheet && sheetId !== null && sheetId !== undefined) {
     sheet = spreadsheet.getSheets().find(function (candidate) { return candidate.getSheetId() === sheetId; }) || null;
