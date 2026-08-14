@@ -10,7 +10,10 @@ describe("Apps Script production integrity", () => {
     expect(code).toContain('action !== "snapshot"');
     expect(code).toContain("readSnapshotRows_");
     expect(code).toContain("NATIONAL_SPREADSHEET_ID");
-    expect(code).toContain('trucking: readSnapshotRows_(SPREADSHEET_ID, "WH Trucking Request"');
+    expect(code).toContain('trucking: readSnapshotRows_(master, "WH Trucking Request"');
+    expect(code).toContain("const master = SpreadsheetApp.openById(SPREADSHEET_ID);");
+    expect(code).not.toContain("readSnapshotRows_(SPREADSHEET_ID,");
+    expect(code).toContain("function readSnapshotRows_(spreadsheet,");
   });
 
   it("deploys the snapshot as an anonymous owner-authorized web app and smoke-tests it", () => {

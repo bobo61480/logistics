@@ -170,10 +170,10 @@ export function selectOutboundSource(
   };
 }
 
-async function timedFetch(name: string, url: URL, maxBytes = MAX_SOURCE_BYTES): Promise<SourceResult<string>> {
+async function timedFetch(name: string, url: URL, maxBytes = MAX_SOURCE_BYTES, timeoutMs = 20_000): Promise<SourceResult<string>> {
   const started = Date.now();
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 20_000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, { headers: { "user-agent": "StyleKorean-Control-Tower/2026-08-12" }, signal: controller.signal });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -220,7 +220,7 @@ async function fetchAppsScriptSnapshot(endpoint: string) {
   const url = new URL(endpoint);
   url.searchParams.set("action", "snapshot");
   url.searchParams.set("_", String(Date.now()));
-  const result = await timedFetch("Apps Script Snapshot", url, MAX_GATEWAY_BYTES);
+  const result = await timedFetch("Apps Script Snapshot", url, MAX_GATEWAY_BYTES, 60_000);
   if (!result.data) return null;
   try {
     const payload = JSON.parse(result.data) as AppsScriptSnapshot;
