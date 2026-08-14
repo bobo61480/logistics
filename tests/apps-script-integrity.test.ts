@@ -13,6 +13,19 @@ describe("Apps Script production integrity", () => {
     expect(code).toContain('trucking: readSnapshotRows_(SPREADSHEET_ID, "WH Trucking Request"');
   });
 
+  it("deploys the snapshot as an anonymous owner-authorized web app and smoke-tests it", () => {
+    const manifest = JSON.parse(read("google-apps-script/appsscript.json"));
+    const workflow = read(".github/workflows/deploy-apps-script.yml");
+
+    expect(manifest.webapp).toEqual({
+      access: "ANYONE_ANONYMOUS",
+      executeAs: "USER_DEPLOYING",
+    });
+    expect(workflow).toContain("Verify anonymous snapshot gateway");
+    expect(workflow).toContain("payload.sources?.imports");
+    expect(workflow).toContain("payload.sources?.trucking");
+  });
+
   it("uses the spreadsheet-compatible canonical FDA/FWS status vocabulary", () => {
     const code = read("google-apps-script/Code.gs");
     const gmail = read("google-apps-script/GmailPipelineV2.gs");
