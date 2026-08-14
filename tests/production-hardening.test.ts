@@ -24,7 +24,7 @@ describe("production hardening", () => {
     expect(workflow).toContain("wrangler versions upload");
     expect(workflow).toContain("wrangler versions deploy");
     expect(workflow).toContain("wrangler triggers deploy");
-    expect(workflow).toContain('release_tag="release-${GITHUB_SHA}"');
+    expect(workflow).toContain('release_tag="release-${GITHUB_SHA}-attempt-${GITHUB_RUN_ATTEMPT}"');
     expect(workflow).toContain("The version deployment config still contains a route block");
     expect(workflow).not.toContain("wrangler deploy --config .wrangler.production.toml");
     expect(workflow).toContain("EXPECTED_DATABASE_CONFIGURED");
