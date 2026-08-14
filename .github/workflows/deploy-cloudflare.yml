@@ -123,7 +123,7 @@ jobs:
           set -euo pipefail
           production_config=".wrangler.production.toml"
           version_config=".wrangler.version.toml"
-          release_tag="release-${GITHUB_SHA}"
+          release_tag="release-${GITHUB_SHA}-attempt-${GITHUB_RUN_ATTEMPT}"
 
           # The production route already targets this Worker. Version uploads and
           # deployments do not need zone-write authority, so keep route lifecycle
