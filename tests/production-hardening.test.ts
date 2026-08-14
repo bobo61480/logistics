@@ -39,6 +39,7 @@ describe("production hardening", () => {
     expect(worker).toContain('databaseState: "unbound" | "initializing" | "ready" | "unavailable"');
     expect(worker).toContain('databaseReady: databaseState === "ready"');
     expect(worker).toContain("if (!stale) cacheSnapshot(context, response)");
+    expect(worker).toContain("fetchOperationalSources(env.APPS_SCRIPT_WRITE_URL)");
   });
 
   it("ships a reusable production smoke verifier", () => {
