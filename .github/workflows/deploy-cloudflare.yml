@@ -115,44 +115,17 @@ jobs:
           mv "$database_config" "$production_config"
           echo "configured=true" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy canonical Worker version without mutating its existing route
+      - name: Deploy canonical Worker and restore production route
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -euo pipefail
-          production_config=".wrangler.production.toml"
-          version_config=".wrangler.version.toml"
-          release_tag="release-${GITHUB_SHA}-attempt-${GITHUB_RUN_ATTEMPT}"
-
-          # The production route already targets this Worker. Version uploads and
-          # deployments do not need zone-write authority, so keep route lifecycle
-          # separate from routine code/data releases.
-          awk '
-            /^\[\[routes\]\]$/ { skip_route = 1; next }
-            skip_route && /^\[/ { skip_route = 0 }
-            !skip_route { print }
-          ' "$production_config" > "$version_config"
-
-          if grep -q '^\[\[routes\]\]$' "$version_config"; then
-            echo "::error::The version deployment config still contains a route block."
-            exit 1
-          fi
-
-          npx wrangler versions upload \
-            --config "$version_config" \
-            --tag "$release_tag" \
-            --message "StyleKorean release ${GITHUB_SHA}"
-          npx wrangler versions deploy \
-            --config "$version_config" \
-            --version-tag "$release_tag" \
-            --percentage 100 \
-            --message "StyleKorean production ${GITHUB_SHA}" \
-            --yes
-          npx wrangler triggers deploy \
-            --config "$version_config" \
-            --triggers "*/15 * * * *"
+          # A version-only deployment cannot recover a detached zone route.
+          # Canonical deploy validates and restores the configured route, assets,
+          # D1 binding (when available), rate limiter, and Worker code together.
+          npx wrangler deploy --config .wrangler.production.toml --keep-vars
 
       - name: Verify live custom domain, appearance routes, and Worker APIs
         shell: bash
