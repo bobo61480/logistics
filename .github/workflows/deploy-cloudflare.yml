@@ -1,4 +1,5 @@
 name: Deploy canonical logistics site to Cloudflare
+# Production redeploy requested 2026-08-14
 
 on:
   push:
