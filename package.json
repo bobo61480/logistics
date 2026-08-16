@@ -12,17 +12,17 @@
     "start": "next start",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "next build && playwright test"
+    "test:e2e": "next build && playwright test",
+    "verify:production": "node scripts/verify-production.mjs"
   },
   "dependencies": {
-    "build": "^0.1.4",
     "next": "^16.3.0",
     "react": "19.2.6",
     "react-dom": "19.2.6",
-    "typecheck": "^0.1.2",
     "wrangler": "^4.120.1"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260813.1",
     "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "22.19.19",

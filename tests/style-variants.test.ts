@@ -19,13 +19,15 @@ describe("live dashboard style variants", () => {
     expect(source).not.toContain("function VariantNav");
   });
 
-  test("root layout exposes the same three-way style switcher on every route", () => {
+  test("root layout exposes the same five-way style switcher on every route", () => {
     const layout = read("app/layout.tsx");
     const switcher = read("app/style-switcher.tsx");
     expect(layout).toContain('import { StyleSwitcher } from "./style-switcher"');
     expect(layout).toContain("<StyleSwitcher />");
     expect(switcher).toContain('{ href: "/", label: "Original" }');
-    expect(switcher).toContain('{ href: "/light", label: "Light" }');
+    expect(switcher).toContain('{ href: "/light-skin", label: "Light Skin" }');
+    expect(switcher).toContain('{ href: "/light", label: "Light Control Tower" }');
+    expect(switcher).toContain('{ href: "/light-full", label: "Light Full" }');
     expect(switcher).toContain('{ href: "/fulfillment-style", label: "Fulfillment" }');
     expect(switcher).toContain("usePathname");
     expect(switcher).toContain("aria-current={active ? \"page\" : undefined}");
@@ -43,32 +45,29 @@ describe("live dashboard style variants", () => {
   });
 
   test("fulfillment money fields render as USD with a dollar sign", () => {
-    const source = read("app/fulfillment-tk-panel.tsx");
-    expect(source).toContain("function formatFulfillmentValue");
+    const source = read("app/FulfillmentTkOrders.tsx");
+    expect(source).toContain("function money");
     expect(source).toContain('style: "currency"');
     expect(source).toContain('currency: "USD"');
   });
 
-  test("Fulfillment TK card carries source-style dark and amber treatment", () => {
-    const css = read("app/fulfillment-tk-source.css");
-    expect(css).toContain(".fulfillment-tk-panel");
-    expect(css).toContain("--fulfillment-source-bg");
-    expect(css).toContain("--fulfillment-source-surface");
-    expect(css).toContain("--fulfillment-source-border");
-    expect(css).toContain("--fulfillment-source-amber");
-    expect(css).toContain(".fulfillment-tk-method");
-    expect(css).toContain(".fulfillment-tk-status");
-    expect(css).toContain(".fulfillment-tk-source-link");
+  test("canonical fulfillment card carries the dark source treatment", () => {
+    const css = read("app/fulfillment-tk-orders.module.css");
+    expect(css).toContain("--tk-bg");
+    expect(css).toContain("--tk-surface");
+    expect(css).toContain("--tk-border");
+    expect(css).toContain("--tk-amber");
+    expect(css).toContain(".methodPill");
+    expect(css).toContain(".badge");
   });
 
-  test("Fulfillment TK rows expose semantic classes for method, status, and money", () => {
-    const source = read("app/fulfillment-tk-panel.tsx");
-    expect(source).toContain('import "./fulfillment-tk-source.css"');
-    expect(source).toContain("function fulfillmentCellClass");
-    expect(source).toContain('"fulfillment-tk-method"');
-    expect(source).toContain('"fulfillment-tk-status"');
-    expect(source).toContain('"fulfillment-tk-money"');
-    expect(source).toContain('className="fulfillment-tk-source-link"');
+  test("canonical fulfillment card receives variant placement and keeps its mobile method filter", () => {
+    const source = read("app/FulfillmentTkOrders.tsx");
+    const css = read("app/fulfillment-tk-orders.module.css");
+    expect(source).toContain("fulfillment-tk-panel");
+    expect(source).toContain("fulfillment-finished-row");
+    expect(source).toContain("30 * 60 * 1000");
+    expect(css).not.toMatch(/\.methodPill\s*\{[^}]*display:\s*none/);
   });
 
   test("inbound small parcels derive carrier from tracking signature before section heading", () => {

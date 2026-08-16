@@ -19,6 +19,7 @@ const SALES_SHEET_ID =
   "14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I";
 const IMPORTS_GID = Number(process.env.NEXT_PUBLIC_IMPORTS_GID ?? 1497250700);
 const OUTBOUND_GID = Number(process.env.NEXT_PUBLIC_OUTBOUND_GID ?? 20260708);
+const TRUCKING_GID = Number(process.env.NEXT_PUBLIC_TRUCKING_GID ?? 1418033635);
 const NATIONAL_GID = Number(process.env.NEXT_PUBLIC_NATIONAL_GID ?? 99300389);
 const SALES_GID = Number(process.env.NEXT_PUBLIC_WMS_GID ?? 0);
 const NATIONAL_SHEET_URL = `https://docs.google.com/spreadsheets/d/${NATIONAL_SHEET_ID}/edit?gid=${NATIONAL_GID}#gid=${NATIONAL_GID}`;
@@ -349,6 +350,9 @@ function sourceRowUrl(item: ScheduleItem) {
   }
   if (item.sourceSheet === "Outbound Shipping Schedule") {
     return `${SHEET_URL}?gid=${OUTBOUND_GID}&range=A${item.sourceRow}#gid=${OUTBOUND_GID}&range=A${item.sourceRow}`;
+  }
+  if (item.sourceSheet === "WH Trucking Request") {
+    return `${SHEET_URL}?gid=${TRUCKING_GID}&range=A${item.sourceRow}#gid=${TRUCKING_GID}&range=A${item.sourceRow}`;
   }
   if (item.sourceSheet === "NATIONAL ORDER PROGRESS") {
     return `https://docs.google.com/spreadsheets/d/${NATIONAL_SHEET_ID}/edit?gid=${NATIONAL_GID}&range=A${item.sourceRow}#gid=${NATIONAL_GID}&range=A${item.sourceRow}`;
@@ -980,12 +984,18 @@ async function fetchLiveKpis() {
   return (await computeLiveKpis()) as unknown as KpiSnapshot;
 }
 
-type DatabaseSnapshot = {
+type WorkerSnapshot = {
   ok: true;
   generatedAt?: string;
+  version?: string;
+  storage?: "d1" | "sheets";
+  stale?: boolean;
+  staleReason?: string;
+  sourceHealth?: Array<{ name: string; ok: boolean; error?: string }>;
   sources: {
     imports?: string[][];
     outbound?: string[][];
+    outboundMeta?: OutboundSourceMeta;
     nationalOutbound?: any;
     salesOutbound?: any;
     inventoryDashboardTable?: any;
@@ -995,22 +1005,44 @@ type DatabaseSnapshot = {
   kpis?: KpiSnapshot | null;
 };
 
-async function fetchDatabaseSnapshot(): Promise<DatabaseSnapshot> {
+type OutboundSourceMeta = {
+  sheetName: "Outbound Shipping Schedule" | "WH Trucking Request";
+  headerRow: number;
+  rowCount: number;
+  fallback: boolean;
+  reason?: string;
+};
+
+const OUTBOUND_SCHEDULE_META: OutboundSourceMeta = {
+  sheetName: "Outbound Shipping Schedule",
+  headerRow: 3,
+  rowCount: 0,
+  fallback: false,
+};
+
+function populatedOutboundRows(rows: string[][], headerRow: number) {
+  return rows.slice(headerRow).some((row) => Boolean(cell(row, 0) && cell(row, 3)));
+}
+
+async function fetchWorkerSnapshot(): Promise<WorkerSnapshot> {
   const response = await fetch(DATA_ENDPOINT, { cache: "no-store" });
-  const payload = await response.json().catch(() => null);
+  const payload = (await response.json().catch(() => null)) as
+    | (Partial<WorkerSnapshot> & { error?: string })
+    | null;
   if (!response.ok || payload?.ok !== true || !payload?.sources) {
-    throw new Error(payload?.error || `Database snapshot unavailable (${response.status}).`);
+    throw new Error(payload?.error || `Worker snapshot unavailable (${response.status}).`);
   }
   if (!Array.isArray(payload.sources.imports) || !Array.isArray(payload.sources.outbound)) {
-    throw new Error("Database snapshot is missing required imports/outbound sources.");
+    throw new Error("Worker snapshot is missing required imports/outbound sources.");
   }
-  return payload as DatabaseSnapshot;
+  return payload as WorkerSnapshot;
 }
 
 async function fetchSheetSnapshot() {
   const [
     imports,
     outbound,
+    trucking,
     nationalOutbound,
     salesOutbound,
     liveKpis,
@@ -1020,6 +1052,7 @@ async function fetchSheetSnapshot() {
   ] = await Promise.all([
     fetchCsvRows(SHEET_ID, IMPORTS_GID),
     fetchCsvRows(SHEET_ID, OUTBOUND_GID),
+    fetchCsvRows(SHEET_ID, TRUCKING_GID),
     fetchTable(NATIONAL_SHEET_ID, NATIONAL_GID, "A1:U3500", 1),
     fetchTable(SALES_SHEET_ID, SALES_GID, "A2:AF4200", 1),
     fetchLiveKpis(),
@@ -1027,9 +1060,20 @@ async function fetchSheetSnapshot() {
     fetchOptionalSheet("SKW_Inbound", "A1:R2500"),
     fetchOptionalSheet("SKW_Stock", "A1:J2500"),
   ]);
+  const useSchedule = populatedOutboundRows(outbound, OUTBOUND_SCHEDULE_META.headerRow);
+  const outboundMeta: OutboundSourceMeta = useSchedule
+    ? { ...OUTBOUND_SCHEDULE_META, rowCount: outbound.slice(OUTBOUND_SCHEDULE_META.headerRow).filter((row) => Boolean(cell(row, 0) && cell(row, 3))).length }
+    : {
+        sheetName: "WH Trucking Request",
+        headerRow: 2,
+        rowCount: trucking.slice(2).filter((row) => Boolean(cell(row, 0) && cell(row, 3))).length,
+        fallback: true,
+        reason: "Outbound Shipping Schedule has no shipment rows",
+      };
   return {
     imports,
-    outbound,
+    outbound: useSchedule ? outbound : trucking,
+    outboundMeta,
     nationalOutbound,
     salesOutbound,
     liveKpis,
@@ -1041,26 +1085,44 @@ async function fetchSheetSnapshot() {
 
 async function fetchOperationalSnapshot() {
   try {
-    const database = await fetchDatabaseSnapshot();
-    const sources = database.sources;
+    const snapshot = await fetchWorkerSnapshot();
+    const sources = snapshot.sources;
     return {
       imports: sources.imports!,
       outbound: sources.outbound!,
+      outboundMeta: sources.outboundMeta ?? OUTBOUND_SCHEDULE_META,
       nationalOutbound: sources.nationalOutbound ?? { cols: [], rows: [] },
       salesOutbound: sources.salesOutbound ?? { cols: [], rows: [] },
-      liveKpis: database.kpis ?? (await fetchLiveKpis()),
+      liveKpis: snapshot.kpis ?? (await fetchLiveKpis()),
       inventoryDashboardTable: sources.inventoryDashboardTable ?? null,
       skwInboundTable: sources.skwInboundTable ?? null,
       skwStockTable: sources.skwStockTable ?? null,
-      source: "database" as const,
+      connection: {
+        mode: snapshot.stale ? "stale" as const : "worker" as const,
+        storage: snapshot.storage,
+        version: snapshot.version,
+        detail: snapshot.staleReason,
+        degradedSources: (snapshot.sourceHealth ?? []).filter((source) => !source.ok).length,
+      },
     };
-  } catch (databaseError) {
-    // Migration-safe fallback: the existing Sheets integration stays available
-    // until PostgreSQL has received its first successful snapshot.
-    console.warn("Database snapshot unavailable; falling back to Google Sheets.", databaseError);
-    return { ...(await fetchSheetSnapshot()), source: "sheets" as const };
+  } catch (workerError) {
+    // Keep a read-only direct-Sheets fallback so the schedule remains visible
+    // during a Worker routing incident. Status writes still require the Worker.
+    console.warn("Worker snapshot unavailable; falling back to Google Sheets.", workerError);
+    return {
+      ...(await fetchSheetSnapshot()),
+      connection: {
+        mode: "sheets" as const,
+        storage: "sheets" as const,
+        version: undefined,
+        detail: workerError instanceof Error ? workerError.message : "Worker snapshot unavailable",
+        degradedSources: 0,
+      },
+    };
   }
 }
+
+type ConnectionState = Awaited<ReturnType<typeof fetchOperationalSnapshot>>["connection"];
 
 function normalizeStatus(value: string) {
   const normalized = clean(value).toLowerCase();
@@ -1628,10 +1690,13 @@ function resolveOutboundSource(records: OutboundSourceRecord[], item: ScheduleIt
   );
 }
 
-function outboundItems(rows: string[][]): ScheduleItem[] {
+function outboundItems(
+  rows: string[][],
+  meta: OutboundSourceMeta = OUTBOUND_SCHEDULE_META,
+): ScheduleItem[] {
   return rows.flatMap((row, index) => {
     const sourceRow = index + 1;
-    if (sourceRow < 4) return [];
+    if (sourceRow <= meta.headerRow) return [];
     const customer = cell(row, 0);
     const invoice = cell(row, 1);
     const shipDate = cell(row, 3);
@@ -1651,7 +1716,7 @@ function outboundItems(rows: string[][]): ScheduleItem[] {
         reference: invoice || cell(row, 18) || "Outbound shipment",
         secondary: [cell(row, 16), cell(row, 18)].filter(Boolean).join(" · "),
         status,
-        sourceSheet: "Outbound Shipping Schedule",
+        sourceSheet: meta.sheetName,
         sourceRow,
         sourceUrl: SHEET_URL,
         editable: true,
@@ -1784,74 +1849,6 @@ function salesOutboundItems(table: any): ScheduleItem[] {
   });
 }
 
-function consolidateTruckingItems(records: ScheduleItem[]) {
-  const groups = new Map<string, ScheduleItem[]>();
-  const ungrouped: ScheduleItem[] = [];
-
-  records.forEach((item) => {
-    if (
-      item.direction !== "outbound" ||
-      item.isSmallParcel ||
-      !/^trucking$/i.test(item.shippingMethod ?? "")
-    ) {
-      ungrouped.push(item);
-      return;
-    }
-    const customerKey = normalizedIdentifier(item.customer || item.customerNo || item.title);
-    const dateKey = item.date ? dayKey(item.date) : normalizedIdentifier(item.shipDate || item.dateText);
-    if (!customerKey || !dateKey) {
-      ungrouped.push(item);
-      return;
-    }
-    const key = `${customerKey}___${dateKey}`;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key)!.push(item);
-  });
-
-  const invoiceKeys = (items: ScheduleItem[]) => new Set(
-    items.flatMap((item) => splitValues(item.invoice ?? "")).map(normalizedIdentifier).filter(Boolean),
-  );
-  const groupEntries = [...groups.entries()];
-  const scheduleGroups = groupEntries.filter(([, items]) =>
-    items.some((item) => item.sourceSheet === "Outbound Shipping Schedule"),
-  );
-  const absorbed = new Set<string>();
-  groupEntries.forEach(([key, items]) => {
-    if (items.some((item) => item.sourceSheet === "Outbound Shipping Schedule")) return;
-    const invoices = invoiceKeys(items);
-    if (!invoices.size) return;
-    const matches = scheduleGroups.filter(([, scheduled]) =>
-      [...invoiceKeys(scheduled)].some((invoice) => invoices.has(invoice)),
-    );
-    if (matches.length !== 1) return;
-    matches[0][1].push(...items);
-    absorbed.add(key);
-  });
-
-  const consolidated = groupEntries.filter(([key]) => !absorbed.has(key)).map(([key, items]) => {
-    const primary =
-      items.find((item) => item.sourceSheet === "Outbound Shipping Schedule") ??
-      items.find((item) => item.editable) ??
-      items[0];
-    const invoices = Array.from(new Set(
-      items.flatMap((item) => splitValues(item.invoice ?? "")).map((value) => value.trim()).filter(Boolean),
-    ));
-    const warningStatus = items.find((item) => /pending|delay|hold|review/i.test(item.status));
-    const secondary = Array.from(new Set(items.map((item) => item.secondary).filter(Boolean))).join(" · ");
-    const invoice = invoices.join("\n");
-    return {
-      ...primary,
-      id: `trucking-${key}`,
-      invoice,
-      reference: invoice || primary.reference,
-      secondary,
-      status: warningStatus?.status ?? primary.status,
-    };
-  });
-
-  return [...ungrouped, ...consolidated];
-}
-
 async function postStatus(item: ScheduleItem, status: string) {
   const payload = {
     kind: item.direction,
@@ -1870,7 +1867,9 @@ async function postStatus(item: ScheduleItem, status: string) {
   };
 
   const parseConfirmation = async (response: Response) => {
-    const result = await response.json().catch(() => null);
+    const result = (await response.json().catch(() => null)) as
+      | { ok?: boolean; error?: string; status?: string }
+      | null;
     if (!response.ok || result?.ok === false) {
       const error = new Error(result?.error || `Status update failed (${response.status}).`);
       (error as Error & { status?: number }).status = response.status;
@@ -2261,6 +2260,7 @@ export default function Home() {
   const [inboundInventory, setInboundInventory] = useState<InventoryItem[]>([]);
   const [warehouseStock, setWarehouseStock] = useState<InventoryItem[]>([]);
   const [selectedInventory, setSelectedInventory] = useState<InventoryItem | null>(null);
+  const [connection, setConnection] = useState<ConnectionState | null>(null);
   const loadInFlight = useRef(false);
   const lastRefreshAt = useRef(0);
 
@@ -2282,20 +2282,24 @@ export default function Home() {
       const {
         imports,
         outbound,
+        outboundMeta,
         nationalOutbound,
         salesOutbound,
         liveKpis,
         inventoryDashboardTable,
         skwInboundTable,
         skwStockTable,
+        connection: nextConnection,
       } = await fetchOperationalSnapshot();
-      setItems(consolidateTruckingItems([
+      // Each source row remains its own operational move. Do not infer or merge
+      // loads merely because customer names and dates happen to match.
+      setItems([
         ...pendingImportItems(imports),
         ...inboundParcelItems(imports),
-        ...outboundItems(outbound),
+        ...outboundItems(outbound, outboundMeta),
         ...nationalOutboundItems(nationalOutbound),
         ...salesOutboundItems(salesOutbound),
-      ]));
+      ]);
       setKpis(liveKpis);
       const dashboardInventory = dashboardInventoryItems(inventoryDashboardTable);
       setInboundInventory(uniqueInventoryItems([
@@ -2306,6 +2310,7 @@ export default function Home() {
         ...dashboardInventory.inStock,
         ...skwStockItems(skwStockTable),
       ], false));
+      setConnection(nextConnection);
       const refreshedAt = new Date();
       lastRefreshAt.current = refreshedAt.getTime();
       setUpdatedAt(refreshedAt);
@@ -2540,15 +2545,38 @@ export default function Home() {
         </div>
         <div className="sync-strip" role="status" aria-live="polite">
           <span>
-            <b className={error ? "sync-dot error" : loading ? "sync-dot loading" : "sync-dot"} />
-            {error ? "Workbook connection needs attention" : loading ? "Syncing live records…" : "3 live workbooks connected"}
+            <b className={error ? "sync-dot error" : loading ? "sync-dot loading" : connection?.mode !== "worker" || connection?.degradedSources ? "sync-dot warning" : "sync-dot"} />
+            {error
+              ? "Workbook connection needs attention"
+              : loading
+                ? "Syncing live records…"
+                : connection?.mode === "sheets"
+                  ? "Direct Sheets fallback · Worker reconnecting"
+                  : connection?.mode === "stale"
+                    ? "Last good snapshot · live sources reconnecting"
+                    : connection?.degradedSources
+                      ? `${connection.degradedSources} optional source${connection.degradedSources === 1 ? "" : "s"} unavailable`
+                      : connection?.storage === "d1"
+                        ? "D1 snapshot · Sheets fallback ready"
+                        : "Worker snapshot · 3 live workbooks connected"}
           </span>
           <span className="mono">
             AUTO SYNC 30 MIN · LAST SYNC {updatedAt ? updatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "America/Los_Angeles" }) : "—"}
             {" · "}NEXT CHECK {nextRefreshAt ? nextRefreshAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "America/Los_Angeles" }) : "—"}
+            {connection?.version ? ` · ${connection.version}` : ""}
           </span>
         </div>
       </header>
+
+      {!error && connection && connection.mode !== "worker" && (
+        <div className="alert warning" role="status">
+          <strong>{connection.mode === "stale" ? "Continuity mode." : "Fallback mode."}</strong>{" "}
+          {connection.mode === "stale"
+            ? "The last verified snapshot is still available while live workbook sources recover."
+            : "The dashboard is reading Google Sheets directly; status writes still require the Worker."}
+          {connection.detail ? ` ${connection.detail}` : ""}
+        </div>
+      )}
 
       {error && (
         <div className="alert" role="alert">
@@ -2571,7 +2599,7 @@ export default function Home() {
         <article>
           <span>DUE TODAY</span>
           <strong>{counts.dueToday}</strong>
-          <small>combined moves</small>
+          <small>tracked moves</small>
         </article>
         <article className={counts.exceptions ? "metric-alert" : ""}>
           <span>EXCEPTIONS</span>
@@ -2617,7 +2645,7 @@ export default function Home() {
           <article className="kpi-card kpi-carrier">
             <span>TOP 3 CARRIERS · YTD</span>
             <div className="carrier-table-head" aria-hidden="true">
-              <small>Carrier</small><small>Earnings</small><small>Shipments</small>
+              <small>Carrier</small><small>Freight Spend</small><small>Shipments</small>
             </div>
             <ol className="carrier-ranking">
               {kpis.topCarriers.map((carrier) => (
@@ -2638,7 +2666,7 @@ export default function Home() {
           <article className="kpi-card kpi-average">
             <span>AVG TRUCKING COST · MTD / YTD</span>
             <div className="average-head" aria-hidden="true"><small>Lane</small><small>MTD</small><small>YTD</small></div>
-            <div><small>LOCAL ≤50 MI</small><strong>{money(kpis.avgLocalMtd)}</strong><strong>{money(kpis.avgLocal)}</strong></div>
+            <div><small>LOCAL / REGIONAL HEURISTIC</small><strong>{money(kpis.avgLocalMtd)}</strong><strong>{money(kpis.avgLocal)}</strong></div>
             <div><small>CALIFORNIA</small><strong>{money(kpis.avgCaliforniaMtd)}</strong><strong>{money(kpis.avgCalifornia)}</strong></div>
             <div><small>OUT OF STATE</small><strong>{money(kpis.avgOutOfStateMtd)}</strong><strong>{money(kpis.avgOutOfState)}</strong></div>
           </article>
@@ -2650,9 +2678,9 @@ export default function Home() {
           orders. WMS wholesale sales use Date (column A) and numeric INVOICE AMOUNT (column G);
           text entries such as “FREE SAMPLE,” “FOC,” “Sample,” and operational notes are excluded.
           MTD is the current month through today; YTD begins January 1, 2026. Trucking averages
-          exclude transfers and unclassified destinations; local is within 50 miles of Buena Park.
+          exclude transfers and unclassified destinations; local / regional uses a destination city/ZIP heuristic for the Southern California operating area and is not a measured mileage radius.
           The NJ transfer card includes only TRANSFERS rows whose TO field is NJ or New Jersey.
-          Carrier earnings use the same freight Invoice-first, Rate-fallback cost, and shipment share
+          Carrier freight spend uses the same freight Invoice-first, Rate-fallback cost, and shipment share
           is each carrier’s moves divided by all YTD moves with a named carrier.{" "}
           <a href={NATIONAL_SHEET_URL} target="_blank" rel="noreferrer">
             Open Nationals source

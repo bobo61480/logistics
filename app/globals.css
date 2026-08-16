@@ -116,7 +116,7 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
 }
 
 .manifest-actions { display: grid; gap: 7px; min-width: 210px; }
-.source-buttons { display: grid; grid-template-columns: repeat(4, 1fr); }
+.source-buttons { display: grid; grid-template-columns: repeat(3, 1fr); }
 .source-buttons .button {
   min-height: 38px;
   padding-inline: 10px;
@@ -150,6 +150,7 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
 .sync-dot { width: 7px; height: 7px; border-radius: 50%; background: #66d19e; box-shadow: 0 0 0 4px rgba(102, 209, 158, .12); }
 .sync-dot.loading { background: #f2b94b; }
 .sync-dot.error { background: #f0705f; }
+.sync-dot.warning { background: #f2b94b; box-shadow: 0 0 0 4px rgba(242, 185, 75, .14); }
 .mono { font-family: "IBM Plex Mono", monospace; }
 
 .alert {
@@ -162,9 +163,15 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
   line-height: 1.5;
 }
 
+.alert.warning {
+  border-color: #d6a84f;
+  background: #fff8e7;
+  color: #694f13;
+}
+
 .metrics {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 7px;
   margin-top: 8px;
 }
@@ -1109,6 +1116,23 @@ footer strong { margin-right: 5px; padding: 3px 6px; background: var(--ink); col
   .parcel-grid { grid-template-columns: 1fr; }
   footer { flex-direction: column; }
 }
+
+.fulfillment-method-filter-wrap { position: relative; }
+.fulfillment-method-filter-wrap .methodPill { cursor: pointer; font-family: inherit; }
+.fulfillment-method-menu {
+  position: absolute; z-index: 30; top: calc(100% + 7px); left: 0;
+  display: flex; flex-wrap: wrap; gap: 6px; width: min(360px, 80vw); padding: 10px;
+  border: 1px solid #2a3555; border-radius: 10px; background: #131b30;
+  box-shadow: 0 16px 40px rgb(0 0 0 / 45%);
+}
+.fulfillment-method-menu button {
+  display: flex; align-items: center; gap: 7px; cursor: pointer;
+  border: 1px solid #2a3555; border-radius: 999px; background: #0d1220; color: #aab3cc;
+  padding: 6px 9px; font: 800 10px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.fulfillment-method-menu button b { color: #edf1f9; }
+.fulfillment-method-menu button.active { border-color: #10d97e; background: rgb(16 217 126 / 13%); color: #10d97e; }
+.fulfillment-finished-row { opacity: .48; filter: grayscale(.55); }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition: none !important; }

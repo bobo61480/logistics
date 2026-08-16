@@ -57,3 +57,20 @@ jobs:
         run: |
           set -euo pipefail
           clasp deployments | grep -F "$WRITE_ENDPOINT_DEPLOYMENT_ID"
+
+      - name: Verify anonymous snapshot gateway
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="https://script.google.com/macros/s/$WRITE_ENDPOINT_DEPLOYMENT_ID/exec"
+          for attempt in 1 2 3; do
+            if curl -fsSL --max-time 120 "$endpoint?action=snapshot&_=$(date +%s)" -o /tmp/apps-script-snapshot.json \
+              && node -e 'const fs=require("fs");const payload=JSON.parse(fs.readFileSync("/tmp/apps-script-snapshot.json","utf8"));if(payload.ok!==true||!Array.isArray(payload.sources?.imports)||!Array.isArray(payload.sources?.trucking))process.exit(1);console.log(`Apps Script snapshot ${payload.generatedAt}; imports=${payload.sources.imports.length}; trucking=${payload.sources.trucking.length}`);'; then
+              exit 0
+            fi
+            echo "Apps Script snapshot verification attempt $attempt failed."
+            test -f /tmp/apps-script-snapshot.json && head -c 500 /tmp/apps-script-snapshot.json || true
+            sleep 10
+          done
+          echo "::error::Apps Script deployment is not an anonymous, healthy snapshot gateway."
+          exit 1

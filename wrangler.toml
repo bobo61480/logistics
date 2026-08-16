@@ -1,6 +1,26 @@
 name = "stylekorean-logistics-planner"
-compatibility_date = "2026-08-10"
+main = "worker/index.ts"
+compatibility_date = "2026-08-12"
+compatibility_flags = ["nodejs_compat"]
 workers_dev = false
+
+[[routes]]
+pattern = "stylekorean.dpdns.org/*"
+zone_id = "5d128576939145a0274370efd693dafe"
+
+[vars]
+APPS_SCRIPT_WRITE_URL = "https://script.google.com/macros/s/AKfycbz770kmpwqMTA-h-lzeLARgVnDh_VDjh-70OOKk_yE-iXJTmzAsVXUtln17QTOURO1R/exec"
+
+[[ratelimits]]
+name = "STATUS_WRITE_RATE_LIMITER"
+namespace_id = "2026081301"
+simple = { limit = 30, period = 60 }
 
 [assets]
 directory = "./out"
+binding = "ASSETS"
+run_worker_first = ["/api/*"]
+
+[observability]
+enabled = true
+head_sampling_rate = 0.1
