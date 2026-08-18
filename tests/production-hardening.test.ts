@@ -21,12 +21,17 @@ describe("production hardening", () => {
     expect(workflow).toContain("worker-v8-public-guardrails");
     expect(workflow).toContain("d1 migrations apply");
     expect(workflow).toContain('binding = "DB"');
-    expect(workflow).toContain("wrangler versions upload");
-    expect(workflow).toContain("wrangler versions deploy");
-    expect(workflow).toContain("wrangler triggers deploy");
-    expect(workflow).toContain('release_tag="release-${GITHUB_SHA}-attempt-${GITHUB_RUN_ATTEMPT}"');
-    expect(workflow).toContain("The version deployment config still contains a route block");
-    expect(workflow).not.toContain("wrangler deploy --config .wrangler.production.toml");
+    // The versions-based release flow was replaced by a canonical
+    // `wrangler deploy` (see "Restore Cloudflare production route during
+    // deploy"): a version-only deployment cannot recover a detached zone
+    // route, so the deploy validates and restores the route, assets, D1
+    // binding, and Worker code together — and files a GitHub issue when
+    // route recovery fails.
+    expect(workflow).toContain("wrangler deploy --config .wrangler.production.toml --keep-vars");
+    expect(workflow).not.toContain("wrangler versions upload");
+    expect(workflow).toContain("A version-only deployment cannot recover a detached zone route.");
+    expect(workflow).toContain("Production route recovery failed");
+    expect(workflow).toContain("gh issue create");
     expect(workflow).toContain("EXPECTED_DATABASE_CONFIGURED");
     expect(workflow).toContain("D1 permission is unavailable");
     expect(workflow).toContain("Account > D1 > Edit");
