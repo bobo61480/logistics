@@ -258,6 +258,7 @@ function processLogisticsMessageV2_(message) {
     var upsert = kind === "outbound" ? upsertOutboundEmailV2_(record, false) : upsertInboundEmailV2_(record, false);
     if (upsert.matched) {
       result[upsert.action] = (result[upsert.action] || 0) + 1;
+      logGmailIngestionCommit_(kind, upsert.action, upsert.row, record, meta, documentFolderUrl);
       return;
     }
     var validation = validateRecord_(record, kind);
@@ -267,14 +268,42 @@ function processLogisticsMessageV2_(message) {
       return;
     }
     var inserted = kind === "outbound" ? upsertOutboundEmailV2_(record, true) : upsertInboundEmailV2_(record, true);
-    if (inserted.action === "inserted") result.inserted++;
-    else if (inserted.matched) result[inserted.action]++;
+    if (inserted.action === "inserted") {
+      result.inserted++;
+      logGmailIngestionCommit_(kind, "inserted", inserted.row, record, meta, documentFolderUrl);
+    }
+    else if (inserted.matched) {
+      result[inserted.action]++;
+      logGmailIngestionCommit_(kind, inserted.action, inserted.row, record, meta, documentFolderUrl);
+    }
     else {
       addPendingRow_({ kind: kind, issues: ["Validated record could not be matched or safely inserted."], record: record, meta: meta, driveUrl: record._driveFolder || documentFolderUrl });
       result.pending++;
     }
   });
   return result;
+}
+
+/**
+ * Logs a committed (matched/updated/inserted) email-ingestion event to the
+ * existing PIPELINE LOG sheet, so the dashboard's Gmail Ingestion card can
+ * show which shipment each email produced. Never throws — logPipeline_
+ * already swallows its own errors, consistent with the rest of this file.
+ */
+function logGmailIngestionCommit_(kind, action, row, record, meta, driveUrl) {
+  var shipmentId = record.shipmentNo || record.container || record.invoice || record.pro || record.mbl || record.hbl || "";
+  logPipeline_("INGEST COMMIT", meta.subject, JSON.stringify({
+    kind: kind,
+    action: action,
+    row: row,
+    shipmentId: shipmentId,
+    customer: record.customer || "",
+    carrier: record.carrier || "",
+    eta: record.eta || record.shipDate || "",
+    sourceEmail: meta.permalink,
+    driveUrl: driveUrl || record._driveFolder || "",
+    sender: meta.from || ""
+  }));
 }
 
 function extractEmailContextV2_(subject, body) {
