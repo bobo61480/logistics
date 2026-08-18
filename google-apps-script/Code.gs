@@ -65,7 +65,11 @@ function doGet(e) {
         skwStockTable: readSnapshotRows_(master, "SKW_Stock", null, 1, 2500, 10),
         // Optional: Validation.gs creates this tab lazily, so its absence must
         // not fail the whole snapshot. Feeds the dashboard's Gmail Ingestion card.
-        pendingVerification: readOptionalSnapshotRows_(master, "PENDING VERIFICATION", 1, 2000, 15)
+        // Sanitized to columns A..N — column O (Raw JSON) carries raw extraction
+        // text and must not be exposed through this anonymously reachable
+        // endpoint — and read from the tail, because the tab is an append-only
+        // audit trail whose newest rows matter most.
+        pendingVerification: readPendingVerificationTail_(master, "PENDING VERIFICATION", 2000, 14)
       }
     });
   } catch (error) {
@@ -73,9 +77,18 @@ function doGet(e) {
   }
 }
 
-function readOptionalSnapshotRows_(spreadsheet, sheetName, startRow, maxRows, maxColumns) {
+function readPendingVerificationTail_(spreadsheet, sheetName, maxRows, maxColumns) {
   try {
-    return readSnapshotRows_(spreadsheet, sheetName, null, startRow, maxRows, maxColumns);
+    const sheet = spreadsheet.getSheetByName(sheetName);
+    if (!sheet) return null;
+    const lastRow = sheet.getLastRow();
+    const lastColumn = Math.min(sheet.getLastColumn(), Math.max(1, Number(maxColumns) || 1));
+    if (lastRow < 1 || lastColumn < 1) return null;
+    const header = sheet.getRange(1, 1, 1, lastColumn).getDisplayValues();
+    if (lastRow === 1) return header;
+    const firstDataRow = Math.max(2, lastRow - Math.max(1, Number(maxRows) || 1) + 1);
+    const rows = sheet.getRange(firstDataRow, 1, lastRow - firstDataRow + 1, lastColumn).getDisplayValues();
+    return header.concat(rows);
   } catch (error) {
     return null;
   }

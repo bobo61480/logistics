@@ -171,6 +171,20 @@ export function selectOutboundSource(
   };
 }
 
+// PENDING VERIFICATION read: columns A..N only — column O holds Raw JSON
+// (up to 5k chars of raw extraction text: email subjects, message ids,
+// document excerpts) which must never leave the backend, and the feed only
+// uses the display columns. The tab is an append-only audit trail, so order
+// by Timestamp (column A) descending and take the newest 2,000 rows — a
+// plain A1:N2000 range would permanently exclude everything appended after
+// row 2,000 before the newest-first sort could see it.
+const PENDING_VERIFICATION_QUERY = {
+  sheet: "PENDING VERIFICATION",
+  range: "A:N",
+  headers: 1,
+  tq: "select * order by A desc limit 2000",
+} as const;
+
 async function timedFetch(name: string, url: URL, maxBytes = MAX_SOURCE_BYTES, timeoutMs = 20_000): Promise<SourceResult<string>> {
   const started = Date.now();
   const controller = new AbortController();
@@ -195,12 +209,13 @@ export async function fetchCsvSource(name: string, spreadsheetId: string, gid: n
   catch (error) { return { data: null, health: { ...result.health, ok: false, error: String(error) } }; }
 }
 
-export async function fetchGvizSource(name: string, spreadsheetId: string, options: { gid?: number; sheet?: string; range: string; headers?: number }): Promise<SourceResult<GvizTable>> {
+export async function fetchGvizSource(name: string, spreadsheetId: string, options: { gid?: number; sheet?: string; range?: string; headers?: number; tq?: string }): Promise<SourceResult<GvizTable>> {
   const url = new URL(`https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq`);
   url.searchParams.set("tqx", "out:json");
   if (options.gid !== undefined) url.searchParams.set("gid", String(options.gid));
   if (options.sheet) url.searchParams.set("sheet", options.sheet);
-  url.searchParams.set("range", options.range);
+  if (options.range) url.searchParams.set("range", options.range);
+  if (options.tq) url.searchParams.set("tq", options.tq);
   url.searchParams.set("headers", String(options.headers ?? 1));
   url.searchParams.set("_", String(Date.now()));
   const result = await timedFetch(name, url);
@@ -281,7 +296,7 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
             outboundRows: effectiveOutbound.rows,
             pendingVerificationTable:
               rowsToGvizTable(raw.pendingVerification) ??
-              (await fetchGvizSource("Pending Verification", LOGISTICS_MASTER_ID, { sheet: "PENDING VERIFICATION", range: "A1:O2000", headers: 1 })).data,
+              (await fetchGvizSource("Pending Verification", LOGISTICS_MASTER_ID, PENDING_VERIFICATION_QUERY)).data,
           }),
         },
         kpiRows: {
@@ -304,7 +319,7 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
     fetchGvizSource("Inventory", LOGISTICS_MASTER_ID, { sheet: "INVENTORY", range: "A1:O6500", headers: 1 }),
     fetchGvizSource("SKW Inbound", LOGISTICS_MASTER_ID, { sheet: "SKW_Inbound", range: "A1:R2500", headers: 1 }),
     fetchGvizSource("SKW Stock", LOGISTICS_MASTER_ID, { sheet: "SKW_Stock", range: "A1:J2500", headers: 1 }),
-    fetchGvizSource("Pending Verification", LOGISTICS_MASTER_ID, { sheet: "PENDING VERIFICATION", range: "A1:O2000", headers: 1 }),
+    fetchGvizSource("Pending Verification", LOGISTICS_MASTER_ID, PENDING_VERIFICATION_QUERY),
   ]);
 
   const effectiveOutbound = selectOutboundSource(outbound.data, trucking.data);

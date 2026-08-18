@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 type IngestionStatus = "committed" | "needsReview" | "approved" | "rejected";
 
-interface GmailIngestionEvent {
+export interface GmailIngestionEvent {
   status: IngestionStatus;
   kind: "inbound" | "outbound" | "";
   shipmentId: string;
@@ -36,45 +36,23 @@ const STATUS_LABEL: Record<IngestionStatus, string> = {
 };
 
 /**
- * Reads `sources.gmailIngestion` off the existing /api/logistics/snapshot
- * response — see worker/sources.patch.md for the backend side. No separate
- * API call, no new fetch cadence: this rides the dashboard's normal refresh.
+ * Renders the `sources.gmailIngestion` feed from the dashboard's own
+ * /api/logistics/snapshot load. The page passes the feed down on every
+ * 30-minute refresh, so this card issues no fetches of its own — no duplicate
+ * snapshot requests, and it can never disagree with the rest of the page.
+ * `events` is null while loading or when the Worker snapshot is unavailable
+ * (e.g. the dashboard fell back to direct Sheets, which carries no feed).
  */
-export function GmailIngestionCard({ snapshotUrl = "/api/logistics/snapshot" }: { snapshotUrl?: string }) {
-  const [events, setEvents] = useState<GmailIngestionEvent[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+export function GmailIngestionCard({
+  events,
+  loading = false,
+}: {
+  events: GmailIngestionEvent[] | null;
+  loading?: boolean;
+}) {
   const [filter, setFilter] = useState<"all" | IngestionStatus>("all");
 
-  useEffect(() => {
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const res = await fetch(snapshotUrl, { cache: "no-store" });
-        const payload = (await res.json().catch(() => null)) as
-          | { ok?: boolean; error?: string; sources?: { gmailIngestion?: GmailIngestionEvent[] } }
-          | null;
-        if (cancelled) return;
-        // A Worker error payload (e.g. a 503) parses as JSON too — treat it as
-        // "feed unavailable", not as an empty feed.
-        if (!res.ok || payload?.ok === false || !payload?.sources) {
-          throw new Error(payload?.error || `Ingestion feed unavailable (${res.status}).`);
-        }
-        setEvents(payload.sources.gmailIngestion ?? []);
-        setError(null);
-      } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
-      }
-    };
-    void load();
-    // Ride the dashboard's cadence: the page refreshes every 30 minutes, and
-    // this card refetches the same snapshot on the same schedule.
-    const timer = window.setInterval(() => void load(), 30 * 60 * 1000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [snapshotUrl]);
-
+  const unavailable = !loading && events === null;
   const filtered = (events ?? []).filter((e) => filter === "all" || e.status === filter);
   const counts = (events ?? []).reduce<Record<string, number>>((acc, e) => {
     acc[e.status] = (acc[e.status] ?? 0) + 1;
@@ -109,9 +87,14 @@ export function GmailIngestionCard({ snapshotUrl = "/api/logistics/snapshot" }: 
       </header>
 
       <div className="max-h-96 overflow-y-auto">
-        {error && <p className="px-5 py-4 text-sm text-red-600">Could not load ingestion feed: {error}</p>}
-        {!error && events === null && <p className="px-5 py-4 text-sm text-neutral-500">Loading…</p>}
-        {!error && events !== null && filtered.length === 0 && (
+        {unavailable && (
+          <p className="px-5 py-4 text-sm text-red-600">
+            Ingestion feed unavailable — the Worker snapshot is offline and the dashboard is running
+            on its direct-Sheets fallback.
+          </p>
+        )}
+        {loading && events === null && <p className="px-5 py-4 text-sm text-neutral-500">Loading…</p>}
+        {!unavailable && events !== null && filtered.length === 0 && (
           <p className="px-5 py-6 text-sm text-neutral-500">Nothing in this category right now.</p>
         )}
         <ul className="divide-y divide-neutral-100">
