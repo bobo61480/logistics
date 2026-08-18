@@ -47,18 +47,31 @@ export function GmailIngestionCard({ snapshotUrl = "/api/logistics/snapshot" }: 
 
   useEffect(() => {
     let cancelled = false;
-    fetch(snapshotUrl)
-      .then((res) => res.json() as Promise<{ sources?: { gmailIngestion?: GmailIngestionEvent[] } }>)
-      .then((payload) => {
+    const load = async () => {
+      try {
+        const res = await fetch(snapshotUrl, { cache: "no-store" });
+        const payload = (await res.json().catch(() => null)) as
+          | { ok?: boolean; error?: string; sources?: { gmailIngestion?: GmailIngestionEvent[] } }
+          | null;
         if (cancelled) return;
-        const list: GmailIngestionEvent[] = payload?.sources?.gmailIngestion ?? [];
-        setEvents(list);
-      })
-      .catch((err) => {
+        // A Worker error payload (e.g. a 503) parses as JSON too — treat it as
+        // "feed unavailable", not as an empty feed.
+        if (!res.ok || payload?.ok === false || !payload?.sources) {
+          throw new Error(payload?.error || `Ingestion feed unavailable (${res.status}).`);
+        }
+        setEvents(payload.sources.gmailIngestion ?? []);
+        setError(null);
+      } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
-      });
+      }
+    };
+    void load();
+    // Ride the dashboard's cadence: the page refreshes every 30 minutes, and
+    // this card refetches the same snapshot on the same schedule.
+    const timer = window.setInterval(() => void load(), 30 * 60 * 1000);
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
     };
   }, [snapshotUrl]);
 

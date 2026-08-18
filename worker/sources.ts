@@ -273,13 +273,15 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
           inventoryDashboardTable: inventoryTable,
           skwInboundTable: inboundTable,
           skwStockTable: stockTable,
-          // The Apps Script snapshot action doesn't return the PENDING
-          // VERIFICATION tab yet; deriveGmailIngestion degrades to the
-          // committed-only feed until it does.
+          // Code.gs now returns pendingVerification in the snapshot; until the
+          // deployed Apps Script catches up, fall back to reading the tab
+          // directly so review events never silently vanish from the feed.
           gmailIngestion: deriveGmailIngestion({
             importsRows: raw.imports ?? null,
             outboundRows: effectiveOutbound.rows,
-            pendingVerificationTable: rowsToGvizTable(raw.pendingVerification),
+            pendingVerificationTable:
+              rowsToGvizTable(raw.pendingVerification) ??
+              (await fetchGvizSource("Pending Verification", LOGISTICS_MASTER_ID, { sheet: "PENDING VERIFICATION", range: "A1:O2000", headers: 1 })).data,
           }),
         },
         kpiRows: {
@@ -369,7 +371,17 @@ function firstNonEmpty(...values: Array<string | undefined>) {
   return values.find((value) => value && value.trim())?.trim() ?? "";
 }
 
-/** Scans a CSV-shaped sheet (header row first) for the GmailPipeline auto-commit tag. */
+/**
+ * Scans a CSV-shaped sheet (header row first) for the GmailPipeline auto-commit tag.
+ *
+ * Note on production coverage: emailNoteV2_ was deliberately stubbed to keep
+ * automation metadata out of the operational NOTES columns ("Keep automation
+ * metadata out of operational NOTES"), so live sheets currently carry no
+ * [auto: …] markers and this scan yields nothing there. The production feed is
+ * driven by PENDING VERIFICATION (whose audit trail includes COMMITTED rows);
+ * this scan stays as forward-compatible support for any pipeline or operator
+ * that does record a Gmail permalink in a notes column.
+ */
 function committedEventsFromRows(rows: string[][] | null, kind: "inbound" | "outbound"): GmailIngestionEvent[] {
   if (!rows || rows.length < 2) return [];
   const header = rows[0].map((label) => String(label ?? "").trim().toUpperCase());
@@ -456,8 +468,16 @@ export function deriveGmailIngestion(input: {
     ...committedEventsFromRows(input.importsRows, "inbound"),
     ...committedEventsFromRows(input.outboundRows, "outbound"),
   ];
-  const pending = pendingEventsFromTable(input.pendingVerificationTable);
-  // Most recent first; PENDING VERIFICATION rows already carry a real timestamp,
-  // committed rows don't (Sheets doesn't store one) so they sort after pending.
+  // Validation.gs appends PENDING VERIFICATION rows chronologically and keeps
+  // approved/rejected rows as an audit trail, so newest entries live at the
+  // bottom. Sort newest-first (timestamped rows by timestamp, the rest by
+  // reverse sheet order) BEFORE applying the cap, or new actionable review
+  // items would fall off the feed once the tab exceeds 200 rows.
+  const pending = pendingEventsFromTable(input.pendingVerificationTable)
+    .map((event, index) => ({ event, sortKey: Date.parse(event.timestamp) || index }))
+    .sort((a, b) => b.sortKey - a.sortKey)
+    .map(({ event }) => event);
+  // Committed rows carry no timestamp (Sheets doesn't store one) so they sort
+  // after pending.
   return [...pending, ...committed].slice(0, 200);
 }

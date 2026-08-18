@@ -2804,7 +2804,9 @@ export default function Home() {
         />
       </div>
 
-      <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2" aria-label="Email ingestion and document archive">
+      {/* .ingestion-archive-row keeps this row ordered above the footer on the
+          flex-reordered /light, /light-full, and /fulfillment-style variants. */}
+      <div className="ingestion-archive-row mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2" aria-label="Email ingestion and document archive">
         <GmailIngestionCard snapshotUrl={DATA_ENDPOINT} />
         <DriveArchiveCard />
       </div>

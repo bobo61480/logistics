@@ -62,11 +62,22 @@ function doGet(e) {
         salesOutbound: readSnapshotRows_(wms, null, 0, 2, 4199, 32),
         inventoryDashboardTable: readSnapshotRows_(master, "INVENTORY", null, 1, 6500, 15),
         skwInboundTable: readSnapshotRows_(master, "SKW_Inbound", null, 1, 2500, 18),
-        skwStockTable: readSnapshotRows_(master, "SKW_Stock", null, 1, 2500, 10)
+        skwStockTable: readSnapshotRows_(master, "SKW_Stock", null, 1, 2500, 10),
+        // Optional: Validation.gs creates this tab lazily, so its absence must
+        // not fail the whole snapshot. Feeds the dashboard's Gmail Ingestion card.
+        pendingVerification: readOptionalSnapshotRows_(master, "PENDING VERIFICATION", 1, 2000, 15)
       }
     });
   } catch (error) {
     return json_({ ok: false, error: String(error.message || error) });
+  }
+}
+
+function readOptionalSnapshotRows_(spreadsheet, sheetName, startRow, maxRows, maxColumns) {
+  try {
+    return readSnapshotRows_(spreadsheet, sheetName, null, startRow, maxRows, maxColumns);
+  } catch (error) {
+    return null;
   }
 }
 

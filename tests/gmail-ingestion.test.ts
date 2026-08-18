@@ -77,8 +77,11 @@ describe("deriveGmailIngestion", () => {
     ).toEqual([]);
   });
 
-  it("maps PENDING VERIFICATION rows with their review status, links, and timestamp", () => {
+  it("maps PENDING VERIFICATION rows with their review status, links, and timestamp — newest first", () => {
+    // Validation.gs appends rows chronologically, so the sheet is oldest-first.
     const table = gvizTable(PENDING_HEADER, [
+      ["2026-08-15 10:00", "outbound", "REJECTED", "Customer is missing.", "", "", "", "", "", "", "", "", "", "", "{}"],
+      ["2026-08-16 14:00", "outbound", "APPROVED", "", "ULTA", "IN004", "", "", "8/22/2026", "", "", "", "", "", "{}"],
       [
         "2026-08-17 09:15",
         "inbound",
@@ -96,8 +99,6 @@ describe("deriveGmailIngestion", () => {
         "https://drive.google.com/file/d/xyz",
         "{}",
       ],
-      ["2026-08-16 14:00", "outbound", "APPROVED", "", "ULTA", "IN004", "", "", "8/22/2026", "", "", "", "", "", "{}"],
-      ["2026-08-15 10:00", "outbound", "REJECTED", "Customer is missing.", "", "", "", "", "", "", "", "", "", "", "{}"],
     ]);
 
     const events = deriveGmailIngestion({
@@ -133,11 +134,13 @@ describe("deriveGmailIngestion", () => {
     expect(committedOnly.map((event) => event.status)).toEqual(["committed"]);
   });
 
-  it("caps the feed at 200 events", () => {
+  it("caps the feed at 200 events, keeping the NEWEST rows when the audit trail grows", () => {
+    // 260 appended rows, one minute apart — sheet order is oldest-first.
+    const base = Date.UTC(2026, 7, 1);
     const table = gvizTable(
       PENDING_HEADER,
       Array.from({ length: 260 }, (_, index) => [
-        `2026-08-${(index % 28) + 1}`,
+        new Date(base + index * 60_000).toISOString(),
         "inbound",
         "NEEDS REVIEW",
         "",
@@ -148,5 +151,17 @@ describe("deriveGmailIngestion", () => {
     );
     const events = deriveGmailIngestion({ importsRows: null, outboundRows: null, pendingVerificationTable: table });
     expect(events).toHaveLength(200);
+    // Newest appended row survives the cap; the oldest 60 fall off instead.
+    expect(events[0].invoice).toBe("IN259");
+    expect(events[199].invoice).toBe("IN60");
+  });
+
+  it("orders untimestamped pending rows newest-appended-first", () => {
+    const table = gvizTable(PENDING_HEADER, [
+      ["", "inbound", "NEEDS REVIEW", "", "", "IN-OLD", "", "", "", "", "", "", "", "", "{}"],
+      ["", "inbound", "NEEDS REVIEW", "", "", "IN-NEW", "", "", "", "", "", "", "", "", "{}"],
+    ]);
+    const events = deriveGmailIngestion({ importsRows: null, outboundRows: null, pendingVerificationTable: table });
+    expect(events.map((event) => event.invoice)).toEqual(["IN-NEW", "IN-OLD"]);
   });
 });

@@ -6,32 +6,28 @@ interface DriveLink {
   hint?: string;
 }
 
+// Canonical destinations from GmailPipeline.gs (GMAIL_PIPELINE config):
+// importShipmentsFolderId is where GmailPipelineV2 creates every inbound
+// attachment folder; warehouseDocumentsFolderId backs the live IMPORTS
+// document links.
 const DEFAULT_LINKS: DriveLink[] = [
+  {
+    label: "Import shipment documents",
+    url: "https://drive.google.com/drive/folders/1AhGI2qM2pGFXSb406OY6dsOaN8unlGDM",
+    hint: "Canonical archive — Gmail ingestion files every inbound attachment here",
+  },
+  {
+    label: "Warehouse documents",
+    url: "https://drive.google.com/drive/folders/1YBWV9lXAasRt7JolWxk199dPkGbx60M9",
+  },
   {
     label: "SK Logistics Email Archive",
     url: "https://drive.google.com/drive/search?q=SK%20Logistics%20Email%20Archive",
-    hint: "Root archive — auto-filed by year / month / category from Gmail ingestion",
-  },
-  {
-    label: "Shipping Documents",
-    url: "https://drive.google.com/drive/folders/15xPjToE2pAybzng1tohQYeBNct-D2I4h",
-  },
-  {
-    label: "Shipping Documents (alt.)",
-    url: "https://drive.google.com/drive/folders/1mB9cnkxZQw_hS-GL47-3ynyOp73NwZdj",
-  },
-  {
-    label: "Inbound folder",
-    url: "https://drive.google.com/drive/folders/1kCyvRL86_WVimP8sek4IhKgvCcqk00U1",
+    hint: "Legacy archive folders — auto-filed by year / month / category",
   },
 ];
 
-/**
- * Static quick-links into Drive. Swap DEFAULT_LINKS for whatever the
- * swkbp.dpdns.org version pointed at if these aren't the exact right folders —
- * this is a best-effort reconstruction from what's currently in Drive, not a
- * verified 1:1 copy of the old card.
- */
+/** Static quick-links into the pipeline's configured Drive destinations. */
 export function DriveArchiveCard({ links = DEFAULT_LINKS }: { links?: DriveLink[] }) {
   return (
     <section className="rounded-xl border border-neutral-200 bg-white shadow-sm">
