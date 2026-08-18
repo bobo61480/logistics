@@ -99,12 +99,23 @@ function readPendingVerificationTail_(spreadsheet, sheetName, maxRows, maxColumn
         if (String(statuses[index][0]).trim().toUpperCase() === "NEEDS REVIEW") straggler.push(index);
       }
       if (straggler.length) {
-        // One batched read of the pre-tail block — per-row getRange calls
-        // would add up to 200 Spreadsheet-service round trips to a snapshot
-        // the Worker aborts after 60 seconds.
-        const preTail = sheet.getRange(2, 1, firstDataRow - 2, lastColumn).getDisplayValues();
+        // Bounded batched recovery: merge nearby rows into ranged reads (a
+        // ≤50-row gap costs less than another Spreadsheet-service call) and
+        // cap the number of reads, so neither a review backlog nor a huge
+        // pre-tail audit can stall the snapshot the Worker aborts after 60s.
+        // Only open NEEDS REVIEW rows are recovered — resolved pre-tail
+        // transitions are historical audit, deliberately left to the sheet.
+        const runs = [];
         straggler.forEach(function (offset) {
-          rows.unshift(preTail[offset]);
+          const last = runs[runs.length - 1];
+          if (last && offset - last.end <= 50) last.end = offset;
+          else runs.push({ start: offset, end: offset });
+        });
+        runs.slice(0, 20).forEach(function (run) {
+          const block = sheet.getRange(run.start + 2, 1, run.end - run.start + 1, lastColumn).getDisplayValues();
+          block.forEach(function (row) {
+            if (String(row[2]).trim().toUpperCase() === "NEEDS REVIEW") rows.unshift(row);
+          });
         });
       }
     }
