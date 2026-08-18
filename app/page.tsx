@@ -984,6 +984,20 @@ async function fetchLiveKpis() {
   return (await computeLiveKpis()) as unknown as KpiSnapshot;
 }
 
+type GmailIngestionEvent = {
+  status: "committed" | "needsReview" | "approved" | "rejected";
+  kind: "inbound" | "outbound" | "";
+  shipmentId: string;
+  customer: string;
+  carrierOrVessel: string;
+  shipDateOrEta: string;
+  note: string;
+  issues: string;
+  sourceEmailUrl: string;
+  driveFileUrl: string;
+  timestamp: string;
+};
+
 type WorkerSnapshot = {
   ok: true;
   generatedAt?: string;
@@ -1001,6 +1015,7 @@ type WorkerSnapshot = {
     inventoryDashboardTable?: any;
     skwInboundTable?: any;
     skwStockTable?: any;
+    gmailIngestion?: GmailIngestionEvent[];
   };
   kpis?: KpiSnapshot | null;
 };
@@ -1097,6 +1112,7 @@ async function fetchOperationalSnapshot() {
       inventoryDashboardTable: sources.inventoryDashboardTable ?? null,
       skwInboundTable: sources.skwInboundTable ?? null,
       skwStockTable: sources.skwStockTable ?? null,
+      gmailIngestion: sources.gmailIngestion ?? [],
       connection: {
         mode: snapshot.stale ? "stale" as const : "worker" as const,
         storage: snapshot.storage,
@@ -1111,6 +1127,9 @@ async function fetchOperationalSnapshot() {
     console.warn("Worker snapshot unavailable; falling back to Google Sheets.", workerError);
     return {
       ...(await fetchSheetSnapshot()),
+      // Direct-Sheets fallback doesn't read PENDING VERIFICATION / PIPELINE LOG;
+      // the Gmail Ingestion card just shows empty until the Worker is back.
+      gmailIngestion: [] as GmailIngestionEvent[],
       connection: {
         mode: "sheets" as const,
         storage: "sheets" as const,
@@ -2246,6 +2265,88 @@ function ScheduleBoard({
   );
 }
 
+const GMAIL_STATUS_LABEL: Record<GmailIngestionEvent["status"], string> = {
+  committed: "Auto-committed",
+  needsReview: "Needs review",
+  approved: "Approved",
+  rejected: "Rejected",
+};
+
+function GmailIngestionCard({ events }: { events: GmailIngestionEvent[] }) {
+  const needsReview = events.filter((e) => e.status === "needsReview").length;
+  return (
+    <section className="gi-card" aria-label="Gmail ingestion">
+      <style>{`
+        .gi-card { border: 1px solid #2a2f3a; border-radius: 10px; padding: 16px 18px; background: #14161c; }
+        .gi-card h2 { margin: 0 0 2px; font-size: 15px; }
+        .gi-card .gi-sub { margin: 0 0 12px; font-size: 12px; opacity: 0.7; }
+        .gi-card .gi-count { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: #232838; margin-left: 8px; }
+        .gi-card ul { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow-y: auto; }
+        .gi-card li { padding: 8px 0; border-top: 1px solid #232838; font-size: 12px; }
+        .gi-card li:first-child { border-top: none; }
+        .gi-card .gi-row-top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+        .gi-card .gi-badge { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 6px; border-radius: 999px; background: #232838; }
+        .gi-card .gi-badge.committed { color: #7fd1ae; }
+        .gi-card .gi-badge.needsReview { color: #e8c468; }
+        .gi-card .gi-meta { opacity: 0.65; margin-top: 2px; }
+        .gi-card .gi-issues { color: #e8c468; margin-top: 2px; }
+        .gi-card a { color: #8ab4ff; text-decoration: none; margin-right: 10px; }
+        .gi-card .gi-empty { font-size: 12px; opacity: 0.6; padding: 8px 0; }
+      `}</style>
+      <h2>Gmail Ingestion{needsReview > 0 && <span className="gi-count">{needsReview} needs review</span>}</h2>
+      <p className="gi-sub">What the email pipeline extracted, and which shipment it landed on.</p>
+      {events.length === 0 && <p className="gi-empty">No ingestion activity in the current snapshot.</p>}
+      <ul>
+        {events.slice(0, 40).map((event, index) => (
+          <li key={index}>
+            <div className="gi-row-top">
+              <span>
+                <span className={`gi-badge ${event.status}`}>{GMAIL_STATUS_LABEL[event.status]}</span>{" "}
+                <strong>{event.shipmentId || event.customer || "Unidentified shipment"}</strong>
+              </span>
+              {event.timestamp && <span className="gi-meta">{event.timestamp}</span>}
+            </div>
+            <div className="gi-meta">
+              {[event.kind, event.customer, event.carrierOrVessel, event.shipDateOrEta].filter(Boolean).join(" · ")}
+            </div>
+            {event.issues && <div className="gi-issues">{event.issues}</div>}
+            <div>
+              {event.sourceEmailUrl && <a href={event.sourceEmailUrl} target="_blank" rel="noreferrer">Source email</a>}
+              {event.driveFileUrl && <a href={event.driveFileUrl} target="_blank" rel="noreferrer">Archived file</a>}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+const DRIVE_ARCHIVE_LINKS: Array<{ label: string; url: string; hint?: string }> = [
+  {
+    label: "SK Logistics Email Archive",
+    url: "https://drive.google.com/drive/search?q=SK%20Logistics%20Email%20Archive",
+    hint: "Root archive — auto-filed by year / month / category from Gmail ingestion",
+  },
+  { label: "LOGISTICS MASTER 2026 (sheet)", url: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit` },
+];
+
+function DriveArchiveCard() {
+  return (
+    <section className="gi-card" aria-label="Drive archive">
+      <h2>Drive Archive</h2>
+      <p className="gi-sub">Source documents and Gmail-archived attachments.</p>
+      <ul>
+        {DRIVE_ARCHIVE_LINKS.map((link) => (
+          <li key={link.url}>
+            <a href={link.url} target="_blank" rel="noreferrer">{link.label} ↗</a>
+            {link.hint && <div className="gi-meta">{link.hint}</div>}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export default function Home() {
   const [items, setItems] = useState<ScheduleItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -2261,6 +2362,7 @@ export default function Home() {
   const [warehouseStock, setWarehouseStock] = useState<InventoryItem[]>([]);
   const [selectedInventory, setSelectedInventory] = useState<InventoryItem | null>(null);
   const [connection, setConnection] = useState<ConnectionState | null>(null);
+  const [gmailIngestion, setGmailIngestion] = useState<GmailIngestionEvent[]>([]);
   const loadInFlight = useRef(false);
   const lastRefreshAt = useRef(0);
 
@@ -2289,6 +2391,7 @@ export default function Home() {
         inventoryDashboardTable,
         skwInboundTable,
         skwStockTable,
+        gmailIngestion: nextGmailIngestion,
         connection: nextConnection,
       } = await fetchOperationalSnapshot();
       // Each source row remains its own operational move. Do not infer or merge
@@ -2311,6 +2414,7 @@ export default function Home() {
         ...skwStockItems(skwStockTable),
       ], false));
       setConnection(nextConnection);
+      setGmailIngestion(nextGmailIngestion);
       const refreshedAt = new Date();
       lastRefreshAt.current = refreshedAt.getTime();
       setUpdatedAt(refreshedAt);
@@ -2800,6 +2904,11 @@ export default function Home() {
           savingId={savingId}
           onStatus={handleStatus}
         />
+      </div>
+
+      <div className="gi-grid" aria-label="Gmail ingestion and document archive" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16, marginTop: 16 }}>
+        <GmailIngestionCard events={gmailIngestion} />
+        <DriveArchiveCard />
       </div>
 
       <footer>
