@@ -6,6 +6,8 @@ import { INBOUND_INVOICE_LINKS } from "./inbound-invoice-links";
 import { packingListPallets } from "./inbound-pallets";
 import { computeLiveKpis } from "../lib/sales-kpis";
 import FulfillmentTkOrders from "./FulfillmentTkOrders";
+import { GmailIngestionCard } from "./gmail-ingestion-card";
+import { DriveArchiveCard } from "./drive-archive-card";
 
 const SHEET_ID =
   process.env.NEXT_PUBLIC_LOGISTICS_MASTER_SHEET_ID ??
@@ -2800,6 +2802,11 @@ export default function Home() {
           savingId={savingId}
           onStatus={handleStatus}
         />
+      </div>
+
+      <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2" aria-label="Email ingestion and document archive">
+        <GmailIngestionCard snapshotUrl={DATA_ENDPOINT} />
+        <DriveArchiveCard />
       </div>
 
       <footer>

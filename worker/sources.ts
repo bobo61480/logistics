@@ -37,6 +37,7 @@ type AppsScriptSnapshot = {
     inventoryDashboardTable?: string[][];
     skwInboundTable?: string[][];
     skwStockTable?: string[][];
+    pendingVerification?: string[][];
   };
 };
 
@@ -272,6 +273,14 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
           inventoryDashboardTable: inventoryTable,
           skwInboundTable: inboundTable,
           skwStockTable: stockTable,
+          // The Apps Script snapshot action doesn't return the PENDING
+          // VERIFICATION tab yet; deriveGmailIngestion degrades to the
+          // committed-only feed until it does.
+          gmailIngestion: deriveGmailIngestion({
+            importsRows: raw.imports ?? null,
+            outboundRows: effectiveOutbound.rows,
+            pendingVerificationTable: rowsToGvizTable(raw.pendingVerification),
+          }),
         },
         kpiRows: {
           nationalRows: raw.nationalOutbound ?? [],
@@ -283,7 +292,7 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
     }
   }
 
-  const [imports, outbound, trucking, transfers, nationalOutbound, salesOutbound, inventoryDashboardTable, skwInboundTable, skwStockTable] = await Promise.all([
+  const [imports, outbound, trucking, transfers, nationalOutbound, salesOutbound, inventoryDashboardTable, skwInboundTable, skwStockTable, pendingVerification] = await Promise.all([
     fetchCsvSource("IMPORTS", LOGISTICS_MASTER_ID, IMPORTS_GID),
     fetchCsvSource("Outbound Shipping Schedule", LOGISTICS_MASTER_ID, OUTBOUND_GID),
     fetchCsvSource("WH Trucking Request", LOGISTICS_MASTER_ID, TRUCKING_GID),
@@ -293,6 +302,7 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
     fetchGvizSource("Inventory", LOGISTICS_MASTER_ID, { sheet: "INVENTORY", range: "A1:O6500", headers: 1 }),
     fetchGvizSource("SKW Inbound", LOGISTICS_MASTER_ID, { sheet: "SKW_Inbound", range: "A1:R2500", headers: 1 }),
     fetchGvizSource("SKW Stock", LOGISTICS_MASTER_ID, { sheet: "SKW_Stock", range: "A1:J2500", headers: 1 }),
+    fetchGvizSource("Pending Verification", LOGISTICS_MASTER_ID, { sheet: "PENDING VERIFICATION", range: "A1:O2000", headers: 1 }),
   ]);
 
   const effectiveOutbound = selectOutboundSource(outbound.data, trucking.data);
@@ -305,7 +315,7 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
     : outbound.health;
 
   return {
-    sourceHealth: [imports, { health: outboundHealth }, trucking, transfers, nationalOutbound, salesOutbound, inventoryDashboardTable, skwInboundTable, skwStockTable].map((entry) => entry.health),
+    sourceHealth: [imports, { health: outboundHealth }, trucking, transfers, nationalOutbound, salesOutbound, inventoryDashboardTable, skwInboundTable, skwStockTable, pendingVerification].map((entry) => entry.health),
     sources: {
       imports: imports.data ? normalizeImportsParcelRows(imports.data) : null,
       outbound: effectiveOutbound.rows,
@@ -315,6 +325,11 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
       inventoryDashboardTable: inventoryDashboardTable.data,
       skwInboundTable: skwInboundTable.data,
       skwStockTable: skwStockTable.data,
+      gmailIngestion: deriveGmailIngestion({
+        importsRows: imports.data,
+        outboundRows: effectiveOutbound.rows,
+        pendingVerificationTable: pendingVerification.data,
+      }),
     },
     kpiRows: {
       nationalRows: gvizTableRows(nationalOutbound.data),
@@ -323,4 +338,126 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
       transferRows: transfers.data ?? [],
     },
   };
+}
+
+// --- Gmail ingestion feed ----------------------------------------------------
+// Derived entirely from data the pipeline already writes: GmailPipeline.gs tags
+// every auto-committed row with "[auto: <gmail url>]" in the Notes/Remark
+// column, and Validation.gs writes everything that fails validation to the
+// PENDING VERIFICATION sheet. No schema changes anywhere.
+
+export interface GmailIngestionEvent {
+  status: "committed" | "needsReview" | "approved" | "rejected";
+  kind: "inbound" | "outbound" | "";
+  shipmentId: string;
+  customer: string;
+  invoice: string;
+  blOrPro: string;
+  container: string;
+  shipDateOrEta: string;
+  carrierOrVessel: string;
+  note: string;
+  issues: string;
+  sourceEmailUrl: string;
+  driveFileUrl: string;
+  timestamp: string;
+}
+
+const AUTO_TAG = /\[auto:\s*(https:\/\/mail\.google\.com\/[^\]\s]+)\]/i;
+
+function firstNonEmpty(...values: Array<string | undefined>) {
+  return values.find((value) => value && value.trim())?.trim() ?? "";
+}
+
+/** Scans a CSV-shaped sheet (header row first) for the GmailPipeline auto-commit tag. */
+function committedEventsFromRows(rows: string[][] | null, kind: "inbound" | "outbound"): GmailIngestionEvent[] {
+  if (!rows || rows.length < 2) return [];
+  const header = rows[0].map((label) => String(label ?? "").trim().toUpperCase());
+  const col = (...names: string[]) => names.map((name) => header.indexOf(name)).find((index) => index !== -1) ?? -1;
+  const noteCol = col("NOTE", "NOTES", "REMARK", "REMARKS", "비고");
+  const customerCol = col("CUSTOMER");
+  const invoiceCol = col("INVOICE", "INVOICE NO.", "INVOICE#", "PI NO.");
+  const blCol = col("B/L", "BL NO", "BL NO.", "BOL", "HBL", "PRO#", "PRO");
+  const containerCol = col("CONTAINER", "CONTAINER NO", "CNTR");
+  const dateCol = col("ETA", "SHIP DATE", "ARRIVAL");
+  const carrierCol = col("VESSEL", "CARRIER", "VESSEL/VOY");
+  if (noteCol === -1) return [];
+
+  return rows.slice(1).flatMap((row) => {
+    const note = String(row[noteCol] ?? "");
+    const match = note.match(AUTO_TAG);
+    if (!match) return [];
+    const shipmentId = firstNonEmpty(
+      invoiceCol !== -1 ? row[invoiceCol] : undefined,
+      blCol !== -1 ? row[blCol] : undefined,
+      containerCol !== -1 ? row[containerCol] : undefined,
+    );
+    return [{
+      status: "committed",
+      kind,
+      shipmentId,
+      customer: customerCol !== -1 ? String(row[customerCol] ?? "") : "",
+      invoice: invoiceCol !== -1 ? String(row[invoiceCol] ?? "") : "",
+      blOrPro: blCol !== -1 ? String(row[blCol] ?? "") : "",
+      container: containerCol !== -1 ? String(row[containerCol] ?? "") : "",
+      shipDateOrEta: dateCol !== -1 ? String(row[dateCol] ?? "") : "",
+      carrierOrVessel: carrierCol !== -1 ? String(row[carrierCol] ?? "") : "",
+      note: note.replace(AUTO_TAG, "").trim(),
+      issues: "",
+      sourceEmailUrl: match[1],
+      driveFileUrl: "",
+      timestamp: "",
+    } satisfies GmailIngestionEvent];
+  });
+}
+
+/** Reads the PENDING VERIFICATION gviz table into ingestion events. */
+function pendingEventsFromTable(table: GvizTable | null): GmailIngestionEvent[] {
+  if (!table) return [];
+  const rows = gvizTableRows(table);
+  if (rows.length < 2) return [];
+  const header = rows[0].map((label) => String(label ?? "").trim().toUpperCase());
+  const idx = (name: string) => header.indexOf(name.toUpperCase());
+  const statusMap: Record<string, GmailIngestionEvent["status"]> = {
+    "NEEDS REVIEW": "needsReview",
+    APPROVED: "approved",
+    REJECTED: "rejected",
+    COMMITTED: "committed",
+  };
+  const cell = (row: string[], index: number) => (index === -1 ? "" : String(row[index] ?? ""));
+  return rows.slice(1).map((row) => {
+    const rawStatus = cell(row, idx("Status")).trim().toUpperCase();
+    const kind = cell(row, idx("Kind")).trim().toLowerCase();
+    return {
+      status: statusMap[rawStatus] ?? "needsReview",
+      kind: kind === "inbound" || kind === "outbound" ? kind : "",
+      shipmentId: firstNonEmpty(cell(row, idx("Invoice / PI")), cell(row, idx("BL / PRO")), cell(row, idx("Container"))),
+      customer: cell(row, idx("Customer")),
+      invoice: cell(row, idx("Invoice / PI")),
+      blOrPro: cell(row, idx("BL / PRO")),
+      container: cell(row, idx("Container")),
+      shipDateOrEta: cell(row, idx("Ship Date / ETA")),
+      carrierOrVessel: cell(row, idx("Carrier / Vessel")),
+      note: cell(row, idx("Note")),
+      issues: cell(row, idx("Issues")),
+      sourceEmailUrl: cell(row, idx("Source Email")),
+      driveFileUrl: cell(row, idx("Drive File")),
+      timestamp: cell(row, idx("Timestamp")),
+    };
+  });
+}
+
+export function deriveGmailIngestion(input: {
+  importsRows: string[][] | null;
+  outboundRows: string[][] | null;
+  pendingVerificationTable: GvizTable | null;
+}): GmailIngestionEvent[] {
+  const committed = [
+    ...committedEventsFromRows(input.importsRows, "inbound"),
+    ...committedEventsFromRows(input.outboundRows, "outbound"),
+  ];
+  const pending = pendingEventsFromTable(input.pendingVerificationTable);
+  // Most recent first; PENDING VERIFICATION rows already carry a real timestamp,
+  // committed rows don't (Sheets doesn't store one) so they sort after pending.
+  return [...pending, ...committed].slice(0, 200);
 }
