@@ -37,6 +37,7 @@ type AppsScriptSnapshot = {
     inventoryDashboardTable?: string[][];
     skwInboundTable?: string[][];
     skwStockTable?: string[][];
+    pendingVerification?: string[][];
   };
 };
 
@@ -138,12 +139,12 @@ export function selectOutboundSource(
   scheduleRows: string[][] | null,
   truckingRows: string[][] | null,
 ): { rows: string[][] | null; meta: OutboundSourceMeta } {
-  const scheduleRowCount = populatedOutboundRows(scheduleRows, 3);
+  const scheduleRowCount = populatedOutboundRows(scheduleRows, 1);
   const truckingRowCount = populatedOutboundRows(truckingRows, 2);
   if (scheduleRowCount > 0) {
     return {
       rows: scheduleRows,
-      meta: { sheetName: "Outbound Shipping Schedule", headerRow: 3, rowCount: scheduleRowCount, fallback: false },
+      meta: { sheetName: "Outbound Shipping Schedule", headerRow: 1, rowCount: scheduleRowCount, fallback: false },
     };
   }
   if (truckingRowCount > 0) {
@@ -162,10 +163,60 @@ export function selectOutboundSource(
     rows: scheduleRows ?? truckingRows,
     meta: {
       sheetName: scheduleRows ? "Outbound Shipping Schedule" : "WH Trucking Request",
-      headerRow: scheduleRows ? 3 : 2,
+      headerRow: scheduleRows ? 1 : 2,
       rowCount: 0,
       fallback: Boolean(truckingRows),
       reason: "No populated outbound shipment rows are available",
+    },
+  };
+}
+
+// PENDING VERIFICATION read: columns A..N only — column O holds Raw JSON
+// (up to 5k chars of raw extraction text: email subjects, message ids,
+// document excerpts) which must never leave the backend, and the feed only
+// uses the display columns. The tab is an append-only audit trail, so order
+// by Timestamp (column A) descending and take the newest 2,000 rows — a
+// plain A1:N2000 range would permanently exclude everything appended after
+// row 2,000 before the newest-first sort could see it.
+const PENDING_VERIFICATION_QUERY = {
+  sheet: "PENDING VERIFICATION",
+  range: "A:N",
+  headers: 1,
+  tq: "select * order by A desc limit 2000",
+} as const;
+
+// Review status transitions happen in place, so an old NEEDS REVIEW row can
+// predate the 2,000-row tail. This companion query recovers those open rows
+// (Validation.gs writes the status verbatim as "NEEDS REVIEW").
+const PENDING_VERIFICATION_OPEN_QUERY = {
+  sheet: "PENDING VERIFICATION",
+  range: "A:N",
+  headers: 1,
+  tq: "select * where C = 'NEEDS REVIEW' order by A desc limit 200",
+} as const;
+
+/**
+ * Direct read of PENDING VERIFICATION: the newest 2,000 rows plus any open
+ * NEEDS REVIEW rows older than that window (mirrors Code.gs's
+ * readPendingVerificationTail_). The open-rows query failing degrades to the
+ * tail alone rather than killing the feed.
+ */
+async function fetchPendingVerificationDirect(): Promise<SourceResult<GvizTable>> {
+  const [tail, open] = await Promise.all([
+    fetchGvizSource("Pending Verification", LOGISTICS_MASTER_ID, PENDING_VERIFICATION_QUERY),
+    fetchGvizSource("Pending Verification (open)", LOGISTICS_MASTER_ID, PENDING_VERIFICATION_OPEN_QUERY),
+  ]);
+  if (!tail.data || !open.data) return tail;
+  const seen = new Set(gvizTableRows(tail.data).slice(1).map((row) => JSON.stringify(row)));
+  const extraRows = gvizTableRows(open.data)
+    .slice(1)
+    .filter((row) => !seen.has(JSON.stringify(row)));
+  if (!extraRows.length) return tail;
+  return {
+    health: tail.health,
+    data: {
+      cols: tail.data.cols,
+      rows: [...(tail.data.rows ?? []), ...extraRows.map((row) => ({ c: row.map((value) => ({ v: value })) }))],
     },
   };
 }
@@ -194,12 +245,13 @@ export async function fetchCsvSource(name: string, spreadsheetId: string, gid: n
   catch (error) { return { data: null, health: { ...result.health, ok: false, error: String(error) } }; }
 }
 
-export async function fetchGvizSource(name: string, spreadsheetId: string, options: { gid?: number; sheet?: string; range: string; headers?: number }): Promise<SourceResult<GvizTable>> {
+export async function fetchGvizSource(name: string, spreadsheetId: string, options: { gid?: number; sheet?: string; range?: string; headers?: number; tq?: string }): Promise<SourceResult<GvizTable>> {
   const url = new URL(`https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq`);
   url.searchParams.set("tqx", "out:json");
   if (options.gid !== undefined) url.searchParams.set("gid", String(options.gid));
   if (options.sheet) url.searchParams.set("sheet", options.sheet);
-  url.searchParams.set("range", options.range);
+  if (options.range) url.searchParams.set("range", options.range);
+  if (options.tq) url.searchParams.set("tq", options.tq);
   url.searchParams.set("headers", String(options.headers ?? 1));
   url.searchParams.set("_", String(Date.now()));
   const result = await timedFetch(name, url);
@@ -251,6 +303,15 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
       const inventoryTable = rowsToGvizTable(raw.inventoryDashboardTable);
       const inboundTable = rowsToGvizTable(raw.skwInboundTable);
       const stockTable = rowsToGvizTable(raw.skwStockTable);
+      // Code.gs returns pendingVerification in the snapshot; until the deployed
+      // Apps Script catches up, fall back to reading the tab directly so review
+      // events don't vanish from the feed in the meantime.
+      const pendingFallback = raw.pendingVerification
+        ? null
+        : await fetchPendingVerificationDirect();
+      const pendingTable = raw.pendingVerification
+        ? rowsToGvizTable(raw.pendingVerification)
+        : pendingFallback!.data;
       return {
         sourceHealth: [
           healthFor("IMPORTS", raw.imports),
@@ -262,6 +323,7 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
           healthFor("Inventory", inventoryTable),
           healthFor("SKW Inbound", inboundTable),
           healthFor("SKW Stock", stockTable),
+          pendingFallback ? pendingFallback.health : healthFor("Pending Verification", pendingTable),
         ],
         sources: {
           imports: raw.imports ? normalizeImportsParcelRows(raw.imports) : null,
@@ -272,6 +334,16 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
           inventoryDashboardTable: inventoryTable,
           skwInboundTable: inboundTable,
           skwStockTable: stockTable,
+          // null (feed unavailable, shown as such by the card) when the pending
+          // read failed — never an empty array, which would misreport "nothing
+          // to review" and could be persisted to D1 over the last good feed.
+          gmailIngestion: pendingTable
+            ? deriveGmailIngestion({
+                importsRows: raw.imports ?? null,
+                outboundRows: effectiveOutbound.rows,
+                pendingVerificationTable: pendingTable,
+              })
+            : null,
         },
         kpiRows: {
           nationalRows: raw.nationalOutbound ?? [],
@@ -283,7 +355,7 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
     }
   }
 
-  const [imports, outbound, trucking, transfers, nationalOutbound, salesOutbound, inventoryDashboardTable, skwInboundTable, skwStockTable] = await Promise.all([
+  const [imports, outbound, trucking, transfers, nationalOutbound, salesOutbound, inventoryDashboardTable, skwInboundTable, skwStockTable, pendingVerification] = await Promise.all([
     fetchCsvSource("IMPORTS", LOGISTICS_MASTER_ID, IMPORTS_GID),
     fetchCsvSource("Outbound Shipping Schedule", LOGISTICS_MASTER_ID, OUTBOUND_GID),
     fetchCsvSource("WH Trucking Request", LOGISTICS_MASTER_ID, TRUCKING_GID),
@@ -293,6 +365,7 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
     fetchGvizSource("Inventory", LOGISTICS_MASTER_ID, { sheet: "INVENTORY", range: "A1:O6500", headers: 1 }),
     fetchGvizSource("SKW Inbound", LOGISTICS_MASTER_ID, { sheet: "SKW_Inbound", range: "A1:R2500", headers: 1 }),
     fetchGvizSource("SKW Stock", LOGISTICS_MASTER_ID, { sheet: "SKW_Stock", range: "A1:J2500", headers: 1 }),
+    fetchPendingVerificationDirect(),
   ]);
 
   const effectiveOutbound = selectOutboundSource(outbound.data, trucking.data);
@@ -305,7 +378,7 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
     : outbound.health;
 
   return {
-    sourceHealth: [imports, { health: outboundHealth }, trucking, transfers, nationalOutbound, salesOutbound, inventoryDashboardTable, skwInboundTable, skwStockTable].map((entry) => entry.health),
+    sourceHealth: [imports, { health: outboundHealth }, trucking, transfers, nationalOutbound, salesOutbound, inventoryDashboardTable, skwInboundTable, skwStockTable, pendingVerification].map((entry) => entry.health),
     sources: {
       imports: imports.data ? normalizeImportsParcelRows(imports.data) : null,
       outbound: effectiveOutbound.rows,
@@ -315,6 +388,15 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
       inventoryDashboardTable: inventoryDashboardTable.data,
       skwInboundTable: skwInboundTable.data,
       skwStockTable: skwStockTable.data,
+      // null when the pending read failed (its sourceHealth entry carries the
+      // error) — an empty array would misreport "nothing to review".
+      gmailIngestion: pendingVerification.data
+        ? deriveGmailIngestion({
+            importsRows: imports.data,
+            outboundRows: effectiveOutbound.rows,
+            pendingVerificationTable: pendingVerification.data,
+          })
+        : null,
     },
     kpiRows: {
       nationalRows: gvizTableRows(nationalOutbound.data),
@@ -323,4 +405,150 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
       transferRows: transfers.data ?? [],
     },
   };
+}
+
+// --- Gmail ingestion feed ----------------------------------------------------
+// Derived entirely from data the pipeline already writes: GmailPipeline.gs tags
+// every auto-committed row with "[auto: <gmail url>]" in the Notes/Remark
+// column, and Validation.gs writes everything that fails validation to the
+// PENDING VERIFICATION sheet. No schema changes anywhere.
+
+export interface GmailIngestionEvent {
+  status: "committed" | "needsReview" | "approved" | "rejected";
+  kind: "inbound" | "outbound" | "";
+  shipmentId: string;
+  customer: string;
+  invoice: string;
+  blOrPro: string;
+  container: string;
+  shipDateOrEta: string;
+  carrierOrVessel: string;
+  note: string;
+  issues: string;
+  sourceEmailUrl: string;
+  driveFileUrl: string;
+  timestamp: string;
+}
+
+const AUTO_TAG = /\[auto:\s*(https:\/\/mail\.google\.com\/[^\]\s]+)\]/i;
+
+function firstNonEmpty(...values: Array<string | undefined>) {
+  return values.find((value) => value && value.trim())?.trim() ?? "";
+}
+
+/**
+ * Scans a CSV-shaped sheet (header row first) for the GmailPipeline auto-commit tag.
+ *
+ * Note on production coverage: emailNoteV2_ was deliberately stubbed to keep
+ * automation metadata out of the operational NOTES columns ("Keep automation
+ * metadata out of operational NOTES"), so live sheets currently carry no
+ * [auto: …] markers and this scan yields nothing there. The production feed is
+ * driven by PENDING VERIFICATION (whose audit trail includes COMMITTED rows);
+ * this scan stays as forward-compatible support for any pipeline or operator
+ * that does record a Gmail permalink in a notes column.
+ */
+function committedEventsFromRows(rows: string[][] | null, kind: "inbound" | "outbound"): GmailIngestionEvent[] {
+  if (!rows || rows.length < 2) return [];
+  const header = rows[0].map((label) => String(label ?? "").trim().toUpperCase());
+  const col = (...names: string[]) => names.map((name) => header.indexOf(name)).find((index) => index !== -1) ?? -1;
+  const noteCol = col("NOTE", "NOTES", "REMARK", "REMARKS", "비고");
+  const customerCol = col("CUSTOMER");
+  const invoiceCol = col("INVOICE", "INVOICE NO.", "INVOICE#", "PI NO.");
+  const blCol = col("B/L", "BL NO", "BL NO.", "BOL", "HBL", "PRO#", "PRO");
+  const containerCol = col("CONTAINER", "CONTAINER NO", "CNTR");
+  const dateCol = col("ETA", "SHIP DATE", "ARRIVAL");
+  const carrierCol = col("VESSEL", "CARRIER", "VESSEL/VOY");
+  if (noteCol === -1) return [];
+
+  return rows.slice(1).flatMap((row) => {
+    const note = String(row[noteCol] ?? "");
+    const match = note.match(AUTO_TAG);
+    if (!match) return [];
+    const shipmentId = firstNonEmpty(
+      invoiceCol !== -1 ? row[invoiceCol] : undefined,
+      blCol !== -1 ? row[blCol] : undefined,
+      containerCol !== -1 ? row[containerCol] : undefined,
+    );
+    return [{
+      status: "committed",
+      kind,
+      shipmentId,
+      customer: customerCol !== -1 ? String(row[customerCol] ?? "") : "",
+      invoice: invoiceCol !== -1 ? String(row[invoiceCol] ?? "") : "",
+      blOrPro: blCol !== -1 ? String(row[blCol] ?? "") : "",
+      container: containerCol !== -1 ? String(row[containerCol] ?? "") : "",
+      shipDateOrEta: dateCol !== -1 ? String(row[dateCol] ?? "") : "",
+      carrierOrVessel: carrierCol !== -1 ? String(row[carrierCol] ?? "") : "",
+      note: note.replace(AUTO_TAG, "").trim(),
+      issues: "",
+      sourceEmailUrl: match[1],
+      driveFileUrl: "",
+      timestamp: "",
+    } satisfies GmailIngestionEvent];
+  });
+}
+
+/** Reads the PENDING VERIFICATION gviz table into ingestion events. */
+function pendingEventsFromTable(table: GvizTable | null): GmailIngestionEvent[] {
+  if (!table) return [];
+  const rows = gvizTableRows(table);
+  if (rows.length < 2) return [];
+  const header = rows[0].map((label) => String(label ?? "").trim().toUpperCase());
+  const idx = (name: string) => header.indexOf(name.toUpperCase());
+  const statusMap: Record<string, GmailIngestionEvent["status"]> = {
+    "NEEDS REVIEW": "needsReview",
+    APPROVED: "approved",
+    REJECTED: "rejected",
+    COMMITTED: "committed",
+  };
+  const cell = (row: string[], index: number) => (index === -1 ? "" : String(row[index] ?? ""));
+  return rows.slice(1).map((row) => {
+    const rawStatus = cell(row, idx("Status")).trim().toUpperCase();
+    const kind = cell(row, idx("Kind")).trim().toLowerCase();
+    return {
+      status: statusMap[rawStatus] ?? "needsReview",
+      kind: kind === "inbound" || kind === "outbound" ? kind : "",
+      shipmentId: firstNonEmpty(cell(row, idx("Invoice / PI")), cell(row, idx("BL / PRO")), cell(row, idx("Container"))),
+      customer: cell(row, idx("Customer")),
+      invoice: cell(row, idx("Invoice / PI")),
+      blOrPro: cell(row, idx("BL / PRO")),
+      container: cell(row, idx("Container")),
+      shipDateOrEta: cell(row, idx("Ship Date / ETA")),
+      carrierOrVessel: cell(row, idx("Carrier / Vessel")),
+      note: cell(row, idx("Note")),
+      issues: cell(row, idx("Issues")),
+      sourceEmailUrl: cell(row, idx("Source Email")),
+      driveFileUrl: cell(row, idx("Drive File")),
+      timestamp: cell(row, idx("Timestamp")),
+    };
+  });
+}
+
+export function deriveGmailIngestion(input: {
+  importsRows: string[][] | null;
+  outboundRows: string[][] | null;
+  pendingVerificationTable: GvizTable | null;
+}): GmailIngestionEvent[] {
+  const committed = [
+    ...committedEventsFromRows(input.importsRows, "inbound"),
+    ...committedEventsFromRows(input.outboundRows, "outbound"),
+  ];
+  // Validation.gs appends PENDING VERIFICATION rows chronologically and keeps
+  // approved/rejected rows as an audit trail, so newest entries live at the
+  // bottom. Sort newest-first (timestamped rows by timestamp, the rest by
+  // reverse sheet order) BEFORE applying the cap, or new actionable review
+  // items would fall off the feed once the tab exceeds 200 rows.
+  const pendingSorted = pendingEventsFromTable(input.pendingVerificationTable)
+    .map((event, index) => ({ event, sortKey: Date.parse(event.timestamp) || index }))
+    .sort((a, b) => b.sortKey - a.sortKey)
+    .map(({ event }) => event);
+  // Status transitions happen IN PLACE on existing rows (an old NEEDS REVIEW
+  // row keeps its original timestamp when approved/rejected), so actionable
+  // review items rank ahead of resolved audit rows — the cap must never hide
+  // an open review item behind newer resolved history.
+  const actionable = pendingSorted.filter((event) => event.status === "needsReview");
+  const resolved = pendingSorted.filter((event) => event.status !== "needsReview");
+  // Committed rows carry no timestamp (Sheets doesn't store one) so they sort
+  // after pending.
+  return [...actionable, ...resolved, ...committed].slice(0, 200);
 }

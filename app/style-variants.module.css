@@ -94,10 +94,12 @@
 .fulfillment :global(.fulfillment-tk-panel) { order: 13; }
 .light :global(.outbound-parcel-panel),
 .fulfillment :global(.outbound-parcel-panel) { order: 14; }
+.light :global(.ingestion-archive-row),
+.fulfillment :global(.ingestion-archive-row) { order: 15; }
 .light :global(footer),
-.fulfillment :global(footer) { order: 15; }
+.fulfillment :global(footer) { order: 16; }
 .light :global(.toast),
-.fulfillment :global(.toast) { order: 16; }
+.fulfillment :global(.toast) { order: 17; }
 
 .light {
   --variant-blue: #eaf3ff;
@@ -316,7 +318,8 @@
 .lightFull :global(.fulfillment-tk-panel) { order: 11; }
 .lightFull :global(.kpi-panel) { order: 12; }
 .lightFull :global(.source-legend) { order: 13; }
-.lightFull :global(footer) { order: 14; }
+.lightFull :global(.ingestion-archive-row) { order: 14; }
+.lightFull :global(footer) { order: 15; }
 .lightFull :global(.metrics article),
 .lightFull :global(.kpi-panel),
 .lightFull :global(.inventory-panel),

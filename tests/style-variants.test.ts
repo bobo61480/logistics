@@ -19,18 +19,16 @@ describe("live dashboard style variants", () => {
     expect(source).not.toContain("function VariantNav");
   });
 
-  test("root layout exposes the same five-way style switcher on every route", () => {
+  test("root layout exposes the SKWarehouse/SKControl platform links on every route, not the old Appearance switcher", () => {
     const layout = read("app/layout.tsx");
     const switcher = read("app/style-switcher.tsx");
     expect(layout).toContain('import { StyleSwitcher } from "./style-switcher"');
     expect(layout).toContain("<StyleSwitcher />");
-    expect(switcher).toContain('{ href: "/", label: "Original" }');
-    expect(switcher).toContain('{ href: "/light-skin", label: "Light Skin" }');
-    expect(switcher).toContain('{ href: "/light", label: "Light Control Tower" }');
-    expect(switcher).toContain('{ href: "/light-full", label: "Light Full" }');
-    expect(switcher).toContain('{ href: "/fulfillment-style", label: "Fulfillment" }');
-    expect(switcher).toContain("usePathname");
-    expect(switcher).toContain("aria-current={active ? \"page\" : undefined}");
+    expect(switcher).toContain('{ href: "https://skwarehouse.dpdns.org", label: "SKWarehouse" }');
+    expect(switcher).toContain('{ href: "https://skwbp.dpdns.org", label: "SKControl" }');
+    expect(switcher).toContain('target="_blank"');
+    expect(switcher).not.toContain("APPEARANCE");
+    expect(switcher).not.toContain("usePathname");
   });
 
   test("variant CSS places TK after the outbound trucking board", () => {

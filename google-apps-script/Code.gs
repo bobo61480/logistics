@@ -62,11 +62,75 @@ function doGet(e) {
         salesOutbound: readSnapshotRows_(wms, null, 0, 2, 4199, 32),
         inventoryDashboardTable: readSnapshotRows_(master, "INVENTORY", null, 1, 6500, 15),
         skwInboundTable: readSnapshotRows_(master, "SKW_Inbound", null, 1, 2500, 18),
-        skwStockTable: readSnapshotRows_(master, "SKW_Stock", null, 1, 2500, 10)
+        skwStockTable: readSnapshotRows_(master, "SKW_Stock", null, 1, 2500, 10),
+        // Optional: Validation.gs creates this tab lazily, so its absence must
+        // not fail the whole snapshot. Feeds the dashboard's Gmail Ingestion card.
+        // Sanitized to columns A..N — column O (Raw JSON) carries raw extraction
+        // text and must not be exposed through this anonymously reachable
+        // endpoint — and read from the tail, because the tab is an append-only
+        // audit trail whose newest rows matter most.
+        pendingVerification: readPendingVerificationTail_(master, "PENDING VERIFICATION", 2000, 14)
       }
     });
   } catch (error) {
     return json_({ ok: false, error: String(error.message || error) });
+  }
+}
+
+function readPendingVerificationTail_(spreadsheet, sheetName, maxRows, maxColumns) {
+  try {
+    const sheet = spreadsheet.getSheetByName(sheetName);
+    if (!sheet) {
+      // Validation.gs creates this tab lazily on the first record that fails
+      // validation, so on a clean install its absence is a legitimately EMPTY
+      // feed, not a read failure. Return the canonical header row (sanitized
+      // to the same column bound) so downstream sees "empty", never "degraded".
+      if (typeof VALIDATION !== "undefined" && VALIDATION.pendingHeaders) {
+        return [VALIDATION.pendingHeaders.slice(0, Math.max(1, Number(maxColumns) || 1))];
+      }
+      return null;
+    }
+    const lastRow = sheet.getLastRow();
+    const lastColumn = Math.min(sheet.getLastColumn(), Math.max(1, Number(maxColumns) || 1));
+    if (lastRow < 1 || lastColumn < 1) return null;
+    const header = sheet.getRange(1, 1, 1, lastColumn).getDisplayValues();
+    if (lastRow === 1) return header;
+    const firstDataRow = Math.max(2, lastRow - Math.max(1, Number(maxRows) || 1) + 1);
+    const rows = sheet.getRange(firstDataRow, 1, lastRow - firstDataRow + 1, lastColumn).getDisplayValues();
+    // Review status transitions happen IN PLACE on existing rows, so an old
+    // NEEDS REVIEW row that predates the tail would otherwise never surface.
+    // One column-C read covers the pre-tail region cheaply; unresolved rows
+    // are prepended (bounded, normally zero).
+    if (firstDataRow > 2) {
+      const statuses = sheet.getRange(2, 3, firstDataRow - 2, 1).getDisplayValues();
+      const straggler = [];
+      for (let index = 0; index < statuses.length && straggler.length < 200; index += 1) {
+        if (String(statuses[index][0]).trim().toUpperCase() === "NEEDS REVIEW") straggler.push(index);
+      }
+      if (straggler.length) {
+        // Bounded batched recovery: merge nearby rows into ranged reads (a
+        // ≤50-row gap costs less than another Spreadsheet-service call) and
+        // cap the number of reads, so neither a review backlog nor a huge
+        // pre-tail audit can stall the snapshot the Worker aborts after 60s.
+        // Only open NEEDS REVIEW rows are recovered — resolved pre-tail
+        // transitions are historical audit, deliberately left to the sheet.
+        const runs = [];
+        straggler.forEach(function (offset) {
+          const last = runs[runs.length - 1];
+          if (last && offset - last.end <= 50) last.end = offset;
+          else runs.push({ start: offset, end: offset });
+        });
+        runs.slice(0, 20).forEach(function (run) {
+          const block = sheet.getRange(run.start + 2, 1, run.end - run.start + 1, lastColumn).getDisplayValues();
+          block.forEach(function (row) {
+            if (String(row[2]).trim().toUpperCase() === "NEEDS REVIEW") rows.unshift(row);
+          });
+        });
+      }
+    }
+    return header.concat(rows);
+  } catch (error) {
+    return null;
   }
 }
 

@@ -6,6 +6,8 @@ import { INBOUND_INVOICE_LINKS } from "./inbound-invoice-links";
 import { packingListPallets } from "./inbound-pallets";
 import { computeLiveKpis } from "../lib/sales-kpis";
 import FulfillmentTkOrders from "./FulfillmentTkOrders";
+import { GmailIngestionCard, type GmailIngestionEvent } from "./gmail-ingestion-card";
+import { DriveArchiveCard } from "./drive-archive-card";
 
 const SHEET_ID =
   process.env.NEXT_PUBLIC_LOGISTICS_MASTER_SHEET_ID ??
@@ -1001,6 +1003,7 @@ type WorkerSnapshot = {
     inventoryDashboardTable?: any;
     skwInboundTable?: any;
     skwStockTable?: any;
+    gmailIngestion?: GmailIngestionEvent[] | null;
   };
   kpis?: KpiSnapshot | null;
 };
@@ -1015,7 +1018,7 @@ type OutboundSourceMeta = {
 
 const OUTBOUND_SCHEDULE_META: OutboundSourceMeta = {
   sheetName: "Outbound Shipping Schedule",
-  headerRow: 3,
+  headerRow: 1,
   rowCount: 0,
   fallback: false,
 };
@@ -1097,6 +1100,9 @@ async function fetchOperationalSnapshot() {
       inventoryDashboardTable: sources.inventoryDashboardTable ?? null,
       skwInboundTable: sources.skwInboundTable ?? null,
       skwStockTable: sources.skwStockTable ?? null,
+      // null (not []) when the deployed Worker predates the feed, so the card
+      // reports "unavailable" instead of claiming the inbox is empty.
+      gmailIngestion: sources.gmailIngestion ?? null,
       connection: {
         mode: snapshot.stale ? "stale" as const : "worker" as const,
         storage: snapshot.storage,
@@ -1111,6 +1117,8 @@ async function fetchOperationalSnapshot() {
     console.warn("Worker snapshot unavailable; falling back to Google Sheets.", workerError);
     return {
       ...(await fetchSheetSnapshot()),
+      // The direct-Sheets fallback carries no ingestion feed.
+      gmailIngestion: null,
       connection: {
         mode: "sheets" as const,
         storage: "sheets" as const,
@@ -2261,6 +2269,7 @@ export default function Home() {
   const [warehouseStock, setWarehouseStock] = useState<InventoryItem[]>([]);
   const [selectedInventory, setSelectedInventory] = useState<InventoryItem | null>(null);
   const [connection, setConnection] = useState<ConnectionState | null>(null);
+  const [gmailIngestion, setGmailIngestion] = useState<GmailIngestionEvent[] | null>(null);
   const loadInFlight = useRef(false);
   const lastRefreshAt = useRef(0);
 
@@ -2289,6 +2298,7 @@ export default function Home() {
         inventoryDashboardTable,
         skwInboundTable,
         skwStockTable,
+        gmailIngestion: nextGmailIngestion,
         connection: nextConnection,
       } = await fetchOperationalSnapshot();
       // Each source row remains its own operational move. Do not infer or merge
@@ -2310,6 +2320,7 @@ export default function Home() {
         ...dashboardInventory.inStock,
         ...skwStockItems(skwStockTable),
       ], false));
+      setGmailIngestion(nextGmailIngestion);
       setConnection(nextConnection);
       const refreshedAt = new Date();
       lastRefreshAt.current = refreshedAt.getTime();
@@ -2800,6 +2811,13 @@ export default function Home() {
           savingId={savingId}
           onStatus={handleStatus}
         />
+      </div>
+
+      {/* .ingestion-archive-row keeps this row ordered above the footer on the
+          flex-reordered /light, /light-full, and /fulfillment-style variants. */}
+      <div className="ingestion-archive-row mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2" aria-label="Email ingestion and document archive">
+        <GmailIngestionCard events={gmailIngestion} loading={loading} />
+        <DriveArchiveCard />
       </div>
 
       <footer>
