@@ -80,7 +80,16 @@ function doGet(e) {
 function readPendingVerificationTail_(spreadsheet, sheetName, maxRows, maxColumns) {
   try {
     const sheet = spreadsheet.getSheetByName(sheetName);
-    if (!sheet) return null;
+    if (!sheet) {
+      // Validation.gs creates this tab lazily on the first record that fails
+      // validation, so on a clean install its absence is a legitimately EMPTY
+      // feed, not a read failure. Return the canonical header row (sanitized
+      // to the same column bound) so downstream sees "empty", never "degraded".
+      if (typeof VALIDATION !== "undefined" && VALIDATION.pendingHeaders) {
+        return [VALIDATION.pendingHeaders.slice(0, Math.max(1, Number(maxColumns) || 1))];
+      }
+      return null;
+    }
     const lastRow = sheet.getLastRow();
     const lastColumn = Math.min(sheet.getLastColumn(), Math.max(1, Number(maxColumns) || 1));
     if (lastRow < 1 || lastColumn < 1) return null;
