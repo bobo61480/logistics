@@ -19,13 +19,14 @@ describe("live dashboard style variants", () => {
     expect(source).not.toContain("function VariantNav");
   });
 
-  test("root layout exposes the SKWarehouse/SKControl platform links on every route, not the old Appearance switcher", () => {
+  test("root layout exposes the StyleKorean/SKWarehouse/SKControl platform links on every route, not the old Appearance switcher", () => {
     const layout = read("app/layout.tsx");
     const switcher = read("app/style-switcher.tsx");
     expect(layout).toContain('import { StyleSwitcher } from "./style-switcher"');
     expect(layout).toContain("<StyleSwitcher />");
-    expect(switcher).toContain('{ href: "https://skwarehouse.dpdns.org", label: "SKWarehouse" }');
-    expect(switcher).toContain('{ href: "https://skwbp.dpdns.org", label: "SKControl" }');
+    expect(switcher).toContain('{ href: "https://stylekorean.dpdns.org", label: "StyleKorean", key: "stylekorean" }');
+    expect(switcher).toContain('{ href: "https://skwarehouse.dpdns.org", label: "SKWarehouse", key: "skwarehouse" }');
+    expect(switcher).toContain('{ href: "https://skwbp.dpdns.org", label: "SKControl", key: "skwbp" }');
     expect(switcher).toContain('target="_blank"');
     expect(switcher).not.toContain("APPEARANCE");
     expect(switcher).not.toContain("usePathname");

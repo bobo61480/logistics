@@ -19,6 +19,10 @@ export interface GmailIngestionEvent {
   sourceEmailUrl: string;
   driveFileUrl: string;
   timestamp: string;
+  // Present only while status === "needsReview" and the row has a usable
+  // identifier. Sent back verbatim on approve/reject; the backend refuses to
+  // act on it if the identifier no longer resolves to exactly one open row.
+  reviewKey?: string;
 }
 
 const STATUS_STYLE: Record<IngestionStatus, string> = {
@@ -49,9 +53,15 @@ const STATUS_LABEL: Record<IngestionStatus, string> = {
 export function GmailIngestionCard({
   events,
   loading = false,
+  onReview,
+  reviewingKey = "",
 }: {
   events: GmailIngestionEvent[] | null;
   loading?: boolean;
+  /** Omit to render the feed read-only (no Approve/Reject buttons). */
+  onReview?: (event: GmailIngestionEvent, decision: "approve" | "reject") => void;
+  /** reviewKey of the row currently mid-request, so only that row disables. */
+  reviewingKey?: string;
 }) {
   const [filter, setFilter] = useState<"all" | IngestionStatus>("all");
 
@@ -145,6 +155,35 @@ export function GmailIngestionCard({
                   </a>
                 )}
               </div>
+
+              {onReview && event.status === "needsReview" && (
+                <div className="mt-2 flex items-center gap-2">
+                  {event.reviewKey ? (
+                    <>
+                      <button
+                        type="button"
+                        disabled={reviewingKey === event.reviewKey}
+                        onClick={() => onReview(event, "approve")}
+                        className="rounded-md bg-green-600 px-2.5 py-1 text-xs font-medium text-white transition hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {reviewingKey === event.reviewKey ? "Working…" : "Approve"}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={reviewingKey === event.reviewKey}
+                        onClick={() => onReview(event, "reject")}
+                        className="rounded-md bg-white px-2.5 py-1 text-xs font-medium text-red-700 ring-1 ring-red-200 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Reject
+                      </button>
+                    </>
+                  ) : (
+                    <span className="text-xs text-neutral-400">
+                      No unique identifier — resolve directly in the PENDING VERIFICATION sheet.
+                    </span>
+                  )}
+                </div>
+              )}
             </li>
           ))}
         </ul>

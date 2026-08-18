@@ -4,10 +4,11 @@ import { describe, expect, it } from "vitest";
 const read = (path: string) => readFileSync(path, "utf8");
 
 describe("Control Tower light variants", () => {
-  it("exposes the SKWarehouse and SKControl platform links in the shared header nav", () => {
+  it("exposes the StyleKorean/SKWarehouse/SKControl platform links in the shared header nav", () => {
     const source = read("app/style-switcher.tsx");
-    expect(source).toContain('{ href: "https://skwarehouse.dpdns.org", label: "SKWarehouse" }');
-    expect(source).toContain('{ href: "https://skwbp.dpdns.org", label: "SKControl" }');
+    expect(source).toContain('{ href: "https://stylekorean.dpdns.org", label: "StyleKorean", key: "stylekorean" }');
+    expect(source).toContain('{ href: "https://skwarehouse.dpdns.org", label: "SKWarehouse", key: "skwarehouse" }');
+    expect(source).toContain('{ href: "https://skwbp.dpdns.org", label: "SKControl", key: "skwbp" }');
   });
 
   it("keeps each light route presentation-only around the same Home implementation", () => {

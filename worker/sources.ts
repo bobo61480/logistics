@@ -428,6 +428,18 @@ export interface GmailIngestionEvent {
   sourceEmailUrl: string;
   driveFileUrl: string;
   timestamp: string;
+  // Present only on "needsReview" rows — the composite identifier
+  // reviewPendingRow_ (Validation.gs) re-derives server-side from the live
+  // PENDING VERIFICATION sheet to locate the exact row for an approve/reject
+  // action. Deliberately excludes Timestamp: gviz's date rendering and Apps
+  // Script's getDisplayValues() can format the same cell differently, so a
+  // string-exact timestamp match would be fragile. Uniqueness instead comes
+  // from requiring an exact match on kind+customer+invoice+blOrPro+container
+  // among currently-open rows, and refusing (never guessing) if more than
+  // one open row matches. Rows with no usable identifier get no reviewKey —
+  // the UI disables review actions on those rather than risk acting on the
+  // wrong shipment.
+  reviewKey?: string;
 }
 
 const AUTO_TAG = /\[auto:\s*(https:\/\/mail\.google\.com\/[^\]\s]+)\]/i;
@@ -505,14 +517,25 @@ function pendingEventsFromTable(table: GvizTable | null): GmailIngestionEvent[] 
   return rows.slice(1).map((row) => {
     const rawStatus = cell(row, idx("Status")).trim().toUpperCase();
     const kind = cell(row, idx("Kind")).trim().toLowerCase();
+    const customer = cell(row, idx("Customer"));
+    const invoice = cell(row, idx("Invoice / PI"));
+    const blOrPro = cell(row, idx("BL / PRO"));
+    const container = cell(row, idx("Container"));
+    // Mirrors reviewKeyForRow_ in Validation.gs field-for-field (kind,
+    // customer, invoice, BL/PRO, container — uppercased, pipe-joined). Only
+    // NEEDS REVIEW rows get a key: approve/reject only ever targets an open
+    // review item, and the Apps Script side only matches against open rows.
+    const reviewKey = rawStatus === "NEEDS REVIEW" && (customer || invoice || blOrPro || container)
+      ? [kind, customer, invoice, blOrPro, container].map((value) => value.trim().toUpperCase()).join("|")
+      : undefined;
     return {
       status: statusMap[rawStatus] ?? "needsReview",
       kind: kind === "inbound" || kind === "outbound" ? kind : "",
-      shipmentId: firstNonEmpty(cell(row, idx("Invoice / PI")), cell(row, idx("BL / PRO")), cell(row, idx("Container"))),
-      customer: cell(row, idx("Customer")),
-      invoice: cell(row, idx("Invoice / PI")),
-      blOrPro: cell(row, idx("BL / PRO")),
-      container: cell(row, idx("Container")),
+      shipmentId: firstNonEmpty(invoice, blOrPro, container),
+      customer,
+      invoice,
+      blOrPro,
+      container,
       shipDateOrEta: cell(row, idx("Ship Date / ETA")),
       carrierOrVessel: cell(row, idx("Carrier / Vessel")),
       note: cell(row, idx("Note")),
@@ -520,6 +543,7 @@ function pendingEventsFromTable(table: GvizTable | null): GmailIngestionEvent[] 
       sourceEmailUrl: cell(row, idx("Source Email")),
       driveFileUrl: cell(row, idx("Drive File")),
       timestamp: cell(row, idx("Timestamp")),
+      reviewKey,
     };
   });
 }

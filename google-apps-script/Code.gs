@@ -160,6 +160,14 @@ function doPost(e) {
       rawContents = e.parameter.postData;
     }
     const request = JSON.parse(rawContents || "{}");
+
+    // Dashboard-driven Gmail-ingestion approve/reject. Kept as an explicit
+    // "action" discriminator so the pre-existing status-update callers
+    // (which never send "action") are completely unaffected.
+    if (request.action === "reviewPending") {
+      return json_(reviewPendingRow_(request));
+    }
+
     validateRequest_(request);
     const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
     const sheet = spreadsheet.getSheetByName(request.sourceSheet);

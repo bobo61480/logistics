@@ -7,7 +7,7 @@ import { packingListPallets } from "./inbound-pallets";
 import { computeLiveKpis } from "../lib/sales-kpis";
 import FulfillmentTkOrders from "./FulfillmentTkOrders";
 import { GmailIngestionCard, type GmailIngestionEvent } from "./gmail-ingestion-card";
-import { DriveArchiveCard } from "./drive-archive-card";
+import { DriveArchiveCard, driveLinkGlyph } from "./drive-archive-card";
 
 const SHEET_ID =
   process.env.NEXT_PUBLIC_LOGISTICS_MASTER_SHEET_ID ??
@@ -32,6 +32,8 @@ const DATA_ENDPOINT =
   process.env.NEXT_PUBLIC_LOGISTICS_SNAPSHOT_URL ?? "/api/logistics/snapshot";
 const STATUS_ENDPOINT =
   process.env.NEXT_PUBLIC_LOGISTICS_STATUS_URL ?? "/api/logistics/status";
+const PENDING_REVIEW_ENDPOINT =
+  process.env.NEXT_PUBLIC_LOGISTICS_PENDING_REVIEW_URL ?? "/api/logistics/pending-review";
 const LEGACY_WRITE_ENDPOINT =
   process.env.NEXT_PUBLIC_APPS_SCRIPT_WRITE_URL ?? "";
 const AUTO_REFRESH_MS = 30 * 60 * 1000;
@@ -888,6 +890,7 @@ function InventoryPanel({
                         target="_blank"
                         title={`Open packing-list documents for ${shipment}`}
                       >
+                        <span aria-hidden="true">{driveLinkGlyph(shipment, packingListUrl(shipment))}</span>{" "}
                         {shipment} <span aria-hidden="true">↗</span>
                       </a>
                     ))}
@@ -952,6 +955,7 @@ function LowStockPanel({
                       <span className="inventory-shipment-links">
                         {shipments.map((shipment) => (
                           <a href={packingListUrl(shipment)} key={shipment} rel="noreferrer" target="_blank">
+                            <span aria-hidden="true">{driveLinkGlyph(shipment, packingListUrl(shipment))}</span>{" "}
                             {shipment} <span aria-hidden="true">↗</span>
                           </a>
                         ))}
@@ -1918,6 +1922,31 @@ async function postStatus(item: ScheduleItem, status: string) {
   }
 }
 
+/**
+ * Approve or reject one Gmail-ingestion review row. No legacy-endpoint
+ * fallback (unlike postStatus) — this is a brand-new action with no prior
+ * static-host caller to stay compatible with.
+ */
+async function postPendingReview(event: GmailIngestionEvent, decision: "approve" | "reject") {
+  if (!event.reviewKey) {
+    throw new Error(
+      "This row has no unique customer, invoice, BL/PRO, or container identifier. Review actions are disabled to prevent resolving the wrong shipment — edit it directly in the PENDING VERIFICATION sheet.",
+    );
+  }
+  const response = await fetch(PENDING_REVIEW_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reviewKey: event.reviewKey, decision, shipmentId: event.shipmentId || undefined }),
+  });
+  const result = (await response.json().catch(() => null)) as
+    | { ok?: boolean; error?: string; action?: string; status?: string }
+    | null;
+  if (!response.ok || result?.ok !== true) {
+    throw new Error(result?.error || `Review action failed (${response.status}).`);
+  }
+  return result;
+}
+
 function ScheduleCard({
   item,
   saving,
@@ -2263,6 +2292,7 @@ export default function Home() {
   const [query, setQuery] = useState("");
   const [includeFinished, setIncludeFinished] = useState(false);
   const [savingId, setSavingId] = useState("");
+  const [reviewingKey, setReviewingKey] = useState("");
   const [notice, setNotice] = useState("");
   const [kpis, setKpis] = useState<KpiSnapshot>(EMPTY_KPIS);
   const [inboundInventory, setInboundInventory] = useState<InventoryItem[]>([]);
@@ -2513,6 +2543,32 @@ export default function Home() {
       );
     } finally {
       setSavingId("");
+    }
+  };
+
+  const handleReview = async (event: GmailIngestionEvent, decision: "approve" | "reject") => {
+    const key = event.reviewKey ?? "";
+    setReviewingKey(key);
+    setNotice(decision === "approve" ? `Approving ${event.shipmentId || "review row"}…` : `Rejecting ${event.shipmentId || "review row"}…`);
+    try {
+      await postPendingReview(event, decision);
+      setGmailIngestion((current) =>
+        (current ?? []).map((row) =>
+          row.reviewKey && row.reviewKey === key
+            ? { ...row, status: decision === "approve" ? "committed" : "rejected", reviewKey: undefined }
+            : row,
+        ),
+      );
+      setNotice(
+        decision === "approve"
+          ? `${event.shipmentId || "Row"} approved and committed to the live schedule.`
+          : `${event.shipmentId || "Row"} rejected.`,
+      );
+      window.setTimeout(() => setNotice(""), 4500);
+    } catch (reviewError) {
+      setNotice(reviewError instanceof Error ? reviewError.message : "Review action failed. Try again.");
+    } finally {
+      setReviewingKey("");
     }
   };
 
@@ -2816,7 +2872,7 @@ export default function Home() {
       {/* .ingestion-archive-row keeps this row ordered above the footer on the
           flex-reordered /light, /light-full, and /fulfillment-style variants. */}
       <div className="ingestion-archive-row mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2" aria-label="Email ingestion and document archive">
-        <GmailIngestionCard events={gmailIngestion} loading={loading} />
+        <GmailIngestionCard events={gmailIngestion} loading={loading} onReview={handleReview} reviewingKey={reviewingKey} />
         <DriveArchiveCard />
       </div>
 
