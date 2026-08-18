@@ -88,6 +88,20 @@ function readPendingVerificationTail_(spreadsheet, sheetName, maxRows, maxColumn
     if (lastRow === 1) return header;
     const firstDataRow = Math.max(2, lastRow - Math.max(1, Number(maxRows) || 1) + 1);
     const rows = sheet.getRange(firstDataRow, 1, lastRow - firstDataRow + 1, lastColumn).getDisplayValues();
+    // Review status transitions happen IN PLACE on existing rows, so an old
+    // NEEDS REVIEW row that predates the tail would otherwise never surface.
+    // One column-C read covers the pre-tail region cheaply; unresolved rows
+    // are prepended (bounded, normally zero).
+    if (firstDataRow > 2) {
+      const statuses = sheet.getRange(2, 3, firstDataRow - 2, 1).getDisplayValues();
+      const straggler = [];
+      for (let index = 0; index < statuses.length && straggler.length < 200; index += 1) {
+        if (String(statuses[index][0]).trim().toUpperCase() === "NEEDS REVIEW") straggler.push(index + 2);
+      }
+      straggler.forEach(function (rowNumber) {
+        rows.unshift(sheet.getRange(rowNumber, 1, 1, lastColumn).getDisplayValues()[0]);
+      });
+    }
     return header.concat(rows);
   } catch (error) {
     return null;

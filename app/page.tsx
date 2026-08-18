@@ -1003,7 +1003,7 @@ type WorkerSnapshot = {
     inventoryDashboardTable?: any;
     skwInboundTable?: any;
     skwStockTable?: any;
-    gmailIngestion?: GmailIngestionEvent[];
+    gmailIngestion?: GmailIngestionEvent[] | null;
   };
   kpis?: KpiSnapshot | null;
 };

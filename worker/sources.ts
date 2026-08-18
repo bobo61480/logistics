@@ -267,6 +267,15 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
       const inventoryTable = rowsToGvizTable(raw.inventoryDashboardTable);
       const inboundTable = rowsToGvizTable(raw.skwInboundTable);
       const stockTable = rowsToGvizTable(raw.skwStockTable);
+      // Code.gs returns pendingVerification in the snapshot; until the deployed
+      // Apps Script catches up, fall back to reading the tab directly so review
+      // events don't vanish from the feed in the meantime.
+      const pendingFallback = raw.pendingVerification
+        ? null
+        : await fetchGvizSource("Pending Verification", LOGISTICS_MASTER_ID, PENDING_VERIFICATION_QUERY);
+      const pendingTable = raw.pendingVerification
+        ? rowsToGvizTable(raw.pendingVerification)
+        : pendingFallback!.data;
       return {
         sourceHealth: [
           healthFor("IMPORTS", raw.imports),
@@ -278,6 +287,7 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
           healthFor("Inventory", inventoryTable),
           healthFor("SKW Inbound", inboundTable),
           healthFor("SKW Stock", stockTable),
+          pendingFallback ? pendingFallback.health : healthFor("Pending Verification", pendingTable),
         ],
         sources: {
           imports: raw.imports ? normalizeImportsParcelRows(raw.imports) : null,
@@ -288,16 +298,16 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
           inventoryDashboardTable: inventoryTable,
           skwInboundTable: inboundTable,
           skwStockTable: stockTable,
-          // Code.gs now returns pendingVerification in the snapshot; until the
-          // deployed Apps Script catches up, fall back to reading the tab
-          // directly so review events never silently vanish from the feed.
-          gmailIngestion: deriveGmailIngestion({
-            importsRows: raw.imports ?? null,
-            outboundRows: effectiveOutbound.rows,
-            pendingVerificationTable:
-              rowsToGvizTable(raw.pendingVerification) ??
-              (await fetchGvizSource("Pending Verification", LOGISTICS_MASTER_ID, PENDING_VERIFICATION_QUERY)).data,
-          }),
+          // null (feed unavailable, shown as such by the card) when the pending
+          // read failed — never an empty array, which would misreport "nothing
+          // to review" and could be persisted to D1 over the last good feed.
+          gmailIngestion: pendingTable
+            ? deriveGmailIngestion({
+                importsRows: raw.imports ?? null,
+                outboundRows: effectiveOutbound.rows,
+                pendingVerificationTable: pendingTable,
+              })
+            : null,
         },
         kpiRows: {
           nationalRows: raw.nationalOutbound ?? [],
@@ -342,11 +352,15 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
       inventoryDashboardTable: inventoryDashboardTable.data,
       skwInboundTable: skwInboundTable.data,
       skwStockTable: skwStockTable.data,
-      gmailIngestion: deriveGmailIngestion({
-        importsRows: imports.data,
-        outboundRows: effectiveOutbound.rows,
-        pendingVerificationTable: pendingVerification.data,
-      }),
+      // null when the pending read failed (its sourceHealth entry carries the
+      // error) — an empty array would misreport "nothing to review".
+      gmailIngestion: pendingVerification.data
+        ? deriveGmailIngestion({
+            importsRows: imports.data,
+            outboundRows: effectiveOutbound.rows,
+            pendingVerificationTable: pendingVerification.data,
+          })
+        : null,
     },
     kpiRows: {
       nationalRows: gvizTableRows(nationalOutbound.data),
@@ -488,11 +502,17 @@ export function deriveGmailIngestion(input: {
   // bottom. Sort newest-first (timestamped rows by timestamp, the rest by
   // reverse sheet order) BEFORE applying the cap, or new actionable review
   // items would fall off the feed once the tab exceeds 200 rows.
-  const pending = pendingEventsFromTable(input.pendingVerificationTable)
+  const pendingSorted = pendingEventsFromTable(input.pendingVerificationTable)
     .map((event, index) => ({ event, sortKey: Date.parse(event.timestamp) || index }))
     .sort((a, b) => b.sortKey - a.sortKey)
     .map(({ event }) => event);
+  // Status transitions happen IN PLACE on existing rows (an old NEEDS REVIEW
+  // row keeps its original timestamp when approved/rejected), so actionable
+  // review items rank ahead of resolved audit rows — the cap must never hide
+  // an open review item behind newer resolved history.
+  const actionable = pendingSorted.filter((event) => event.status === "needsReview");
+  const resolved = pendingSorted.filter((event) => event.status !== "needsReview");
   // Committed rows carry no timestamp (Sheets doesn't store one) so they sort
   // after pending.
-  return [...pending, ...committed].slice(0, 200);
+  return [...actionable, ...resolved, ...committed].slice(0, 200);
 }

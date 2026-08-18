@@ -156,6 +156,32 @@ describe("deriveGmailIngestion", () => {
     expect(events[199].invoice).toBe("IN60");
   });
 
+  it("keeps open NEEDS REVIEW items ahead of newer resolved audit rows so the cap never hides them", () => {
+    const base = Date.UTC(2026, 7, 1);
+    // 5 old open reviews buried under 250 newer resolved (approved) rows.
+    const rows = [
+      ...Array.from({ length: 5 }, (_, index) => [
+        new Date(base + index * 60_000).toISOString(),
+        "inbound", "NEEDS REVIEW", "", "", `IN-OPEN-${index}`, "", "", "", "", "", "", "", "", "{}",
+      ]),
+      ...Array.from({ length: 250 }, (_, index) => [
+        new Date(base + (100 + index) * 60_000).toISOString(),
+        "inbound", "APPROVED", "", "", `IN-DONE-${index}`, "", "", "", "", "", "", "", "", "{}",
+      ]),
+    ];
+    const events = deriveGmailIngestion({
+      importsRows: null,
+      outboundRows: null,
+      pendingVerificationTable: gvizTable(PENDING_HEADER, rows),
+    });
+    expect(events).toHaveLength(200);
+    expect(events.slice(0, 5).every((event) => event.status === "needsReview")).toBe(true);
+    expect(events.slice(0, 5).map((event) => event.invoice)).toEqual(
+      ["IN-OPEN-4", "IN-OPEN-3", "IN-OPEN-2", "IN-OPEN-1", "IN-OPEN-0"],
+    );
+    expect(events[5].status).toBe("approved");
+  });
+
   it("orders untimestamped pending rows newest-appended-first", () => {
     const table = gvizTable(PENDING_HEADER, [
       ["", "inbound", "NEEDS REVIEW", "", "", "IN-OLD", "", "", "", "", "", "", "", "", "{}"],
