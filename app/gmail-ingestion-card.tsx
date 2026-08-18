@@ -29,7 +29,10 @@ const STATUS_STYLE: Record<IngestionStatus, string> = {
 };
 
 const STATUS_LABEL: Record<IngestionStatus, string> = {
-  committed: "Auto-committed",
+  // Neutral wording: COMMITTED rows in PENDING VERIFICATION include manually
+  // approved commits (processApprovedPending flips APPROVED → COMMITTED), so
+  // "Auto-committed" would misstate who authorized the write.
+  committed: "Committed",
   needsReview: "Needs review",
   approved: "Approved",
   rejected: "Rejected",
@@ -89,8 +92,12 @@ export function GmailIngestionCard({
       <div className="max-h-96 overflow-y-auto">
         {unavailable && (
           <p className="px-5 py-4 text-sm text-red-600">
-            Ingestion feed unavailable — the Worker snapshot is offline and the dashboard is running
-            on its direct-Sheets fallback.
+            {/* null covers several causes (PENDING VERIFICATION read failed, the
+                dashboard is on its direct-Sheets fallback, or the deployed Worker
+                predates the feed) — stay generic so operators aren't pointed at
+                the wrong subsystem. */}
+            Ingestion feed unavailable right now — the rest of the dashboard is unaffected. Check
+            the sync strip and source health for the degraded source.
           </p>
         )}
         {loading && events === null && <p className="px-5 py-4 text-sm text-neutral-500">Loading…</p>}

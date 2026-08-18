@@ -185,6 +185,42 @@ const PENDING_VERIFICATION_QUERY = {
   tq: "select * order by A desc limit 2000",
 } as const;
 
+// Review status transitions happen in place, so an old NEEDS REVIEW row can
+// predate the 2,000-row tail. This companion query recovers those open rows
+// (Validation.gs writes the status verbatim as "NEEDS REVIEW").
+const PENDING_VERIFICATION_OPEN_QUERY = {
+  sheet: "PENDING VERIFICATION",
+  range: "A:N",
+  headers: 1,
+  tq: "select * where C = 'NEEDS REVIEW' order by A desc limit 200",
+} as const;
+
+/**
+ * Direct read of PENDING VERIFICATION: the newest 2,000 rows plus any open
+ * NEEDS REVIEW rows older than that window (mirrors Code.gs's
+ * readPendingVerificationTail_). The open-rows query failing degrades to the
+ * tail alone rather than killing the feed.
+ */
+async function fetchPendingVerificationDirect(): Promise<SourceResult<GvizTable>> {
+  const [tail, open] = await Promise.all([
+    fetchGvizSource("Pending Verification", LOGISTICS_MASTER_ID, PENDING_VERIFICATION_QUERY),
+    fetchGvizSource("Pending Verification (open)", LOGISTICS_MASTER_ID, PENDING_VERIFICATION_OPEN_QUERY),
+  ]);
+  if (!tail.data || !open.data) return tail;
+  const seen = new Set(gvizTableRows(tail.data).slice(1).map((row) => JSON.stringify(row)));
+  const extraRows = gvizTableRows(open.data)
+    .slice(1)
+    .filter((row) => !seen.has(JSON.stringify(row)));
+  if (!extraRows.length) return tail;
+  return {
+    health: tail.health,
+    data: {
+      cols: tail.data.cols,
+      rows: [...(tail.data.rows ?? []), ...extraRows.map((row) => ({ c: row.map((value) => ({ v: value })) }))],
+    },
+  };
+}
+
 async function timedFetch(name: string, url: URL, maxBytes = MAX_SOURCE_BYTES, timeoutMs = 20_000): Promise<SourceResult<string>> {
   const started = Date.now();
   const controller = new AbortController();
@@ -272,7 +308,7 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
       // events don't vanish from the feed in the meantime.
       const pendingFallback = raw.pendingVerification
         ? null
-        : await fetchGvizSource("Pending Verification", LOGISTICS_MASTER_ID, PENDING_VERIFICATION_QUERY);
+        : await fetchPendingVerificationDirect();
       const pendingTable = raw.pendingVerification
         ? rowsToGvizTable(raw.pendingVerification)
         : pendingFallback!.data;
@@ -329,7 +365,7 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
     fetchGvizSource("Inventory", LOGISTICS_MASTER_ID, { sheet: "INVENTORY", range: "A1:O6500", headers: 1 }),
     fetchGvizSource("SKW Inbound", LOGISTICS_MASTER_ID, { sheet: "SKW_Inbound", range: "A1:R2500", headers: 1 }),
     fetchGvizSource("SKW Stock", LOGISTICS_MASTER_ID, { sheet: "SKW_Stock", range: "A1:J2500", headers: 1 }),
-    fetchGvizSource("Pending Verification", LOGISTICS_MASTER_ID, PENDING_VERIFICATION_QUERY),
+    fetchPendingVerificationDirect(),
   ]);
 
   const effectiveOutbound = selectOutboundSource(outbound.data, trucking.data);

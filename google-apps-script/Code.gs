@@ -96,11 +96,17 @@ function readPendingVerificationTail_(spreadsheet, sheetName, maxRows, maxColumn
       const statuses = sheet.getRange(2, 3, firstDataRow - 2, 1).getDisplayValues();
       const straggler = [];
       for (let index = 0; index < statuses.length && straggler.length < 200; index += 1) {
-        if (String(statuses[index][0]).trim().toUpperCase() === "NEEDS REVIEW") straggler.push(index + 2);
+        if (String(statuses[index][0]).trim().toUpperCase() === "NEEDS REVIEW") straggler.push(index);
       }
-      straggler.forEach(function (rowNumber) {
-        rows.unshift(sheet.getRange(rowNumber, 1, 1, lastColumn).getDisplayValues()[0]);
-      });
+      if (straggler.length) {
+        // One batched read of the pre-tail block — per-row getRange calls
+        // would add up to 200 Spreadsheet-service round trips to a snapshot
+        // the Worker aborts after 60 seconds.
+        const preTail = sheet.getRange(2, 1, firstDataRow - 2, lastColumn).getDisplayValues();
+        straggler.forEach(function (offset) {
+          rows.unshift(preTail[offset]);
+        });
+      }
     }
     return header.concat(rows);
   } catch (error) {
