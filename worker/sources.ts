@@ -138,12 +138,12 @@ export function selectOutboundSource(
   scheduleRows: string[][] | null,
   truckingRows: string[][] | null,
 ): { rows: string[][] | null; meta: OutboundSourceMeta } {
-  const scheduleRowCount = populatedOutboundRows(scheduleRows, 3);
+  const scheduleRowCount = populatedOutboundRows(scheduleRows, 1);
   const truckingRowCount = populatedOutboundRows(truckingRows, 2);
   if (scheduleRowCount > 0) {
     return {
       rows: scheduleRows,
-      meta: { sheetName: "Outbound Shipping Schedule", headerRow: 3, rowCount: scheduleRowCount, fallback: false },
+      meta: { sheetName: "Outbound Shipping Schedule", headerRow: 1, rowCount: scheduleRowCount, fallback: false },
     };
   }
   if (truckingRowCount > 0) {
@@ -162,7 +162,7 @@ export function selectOutboundSource(
     rows: scheduleRows ?? truckingRows,
     meta: {
       sheetName: scheduleRows ? "Outbound Shipping Schedule" : "WH Trucking Request",
-      headerRow: scheduleRows ? 3 : 2,
+      headerRow: scheduleRows ? 1 : 2,
       rowCount: 0,
       fallback: Boolean(truckingRows),
       reason: "No populated outbound shipment rows are available",

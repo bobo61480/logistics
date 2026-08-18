@@ -4,13 +4,10 @@ import { describe, expect, it } from "vitest";
 const read = (path: string) => readFileSync(path, "utf8");
 
 describe("Control Tower light variants", () => {
-  it("exposes every comparison route in the shared appearance switcher", () => {
+  it("exposes the SKWarehouse and SKControl platform links in the shared header nav", () => {
     const source = read("app/style-switcher.tsx");
-    expect(source).toContain('{ href: "/", label: "Original" }');
-    expect(source).toContain('{ href: "/light-skin", label: "Light Skin" }');
-    expect(source).toContain('{ href: "/light", label: "Light Control Tower" }');
-    expect(source).toContain('{ href: "/light-full", label: "Light Full" }');
-    expect(source).toContain('{ href: "/fulfillment-style", label: "Fulfillment" }');
+    expect(source).toContain('{ href: "https://skwarehouse.dpdns.org", label: "SKWarehouse" }');
+    expect(source).toContain('{ href: "https://skwbp.dpdns.org", label: "SKControl" }');
   });
 
   it("keeps each light route presentation-only around the same Home implementation", () => {

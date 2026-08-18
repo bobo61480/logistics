@@ -1015,7 +1015,7 @@ type OutboundSourceMeta = {
 
 const OUTBOUND_SCHEDULE_META: OutboundSourceMeta = {
   sheetName: "Outbound Shipping Schedule",
-  headerRow: 3,
+  headerRow: 1,
   rowCount: 0,
   fallback: false,
 };
