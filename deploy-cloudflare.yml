@@ -1,9 +1,0 @@
-      - name: Install Wrangler
-        run: npm install -g wrangler@4.120.1
-
-      - name: Deploy canonical Worker
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.cfat_fV5wSsJ7JUhQNyO899hfv8r7MV3fZMFAnNjjVyOLbff557ce }}
-          accountId: ${{ secrets.0cf8898f7cdc52de3442ce954467a53f }}
-          command: deploy --config wrangler.toml
