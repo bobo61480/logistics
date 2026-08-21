@@ -1,0 +1,76 @@
+name: Deploy Apps Script backend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'google-apps-script/**'
+      - '.clasp.json'
+      - '.github/workflows/deploy-apps-script.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apps-script-production
+  cancel-in-progress: true
+
+env:
+  WRITE_ENDPOINT_DEPLOYMENT_ID: AKfycbz770kmpwqMTA-h-lzeLARgVnDh_VDjh-70OOKk_yE-iXJTmzAsVXUtln17QTOURO1R
+  CLASP_ACCESS_TOKEN: ${{ secrets.CLASP_ACCESS_TOKEN }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+
+      - name: Require clasp authentication
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CLASP_ACCESS_TOKEN" || { echo 'CLASP_ACCESS_TOKEN repository secret is required.'; exit 1; }
+          printf '%s' "$CLASP_ACCESS_TOKEN" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+
+      - name: Install clasp
+        run: npm install --global @google/clasp
+
+      - name: Push canonical Apps Script source
+        run: clasp push --force
+
+      - name: Update live writeback deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          clasp deploy \
+            --deploymentId "$WRITE_ENDPOINT_DEPLOYMENT_ID" \
+            --description "Auto-deploy from bobo61480/logistics $GITHUB_SHA"
+
+      - name: Verify deployment is still registered
+        shell: bash
+        run: |
+          set -euo pipefail
+          clasp deployments | grep -F "$WRITE_ENDPOINT_DEPLOYMENT_ID"
+
+      - name: Verify anonymous snapshot gateway
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="https://script.google.com/macros/s/$WRITE_ENDPOINT_DEPLOYMENT_ID/exec"
+          for attempt in 1 2 3; do
+            if curl -fsSL --max-time 120 "$endpoint?action=snapshot&_=$(date +%s)" -o /tmp/apps-script-snapshot.json \
+              && node -e 'const fs=require("fs");const payload=JSON.parse(fs.readFileSync("/tmp/apps-script-snapshot.json","utf8"));if(payload.ok!==true||!Array.isArray(payload.sources?.imports)||!Array.isArray(payload.sources?.trucking))process.exit(1);console.log(`Apps Script snapshot ${payload.generatedAt}; imports=${payload.sources.imports.length}; trucking=${payload.sources.trucking.length}`);'; then
+              exit 0
+            fi
+            echo "Apps Script snapshot verification attempt $attempt failed."
+            test -f /tmp/apps-script-snapshot.json && head -c 500 /tmp/apps-script-snapshot.json || true
+            sleep 10
+          done
+          echo "::error::Apps Script deployment is not an anonymous, healthy snapshot gateway."
+          exit 1

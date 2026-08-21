@@ -1,0 +1,29 @@
+node_modules/
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+pnpm-lock.yaml
+pnpm-workspace.yaml
+*.log
+.next-stale*
+.wrangler.production.toml
+
+# Prevent accidental version-specifier files (e.g. from mistyped `pip install pkg =1.0.0`)
+/=*
+
+# clasp OAuth credentials (stored in home dir, never in repo)
+.clasprc.json
+
+# Ephemeral task / agent output (large, session-specific)
+bob-task-*.json
+git-error-*.txt
+
+# Playwright output
+test-results/
+playwright-report/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+desktop.ini

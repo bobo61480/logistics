@@ -1,0 +1,56 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"git.allowForcePush": true,
+		"git.allowNoVerifyCommit": true,
+		"git.closeDiffOnOperation": true,
+		"npm.enableRunFromFolder": true,
+		"remote.SSH.remoteServerListenOnSocket": true,
+		"js/ts.implementationsCodeLens.enabled": true,
+		"js/ts.implementationsCodeLens.showOnInterfaceMethods": true,
+		"js/ts.referencesCodeLens.enabled": true,
+		"js/ts.referencesCodeLens.showOnAllFunctions": true,
+		"js/ts.tsdk.promptToUseWorkspaceVersion": true,
+		"js/ts.inlayHints.enumMemberValues.enabled": true,
+		"js/ts.inlayHints.functionLikeReturnTypes.enabled": true,
+		"js/ts.implementationsCodeLens.showOnAllClassMethods": true,
+		"js/ts.suggest.completeFunctionCalls": true,
+		"js/ts.preferGoToSourceDefinition": true,
+		"js/ts.implicitProjectConfig.checkJs": true,
+		"js/ts.implicitProjectConfig.experimentalDecorators": true,
+		"js/ts.tsserver.experimental.enableProjectDiagnostics": true,
+		"remote.downloadExtensionsLocally": true,
+		"problems.showCurrentInStatus": true,
+		"terminal.integrated.accessibleViewFocusOnCommandExecution": true,
+		"terminal.integrated.allowInUntrustedWorkspace": true,
+		"terminal.integrated.allowMnemonics": true,
+		"extensions.supportNodeGlobalNavigator": true,
+		"extensions.allowOpenInModalEditor": true,
+		"scm.alwaysShowActions": true,
+		"scm.alwaysShowRepositories": true,
+		"scm.diffDecorationsGutterPattern": {
+			"added": true
+		},
+		"debug.allowBreakpointsEverywhere": true,
+		"debug.console.acceptSuggestionOnEnter": "on",
+		"workbench.browser.openLocalhostLinks": true,
+		"screencastMode.keyboardOptions": {
+			"showCommandGroups": true
+		},
+		"workbench.settings.alwaysShowAdvancedSettings": true,
+		"workbench.settings.enableNaturalLanguageSearch": true,
+		"workbench.settings.useSplitJSON": true,
+		"workbench.editor.alwaysShowEditorActions": true,
+		"files.autoGuessEncoding": true,
+		"files.autoSave": "afterDelay",
+		"files.autoSaveWhenNoErrors": true,
+		"diffEditor.codeLens": true,
+		"diffEditor.experimental.useTrueInlineView": true,
+		"diffEditor.experimental.showMoves": true,
+		"editor.wordWrap": "on"
+	}
+}
