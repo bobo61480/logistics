@@ -1,4 +1,5 @@
-name = "stylekorean"
+name = "# wrangler.toml
+name = 'logistics'"
 main = "worker/index.ts"
 compatibility_date = "2026-08-10"
 workers_dev = false
