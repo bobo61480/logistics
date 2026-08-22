@@ -1,11 +1,8 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-<<<<<<< HEAD
-=======
 import { ProductionHealth } from "./production-health";
 import { StyleSwitcher } from "./style-switcher";
->>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -37,11 +34,8 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-<<<<<<< HEAD
-=======
         <StyleSwitcher />
         <ProductionHealth />
->>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
         {children}
       </body>
     </html>

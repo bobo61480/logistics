@@ -68,13 +68,8 @@ clasp push --force
 
 ### Automate via GitHub Actions (already set up)
 
-<<<<<<< HEAD
-The workflow `.github/workflows/deploy-planner.yml` has a `deploy-apps-script` job that
-runs `clasp push --force` whenever a `.gs` file changes on `main`.
-=======
 The workflow `.github/workflows/deploy-apps-script.yml` runs `clasp push --force`
 and updates the existing web-app deployment whenever a `.gs` file changes on `main`.
->>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
 
 You need to add **one repo secret**:
 
