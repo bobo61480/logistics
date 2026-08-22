@@ -1,8 +1,14 @@
 "use client";
 
+<<<<<<< HEAD
 // SKW Inventory Panels — Inbound line items + Current warehouse stock.
 // Self-contained: reads the SKW_Inbound and SKW_Stock tabs (created by the
 // Apps Script ingestion pipeline inside LOGISTICS MASTER 2026) via the gviz
+=======
+// SKW Inventory Panels — active inbound allocation + current warehouse stock.
+// Reads the filtered INVENTORY aggregate and SKW_Stock tabs (created by the
+// Apps Script inventory sync inside LOGISTICS MASTER 2026) via the gviz
+>>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
 // CSV endpoint. Tab-name addressing + cb + no-store per SKW conventions.
 
 import { useCallback, useEffect, useState } from "react";
@@ -72,6 +78,7 @@ export default function InventoryPanels() {
 
   const load = useCallback(async () => {
     try {
+<<<<<<< HEAD
       const [inbGrid, stockGrid] = await Promise.all([
         fetchTab("SKW_Inbound"),
         fetchTab("SKW_Stock"),
@@ -91,6 +98,30 @@ export default function InventoryPanels() {
           location: "",
           status: cell(r, "status"),
           eta: cell(r, "eta_date"),
+=======
+      const [inventoryGrid, stockGrid] = await Promise.all([
+        fetchTab("INVENTORY"),
+        fetchTab("SKW_Stock"),
+      ]);
+
+      const ih = indexHeaders(inventoryGrid[0] ?? []);
+      const cell = (r: string[], k: string) => (ih[k] !== undefined ? (r[ih[k]] ?? "").trim() : "");
+      const inboundRows = inventoryGrid.slice(1)
+        .filter((r) => {
+          const remaining = Number(cell(r, "remaining to receive").replace(/,/g, "")) || 0;
+          return Boolean(cell(r, "sku")) && remaining > 0 && Boolean(cell(r, "inbound shipments (차수)"));
+        })
+        .map((r) => ({
+          sku: cell(r, "sku"),
+          upc: cell(r, "barcode"),
+          name: cell(r, "product name"),
+          batch: "",
+          expiry: "",
+          qty: cell(r, "remaining to receive"),
+          location: "",
+          status: cell(r, "inbound shipments (차수)"),
+          eta: "",
+>>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
         }))
         .filter((r) => !FINISHED.has(r.status.toLowerCase()));
 
@@ -138,7 +169,11 @@ export default function InventoryPanels() {
             <th>Batch</th>
             <th>Expiration</th>
             <th>Qty (EA)</th>
+<<<<<<< HEAD
             {withLocation ? <th>Location</th> : <th>ETA · Status</th>}
+=======
+            {withLocation ? <th>Location</th> : <th>Current Import Shipment(s)</th>}
+>>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
           </tr>
         </thead>
         <tbody>

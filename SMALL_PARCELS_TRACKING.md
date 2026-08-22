@@ -12,6 +12,7 @@ The inbound schedule now includes **periodic status tracking for small parcels**
    - Automatically updates status to "DELIVERED" when received
 
 2. **IMPORTS Sheet** — Main inbound schedule
+<<<<<<< HEAD
    - Packages in "SCHEDULED" status (awaiting delivery)
    - Scans notes/remarks for tracking keywords
    - Updates status based on email notifications and tracking updates
@@ -19,6 +20,16 @@ The inbound schedule now includes **periodic status tracking for small parcels**
 ### Schedule
 
 - **Frequency:** Every 45 minutes
+=======
+   - Rows strictly below the `PARCELS` marker in `IMPORTS`
+   - Uses the tracking number and the ETA/status note in the parcel section
+   - Checks the official carrier page first (UPS/FedEx/USPS/DHL), then exact-tracking carrier email, then the sheet note
+   - Writes changed `WEBSITE STATUS` and tracked ETA details back to the exact source row
+
+### Schedule
+
+- **Frequency:** Every hour
+>>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
 - **Trigger Function:** `trackSmallParcelsStatusUpdates()`
 - **Pipeline Log:** All tracking runs logged in PIPELINE LOG tab
 
@@ -36,7 +47,11 @@ FOR each row in SKW_Inbound sheet:
 
 This automatically marks packages as delivered once they've been physically received.
 
+<<<<<<< HEAD
 ### IMPORTS Schedule Tracking
+=======
+### IMPORTS `PARCELS` Section Tracking
+>>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
 
 ```
 FOR each row in IMPORTS sheet:
@@ -76,7 +91,11 @@ In the **Apps Script editor** (Extensions → Apps Script), run `setupAllTrigger
 setupAllTriggers()
 ```
 
+<<<<<<< HEAD
 This provisions 7 triggers including `trackSmallParcelsStatusUpdates` (every 45 min).
+=======
+This provisions 7 triggers including `trackSmallParcelsStatusUpdates` (hourly).
+>>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
 
 ### Step 2 — Verify in Triggers View
 
@@ -86,7 +105,11 @@ Check **Triggers** (clock icon in left sidebar) — you should see:
 Function: trackSmallParcelsStatusUpdates
 Source: Time-driven
 Trigger type: Time-based trigger
+<<<<<<< HEAD
 Schedule: 45 minutes
+=======
+Schedule: Every hour
+>>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
 ```
 
 ### Step 3 — Monitor Pipeline Log
@@ -106,7 +129,11 @@ After the first run, check **PIPELINE LOG** tab in LOGISTICS MASTER 2026:
 |-------------|-----|--------|---------------|
 | Row 10 | ... | SCHEDULED | 2026-08-07 |
 
+<<<<<<< HEAD
 **After (45 minutes later):**
+=======
+**After (the next hourly tracking cycle):**
+>>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
 | SKW_Inbound | ... | STATUS | DATE_RECEIVED |
 |-------------|-----|--------|---------------|
 | Row 10 | ... | DELIVERED | 2026-08-07 |

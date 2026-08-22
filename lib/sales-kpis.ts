@@ -6,6 +6,13 @@
 const NATIONAL_SHEET_ID = "12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8";
 const WMS_SHEET_ID = "14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I";
 const LOGISTICS_SHEET_ID = "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc";
+<<<<<<< HEAD
+=======
+// Current LOGISTICS MASTER 2026 tab id for "WH Trucking Request".
+// The old gid 852802817 no longer exists in the workbook and caused the KPI
+// Promise.all to reject, which in turn made the entire dashboard source load fail.
+const LOGISTICS_TRUCKING_GID = 1418033635;
+>>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
 
 type CarrierKpi = {
   name: string;
@@ -14,7 +21,11 @@ type CarrierKpi = {
   shipmentPercent: number;
 };
 
+<<<<<<< HEAD
 function parseCsv(text: string) {
+=======
+export function parseCsv(text: string) {
+>>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
   const rows: string[][] = [];
   let row: string[] = [];
   let value = "";
@@ -53,7 +64,11 @@ function parseCsv(text: string) {
   return rows;
 }
 
+<<<<<<< HEAD
 function dateCode(value: string) {
+=======
+export function dateCode(value: string) {
+>>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
   const match = value.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
   if (!match) return 0;
   let year = Number(match[3]);
@@ -61,7 +76,11 @@ function dateCode(value: string) {
   return year * 10_000 + Number(match[1]) * 100 + Number(match[2]);
 }
 
+<<<<<<< HEAD
 function freightDateCode(value: string, today: ReturnType<typeof pacificDateParts>) {
+=======
+export function freightDateCode(value: string, today: ReturnType<typeof pacificDateParts>) {
+>>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
   const full = dateCode(value);
   if (full) return full;
   const match = value.trim().match(/^(\d{1,2})\/(\d{1,2})$/);
@@ -73,7 +92,11 @@ function freightDateCode(value: string, today: ReturnType<typeof pacificDatePart
   return year * 10_000 + month * 100 + day;
 }
 
+<<<<<<< HEAD
 function amount(value: string, allowSuffix: boolean) {
+=======
+export function amount(value: string, allowSuffix: boolean) {
+>>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
   const text = value.trim().toUpperCase().replace(/[$,\s]/g, "");
   const match = text.match(allowSuffix ? /^(-?\d+(?:\.\d+)?)([KMB])?$/ : /^(-?\d+(?:\.\d+)?)$/);
   if (!match) return null;
@@ -89,24 +112,40 @@ function amount(value: string, allowSuffix: boolean) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+<<<<<<< HEAD
 function freightAmount(value: string) {
+=======
+export function freightAmount(value: string) {
+>>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
   const text = value.trim().toUpperCase().replace(/\bUSD\b/g, "").trim();
   if (!text || /[A-Z]/.test(text) || !/^[\s$,\d().-]+$/.test(text)) return 0;
   const parsed = amount(text.replace(/[()]/g, ""), true) ?? 0;
   return parsed > 0 && parsed <= 250_000 ? parsed : 0;
 }
 
+<<<<<<< HEAD
 function loadType(value: string) {
+=======
+export function loadType(value: string) {
+>>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
   const text = value.trim();
   if (/\bFTL\b|FULL\s*TRUCK|TRUCKLOAD/i.test(text)) return "FTL" as const;
   return Number(text.match(/\d+/)?.[0] ?? 0) >= 10 ? ("FTL" as const) : ("LTL" as const);
 }
 
+<<<<<<< HEAD
 function isNewJerseyDestination(destination: string) {
   return /\b(?:NJ|NEW JERSEY)\b/i.test(destination.trim());
 }
 
 function distanceBand(destination: string) {
+=======
+export function isNewJerseyDestination(destination: string) {
+  return /\b(?:NJ|NEW JERSEY)\b/i.test(destination.trim());
+}
+
+export function distanceBand(destination: string) {
+>>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
   const text = destination.trim().toUpperCase();
   if (!text) return "unknown" as const;
   const localCity =
@@ -128,7 +167,11 @@ function distanceBand(destination: string) {
   return "unknown" as const;
 }
 
+<<<<<<< HEAD
 function pacificDateParts() {
+=======
+export function pacificDateParts() {
+>>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Los_Angeles",
     year: "numeric",
@@ -159,7 +202,11 @@ export async function computeLiveKpis(): Promise<Record<string, number | string 
     const [nationalRows, wmsRows, truckingRows, transferRows] = await Promise.all([
       fullCsv(NATIONAL_SHEET_ID, 99300389),
       fullCsv(WMS_SHEET_ID, 0),
+<<<<<<< HEAD
       fullCsv(LOGISTICS_SHEET_ID, 852802817),
+=======
+      fullCsv(LOGISTICS_SHEET_ID, LOGISTICS_TRUCKING_GID),
+>>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
       fullCsv(LOGISTICS_SHEET_ID, 1834454901),
     ]);
     const today = pacificDateParts();

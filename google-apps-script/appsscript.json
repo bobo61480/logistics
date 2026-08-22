@@ -11,6 +11,13 @@
   },
   "exceptionLogging": "STACKDRIVER",
   "runtimeVersion": "V8",
+<<<<<<< HEAD
+=======
+  "webapp": {
+    "access": "ANYONE_ANONYMOUS",
+    "executeAs": "USER_DEPLOYING"
+  },
+>>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
   "oauthScopes": [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/gmail.modify",

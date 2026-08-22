@@ -1,0 +1,232 @@
+name: Deploy canonical logistics site to Cloudflare
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-production
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build static export
+        run: npm run build
+
+      - name: Verify canonical export
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f out/index.html
+          test -d out/_next
+          test -f out/light/index.html
+          test -f out/light-skin/index.html
+          test -f out/light-full/index.html
+          test -f out/fulfillment-style/index.html
+
+      - name: Prepare production D1 binding when permitted
+        id: database
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -uo pipefail
+          database_name="stylekorean-logistics-read-model"
+          production_config=".wrangler.production.toml"
+          database_config=".wrangler.database.toml"
+          cp wrangler.toml "$production_config"
+          cp wrangler.toml "$database_config"
+
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] || [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            echo "::warning::CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID must both be configured; deploying the verified Google Sheets fallback without a database binding."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! databases="$(npx wrangler d1 list --json 2>/tmp/d1-list.log)"; then
+            echo "::warning::D1 permission is unavailable; the token must contain Account > D1 > Edit and target the same account as CLOUDFLARE_ACCOUNT_ID. Deploying the verified Google Sheets fallback without a database binding."
+            sed -n '1,80p' /tmp/d1-list.log
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          database_id="$(DATABASES="$databases" DATABASE_NAME="$database_name" node -e 'const rows=JSON.parse(process.env.DATABASES); const match=rows.find((row)=>row.name===process.env.DATABASE_NAME); process.stdout.write(match?.uuid || "")')"
+
+          if [ -z "$database_id" ]; then
+            if ! npx wrangler d1 create "$database_name" --location wnam; then
+              echo "::warning::D1 creation was rejected; deploying the verified Google Sheets fallback without a database binding."
+              echo "configured=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if ! databases="$(npx wrangler d1 list --json)"; then
+              echo "::warning::D1 could not be read after creation; deploying without a database binding."
+              echo "configured=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            database_id="$(DATABASES="$databases" DATABASE_NAME="$database_name" node -e 'const rows=JSON.parse(process.env.DATABASES); const match=rows.find((row)=>row.name===process.env.DATABASE_NAME); process.stdout.write(match?.uuid || "")')"
+          fi
+
+          if [ -z "$database_id" ]; then
+            echo "::warning::D1 database UUID was not returned; deploying without a database binding."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          cat >> "$database_config" <<EOF
+
+          [[d1_databases]]
+          binding = "DB"
+          database_name = "$database_name"
+          database_id = "$database_id"
+          migrations_dir = "./migrations"
+
+          [triggers]
+          crons = ["*/15 * * * *"]
+          EOF
+          if ! npx wrangler d1 migrations apply "$database_name" --remote --config "$database_config"; then
+            echo "::warning::D1 migrations failed; deploying without the unsafe or incomplete database binding."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          mv "$database_config" "$production_config"
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy canonical Worker version without mutating its existing route
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          production_config=".wrangler.production.toml"
+          version_config=".wrangler.version.toml"
+          release_tag="release-${GITHUB_SHA}-attempt-${GITHUB_RUN_ATTEMPT}"
+
+          # The production route already targets this Worker. Version uploads and
+          # deployments do not need zone-write authority, so keep route lifecycle
+          # separate from routine code/data releases.
+          awk '
+            /^\[\[routes\]\]$/ { skip_route = 1; next }
+            skip_route && /^\[/ { skip_route = 0 }
+            !skip_route { print }
+          ' "$production_config" > "$version_config"
+
+          if grep -q '^\[\[routes\]\]$' "$version_config"; then
+            echo "::error::The version deployment config still contains a route block."
+            exit 1
+          fi
+
+          npx wrangler versions upload \
+            --config "$version_config" \
+            --tag "$release_tag" \
+            --message "StyleKorean release ${GITHUB_SHA}"
+          npx wrangler versions deploy \
+            --config "$version_config" \
+            --version-tag "$release_tag" \
+            --percentage 100 \
+            --message "StyleKorean production ${GITHUB_SHA}" \
+            --yes
+          npx wrangler triggers deploy \
+            --config "$version_config" \
+            --triggers "*/15 * * * *"
+
+      - name: Verify live custom domain, appearance routes, and Worker APIs
+        shell: bash
+        env:
+          EXPECTED_DATABASE_CONFIGURED: ${{ steps.database.outputs.configured }}
+        run: |
+          set -euo pipefail
+          fetch_route() {
+            local url="$1"
+            local body_file="$2"
+            local headers_file="$3"
+            local status
+
+            status="$(curl -sSL --max-time 30 \
+              -H 'Accept: text/html,application/xhtml+xml' \
+              -H 'User-Agent: StyleKorean-Production-Smoke/1.0' \
+              -D "$headers_file" \
+              -o "$body_file" \
+              -w '%{http_code}' \
+              "$url")" || status="curl-error"
+
+            if [[ "$status" == 2* ]]; then
+              return 0
+            fi
+
+            echo "Route request failed with HTTP ${status}: ${url}"
+            echo "Response headers:"
+            sed -n '1,40p' "$headers_file" 2>/dev/null || true
+            echo "Response body (first 1,200 bytes):"
+            head -c 1200 "$body_file" 2>/dev/null || true
+            echo
+            return 1
+          }
+
+          for attempt in 1 2 3 4 5 6; do
+            suffix="?release=${GITHUB_SHA}&attempt=${attempt}"
+            failed=0
+            for route in "/" "/light-skin" "/light" "/light-full" "/fulfillment-style"; do
+              safe_name="$(echo "$route" | tr '/' '_' | sed 's/^_$/root/')"
+              if ! fetch_route \
+                "https://stylekorean.dpdns.org${route}${suffix}" \
+                "/tmp/live-${safe_name}.html" \
+                "/tmp/live-${safe_name}.headers"; then
+                echo "Route failed on attempt ${attempt}: ${route}"
+                failed=1
+                break
+              fi
+              if ! grep -Fiq 'StyleKorean' "/tmp/live-${safe_name}.html"; then
+                echo "StyleKorean application marker missing on attempt ${attempt}: ${route}"
+                head -c 1200 "/tmp/live-${safe_name}.html" || true
+                echo
+                failed=1
+                break
+              fi
+            done
+
+            if [ "$failed" -eq 0 ] \
+              && curl -fsSL --max-time 30 -D /tmp/live-health.headers "https://stylekorean.dpdns.org/api/logistics/health${suffix}" -o /tmp/live-health.json \
+              && curl -fsSL --max-time 30 "https://stylekorean.dpdns.org/api/logistics/reconciliation${suffix}" -o /tmp/live-reconciliation.json \
+              && curl -fsSL --max-time 60 "https://stylekorean.dpdns.org/api/logistics/snapshot${suffix}" -o /tmp/live-snapshot.json \
+              && grep -Fq '"ok":true' /tmp/live-health.json \
+              && grep -Fq '"ok":true' /tmp/live-snapshot.json \
+              && grep -Fq 'sourceHealth' /tmp/live-snapshot.json \
+              && grep -Fq 'generatedAt' /tmp/live-snapshot.json \
+              && grep -Fiq 'x-content-type-options: nosniff' /tmp/live-health.headers \
+              && grep -Fiq 'x-frame-options: DENY' /tmp/live-health.headers \
+              && node -e 'const fs=require("fs"); const expectedDb=process.env.EXPECTED_DATABASE_CONFIGURED==="true"; const health=JSON.parse(fs.readFileSync("/tmp/live-health.json","utf8")); const reconciliation=JSON.parse(fs.readFileSync("/tmp/live-reconciliation.json","utf8")); const snapshot=JSON.parse(fs.readFileSync("/tmp/live-snapshot.json","utf8")); if(health.ok!==true||health.version!=="2026-08-13-worker-v8-public-guardrails"||health.accessPolicy!=="public"||health.statusWriteAuthentication!=="none"||!String(health.statusWriteRateLimit).includes("30 requests per 60 seconds")||health.databaseConfigured!==expectedDb||reconciliation.ok!==true||reconciliation.databaseConfigured!==expectedDb||snapshot.ok!==true||!Array.isArray(snapshot.sourceHealth)||Number.isNaN(Date.parse(snapshot.generatedAt))) process.exit(1); if(expectedDb&&(reconciliation.ready!==true||snapshot.storage!=="d1"||snapshot.stale===true||!String(health.dataStore).includes("D1")||Number(health.databaseAgeSeconds)>30*60||Date.now()-Date.parse(snapshot.generatedAt)>30*60*1000)) process.exit(1); if(!expectedDb&&(reconciliation.ready!==false||reconciliation.activationRequired!==true||snapshot.storage!=="sheets")) process.exit(1); const sources=new Map(snapshot.sourceHealth.map(i=>[i.name,i])); if(!sources.get("IMPORTS")?.ok) process.exit(1); const meta=snapshot.sources?.outboundMeta; if(!meta||!["Outbound Shipping Schedule","WH Trucking Request"].includes(meta.sheetName)) process.exit(1); if(!sources.get(meta.sheetName)?.ok){console.error(`Effective outbound source unhealthy: ${meta.sheetName}`);process.exit(1)} console.log(`Live Worker ${health.version}; storage=${snapshot.storage}; ageSeconds=${health.databaseAgeSeconds}; outbound=${meta.sheetName}; snapshot ${snapshot.generatedAt}; ${snapshot.sourceHealth.length} source checks.`);'; then
+              echo "Live custom domain, all five appearance routes, health API, and snapshot API verified."
+              exit 0
+            fi
+
+            echo "Live verification attempt ${attempt} failed."
+            test -f /tmp/live-health.json && head -c 800 /tmp/live-health.json || true
+            test -f /tmp/live-snapshot.json && head -c 1200 /tmp/live-snapshot.json || true
+            sleep 10
+          done
+          echo "Production verification failed after six attempts."
+          exit 1
