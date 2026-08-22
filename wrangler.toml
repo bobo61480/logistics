@@ -1,4 +1,4 @@
-name = "# wrangler.toml
+# wrangler.toml
 name = 'logistics'"
 main = "worker/index.ts"
 compatibility_date = "2026-08-10"
