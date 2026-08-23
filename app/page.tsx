@@ -9,7 +9,7 @@ import FulfillmentTkOrders from "./FulfillmentTkOrders";
 import { GmailIngestionCard, type GmailIngestionEvent } from "./gmail-ingestion-card";
 import { DriveArchiveCard, driveLinkGlyph } from "./drive-archive-card";
 import ShipmentEventTrackerCard from "./ShipmentEventTrackerCard";
-import { LiveMapPanel, type MilestoneShipment, type TrackableShipment } from "./live-map";
+import { LiveMapPanel, useParcelTracking, type MilestoneShipment, type TrackableShipment, type TrackingResult } from "./live-map";
 
 const SHEET_ID =
   process.env.NEXT_PUBLIC_LOGISTICS_MASTER_SHEET_ID ??
@@ -2197,12 +2197,14 @@ function SmallParcelSchedule({
   loading,
   savingId,
   onStatus,
+  tracking,
 }: {
   direction: Direction;
   items: ScheduleItem[];
   loading: boolean;
   savingId: string;
   onStatus: (item: ScheduleItem, status: string) => void;
+  tracking?: Record<string, TrackingResult>;
 }) {
   const sortedItems = [...items].sort((a, b) => a.date.getTime() - b.date.getTime());
   const isInbound = direction === "inbound";
@@ -2229,7 +2231,9 @@ function SmallParcelSchedule({
       </div>
       <div className="parcel-grid">
         {sortedItems.map((item) => {
-          const tracking = item.trackingNumber || item.pro || "";
+          const trackingNumber = item.trackingNumber || item.pro || "";
+          const carrierCode = trackableCarrier(item.carrier || item.shippingMethod);
+          const liveStatus = carrierCode && trackingNumber ? tracking?.[`${carrierCode}:${trackingNumber}`] : undefined;
           return (
             <details
               className={`parcel-card ${sourceClass(item.sourceType ?? "")} ${
@@ -2244,7 +2248,13 @@ function SmallParcelSchedule({
                   ) : null}
                   <span className="source-badge">{item.sourceType || item.carrier || "Parcel"}</span>
                 </span>
-                <strong className="parcel-tracking">{tracking || item.customer || item.title || "Customer pending"}</strong>
+                <strong className="parcel-tracking">{item.customer || item.title || "Customer pending"}</strong>
+                {trackingNumber ? (
+                  <span className="parcel-tracking-number">
+                    Tracking# {trackingNumber}
+                    {liveStatus?.ok && liveStatus.status ? ` · ${liveStatus.status}` : ""}
+                  </span>
+                ) : null}
                 <span className="parcel-invoice">{item.invoice ? `Invoice # ${item.invoice}` : "Invoice # —"}</span>
                 <span className="expand-mark" aria-hidden="true">＋</span>
               </summary>
@@ -2255,7 +2265,7 @@ function SmallParcelSchedule({
                 </div>
                 <div className="parcel-footer">
                   <span><b>ETA</b> {item.dateText || "—"}</span>
-                  {tracking && item.containerUrl ? (
+                  {trackingNumber && item.containerUrl ? (
                     <a href={item.containerUrl} target="_blank" rel="noreferrer">
                       Track ↗
                     </a>
@@ -2765,6 +2775,9 @@ export default function Home() {
     [activeItems],
   );
 
+  const { tracking: parcelTracking, configured: parcelTrackingConfigured, loading: parcelTrackingLoading } =
+    useParcelTracking(mapTrackable);
+
   const handleStatus = async (item: ScheduleItem, status: string) => {
     setSavingId(item.id);
     setNotice(`Saving ${item.title}…`);
@@ -3005,7 +3018,13 @@ export default function Home() {
         <ControlTowerFreightMix modes={activeFreightModeCounts} />
       </section>
 
-      <LiveMapPanel milestones={mapMilestones} trackable={mapTrackable} />
+      <LiveMapPanel
+        milestones={mapMilestones}
+        trackable={mapTrackable}
+        tracking={parcelTracking}
+        configured={parcelTrackingConfigured}
+        trackingLoading={parcelTrackingLoading}
+      />
 
       <section className="control-panel" aria-label="Schedule filters">
         <label className="search">
@@ -3097,6 +3116,7 @@ export default function Home() {
           loading={loading}
           savingId={savingId}
           onStatus={handleStatus}
+          tracking={parcelTracking}
         />
         <ScheduleBoard
           direction="outbound"
@@ -3113,6 +3133,7 @@ export default function Home() {
           loading={loading}
           savingId={savingId}
           onStatus={handleStatus}
+          tracking={parcelTracking}
         />
       </div>
 

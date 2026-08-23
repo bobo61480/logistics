@@ -79,9 +79,10 @@ describe("live dashboard style variants", () => {
     expect(source).toContain("shippingMethod: resolvedCarrier");
   });
 
-  test("outbound parcel cards use the customer while tracking is pending", () => {
+  test("parcel cards headline the customer and show tracking# as its own labeled field", () => {
     const source = read("app/page.tsx");
-    expect(source).toContain('tracking || item.customer || item.title || "Customer pending"');
+    expect(source).toContain('{item.customer || item.title || "Customer pending"}');
+    expect(source).toContain('Tracking# {trackingNumber}');
     expect(source).not.toContain('tracking || "Tracking pending"');
   });
 
