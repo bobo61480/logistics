@@ -55,6 +55,7 @@ export function GmailIngestionCard({
   loading = false,
   onReview,
   reviewingKey = "",
+  sheetUrl,
 }: {
   events: GmailIngestionEvent[] | null;
   loading?: boolean;
@@ -62,6 +63,8 @@ export function GmailIngestionCard({
   onReview?: (event: GmailIngestionEvent, decision: "approve" | "reject") => void;
   /** reviewKey of the row currently mid-request, so only that row disables. */
   reviewingKey?: string;
+  /** Master workbook URL — links the ambiguous-match shortcut to the PENDING VERIFICATION tab. */
+  sheetUrl?: string;
 }) {
   const [filter, setFilter] = useState<"all" | IngestionStatus>("all");
 
@@ -76,7 +79,7 @@ export function GmailIngestionCard({
     <section className="rounded-xl border border-neutral-200 bg-white shadow-sm">
       <header className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-100 px-5 py-4">
         <div>
-          <h3 className="text-sm font-semibold text-neutral-900">Gmail Ingestion</h3>
+          <h3 className="text-lg font-extrabold text-neutral-900">Gmail Ingestion</h3>
           <p className="text-xs text-neutral-500">
             What the email pipeline extracted, and which shipment it landed on.
           </p>
@@ -177,6 +180,15 @@ export function GmailIngestionCard({
                         Reject
                       </button>
                     </>
+                  ) : sheetUrl ? (
+                    <a
+                      href={sheetUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs font-medium text-amber-700 hover:underline"
+                    >
+                      No unique identifier — resolve directly in the PENDING VERIFICATION sheet ↗
+                    </a>
                   ) : (
                     <span className="text-xs text-neutral-400">
                       No unique identifier — resolve directly in the PENDING VERIFICATION sheet.

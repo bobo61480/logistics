@@ -241,7 +241,7 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
 
 .inventory-panel:first-child { box-shadow: inset 0 4px 0 var(--blue); }
 .inventory-heading { padding-top: 14px; }
-.inventory-heading h2 { margin: 0; font: 800 27px/.95 "Saira Condensed", sans-serif; text-transform: uppercase; }
+.inventory-heading h2 { margin: 0; font: 800 30px/.95 "Saira Condensed", sans-serif; text-transform: uppercase; }
 .inventory-total { display: grid; justify-items: end; }
 .inventory-total strong { font: 800 28px/.9 "Saira Condensed", sans-serif; }
 .inventory-total span { color: var(--muted); font: 600 8px "IBM Plex Mono", monospace; text-transform: uppercase; }
@@ -381,10 +381,28 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
 
 .kpi-method {
   margin: 0;
-  padding: 7px 12px;
   border-top: 1px solid var(--line);
   color: var(--muted);
   background: #f3f0e9;
+}
+
+.kpi-method summary {
+  padding: 7px 12px;
+  color: var(--ink);
+  font: 700 8px/1.4 "IBM Plex Mono", monospace;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  list-style: none;
+}
+
+.kpi-method summary::-webkit-details-marker { display: none; }
+.kpi-method summary::before { content: "▸ "; }
+.kpi-method[open] summary::before { content: "▾ "; }
+
+.kpi-method p {
+  margin: 0;
+  padding: 0 12px 8px;
   font: 500 8px/1.4 "IBM Plex Mono", monospace;
 }
 
@@ -1359,8 +1377,8 @@ body {
 .import-heading h2,
 .panel-heading h2,
 .parcel-heading h2 {
-  font-size: 26px;
-  font-weight: 700;
+  font-size: 30px;
+  font-weight: 800;
   letter-spacing: .02em;
 }
 
@@ -1428,7 +1446,7 @@ body {
 .ct-panel h2 {
   margin: 0;
   color: var(--ct-ink);
-  font: 800 22px/.95 "Saira Condensed", sans-serif;
+  font: 800 26px/.95 "Saira Condensed", sans-serif;
   text-transform: uppercase;
 }
 
