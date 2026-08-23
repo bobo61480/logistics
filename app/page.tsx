@@ -2102,6 +2102,103 @@ function ScheduleBoard({
   );
 }
 
+type CountEntry = [string, number];
+
+function scheduleCarrierName(item: ScheduleItem): string {
+  return clean(item.carrier) || (item.isSmallParcel ? clean(item.shippingMethod) : "");
+}
+
+function carrierCounts(source: ScheduleItem[], limit = 6): CountEntry[] {
+  const counts = new Map<string, number>();
+  for (const item of source) {
+    const name = scheduleCarrierName(item);
+    if (!name) continue;
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit);
+}
+
+function scheduleFreightMode(item: ScheduleItem): string {
+  if (item.isSmallParcel) return "Parcel";
+  if (item.mode === "Air") return "Air";
+  if (item.mode === "Ocean") return "Ocean";
+  if (/^trucking$/i.test(item.shippingMethod ?? "")) return "Trucking";
+  return "Other";
+}
+
+const FREIGHT_MODE_COLORS: Record<string, string> = {
+  Air: "var(--ct-air)",
+  Ocean: "var(--ct-ocean)",
+  Trucking: "var(--ct-trucking)",
+  Parcel: "var(--ct-parcel)",
+  Other: "var(--ct-other)",
+};
+
+function freightModeCounts(source: ScheduleItem[]): CountEntry[] {
+  const counts = new Map<string, number>();
+  for (const item of source) {
+    const mode = scheduleFreightMode(item);
+    counts.set(mode, (counts.get(mode) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+}
+
+function ControlTowerCarriers({ carriers }: { carriers: CountEntry[] }) {
+  const max = carriers[0]?.[1] || 1;
+  return (
+    <article className="ct-panel">
+      <div className="ct-panel-head">
+        <span className="ct-eyebrow">By shipment count · active</span>
+        <h2>Top Carriers</h2>
+      </div>
+      <div className="ct-bar-list">
+        {carriers.map(([name, count]) => (
+          <div key={name}>
+            <div className="ct-bar-row-label">
+              <span className="ct-bar-name">{name}</span>
+              <span className="ct-bar-stat">{count} {count === 1 ? "shipment" : "shipments"}</span>
+            </div>
+            <div className="ct-bar-track">
+              <div className="ct-bar-fill" style={{ width: `${Math.max(8, (count / max) * 100)}%` }} />
+            </div>
+          </div>
+        ))}
+        {!carriers.length && <p className="ct-empty">No named carriers in the active schedule.</p>}
+      </div>
+    </article>
+  );
+}
+
+function ControlTowerFreightMix({ modes }: { modes: CountEntry[] }) {
+  const total = modes.reduce((sum, [, count]) => sum + count, 0) || 1;
+  return (
+    <article className="ct-panel">
+      <div className="ct-panel-head">
+        <span className="ct-eyebrow">Active shipments by mode</span>
+        <h2>Freight Mix</h2>
+      </div>
+      <div className="ct-split-bar">
+        {modes.map(([name, count]) => (
+          <div
+            key={name}
+            className="ct-split-seg"
+            style={{ width: `${(count / total) * 100}%`, background: FREIGHT_MODE_COLORS[name] ?? "var(--ct-other)" }}
+          />
+        ))}
+      </div>
+      <div className="ct-split-legend">
+        {modes.map(([name, count]) => (
+          <span key={name}>
+            <i style={{ background: FREIGHT_MODE_COLORS[name] ?? "var(--ct-other)" }} />
+            {name} {Math.round((count / total) * 100)}%
+          </span>
+        ))}
+      </div>
+      {!modes.length && <p className="ct-empty">No classified freight in the active schedule.</p>}
+    </article>
+  );
+}
+
 export default function Home() {
   const [items, setItems] = useState<ScheduleItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -2319,6 +2416,19 @@ export default function Home() {
     return { inbound, outbound, dueToday, exceptions };
   }, [days, outboundParcelVisibleItems, outboundVisibleItems, visibleItems]);
 
+  const activeItems = useMemo(
+    () =>
+      items.filter(
+        (item) =>
+          !finished.has(item.status.toLowerCase()) &&
+          item.date.getTime() >= IMPORT_STALE_CUTOFF,
+      ),
+    [items],
+  );
+
+  const activeCarrierCounts = useMemo(() => carrierCounts(activeItems), [activeItems]);
+  const activeFreightModeCounts = useMemo(() => freightModeCounts(activeItems), [activeItems]);
+
   const handleStatus = async (item: ScheduleItem, status: string) => {
     setSavingId(item.id);
     setNotice(`Saving ${item.title}…`);
@@ -2503,6 +2613,11 @@ export default function Home() {
           </a>
           .
         </p>
+      </section>
+
+      <section className="ct-row" aria-label="Active carrier and freight mode rollups">
+        <ControlTowerCarriers carriers={activeCarrierCounts} />
+        <ControlTowerFreightMix modes={activeFreightModeCounts} />
       </section>
 
       <section className="control-panel" aria-label="Schedule filters">

@@ -1339,6 +1339,98 @@ body {
 
 .kpi-method { background: #f6f8f8; }
 
+/* ---------- Control Tower rollups: active carrier & freight-mode cards ---------- */
+.ct-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.ct-panel {
+  --ct-bg: #111927;
+  --ct-bg-inset: #0b121f;
+  --ct-ink: #eaf0fa;
+  --ct-ink-soft: #93a0bc;
+  --ct-ink-faint: #56607a;
+  --ct-hairline: rgba(147, 160, 188, .14);
+  --ct-air: #3987e5;
+  --ct-ocean: #199e70;
+  --ct-trucking: #d95926;
+  --ct-parcel: #b98a2e;
+  --ct-other: #56607a;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--ct-hairline);
+  border-top: 5px solid var(--ct-air);
+  border-radius: 14px;
+  background: var(--ct-bg);
+  color: var(--ct-ink);
+  padding: 18px 20px 20px;
+}
+
+.ct-panel-head { margin-bottom: 14px; }
+
+.ct-eyebrow {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--ct-ink-faint);
+  font: 700 8px "IBM Plex Mono", monospace;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.ct-panel h2 {
+  margin: 0;
+  color: var(--ct-ink);
+  font: 800 22px/.95 "Saira Condensed", sans-serif;
+  text-transform: uppercase;
+}
+
+.ct-bar-list { display: flex; flex-direction: column; gap: 12px; }
+
+.ct-bar-row-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 5px;
+  font-size: 12px;
+}
+
+.ct-bar-name { font-weight: 700; }
+.ct-bar-stat { color: var(--ct-ink-soft); font: 600 10px "IBM Plex Mono", monospace; }
+.ct-bar-track { height: 7px; border-radius: 4px; background: var(--ct-bg-inset); overflow: hidden; }
+.ct-bar-fill { height: 100%; border-radius: 4px; background: var(--ct-air); }
+
+.ct-split-bar {
+  display: flex;
+  height: 10px;
+  border-radius: 5px;
+  overflow: hidden;
+  margin: 4px 0 10px;
+  background: var(--ct-bg-inset);
+}
+.ct-split-seg { height: 100%; }
+
+.ct-split-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  color: var(--ct-ink-soft);
+  font-size: 11px;
+}
+.ct-split-legend i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 5px;
+  border-radius: 2px;
+  vertical-align: middle;
+}
+
+.ct-empty { color: var(--ct-ink-faint); font-size: 11px; }
+
 .control-panel,
 .source-legend {
   border-radius: 14px;
@@ -1536,6 +1628,7 @@ footer strong {
 
 @media (max-width: 900px) {
   .inventory-grid { grid-template-columns: 1fr; }
+  .ct-row { grid-template-columns: 1fr; }
   .site-shell { width: min(100% - 20px, 1560px); padding-top: 10px; }
   .manifest-main { padding: 24px 18px 20px; }
   .route-strip,
