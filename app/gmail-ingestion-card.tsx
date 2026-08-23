@@ -76,9 +76,9 @@ export function GmailIngestionCard({
     <section className="rounded-xl border border-neutral-200 bg-white shadow-sm">
       <header className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-100 px-5 py-4">
         <div>
-          <h3 className="text-sm font-semibold text-neutral-900">Gmail Ingestion</h3>
+          <h3 className="text-sm font-semibold text-neutral-900">Shipment Notices</h3>
           <p className="text-xs text-neutral-500">
-            What the email pipeline extracted, and which shipment it landed on.
+            New shipment notices and changes extracted from incoming email, plus anything routed for review.
           </p>
         </div>
         <div className="flex gap-1 text-xs">
@@ -115,7 +115,13 @@ export function GmailIngestionCard({
           <p className="px-5 py-6 text-sm text-neutral-500">Nothing in this category right now.</p>
         )}
         <ul className="divide-y divide-neutral-100">
-          {filtered.map((event, i) => (
+          {filtered.map((event, i) => {
+            const noticeKind = event.note.startsWith("Received:")
+              ? "received"
+              : event.note.startsWith("Changed:")
+                ? "changed"
+                : null;
+            return (
             <li key={i} className="px-5 py-3 text-sm">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
@@ -132,6 +138,16 @@ export function GmailIngestionCard({
                 {event.timestamp && <span className="text-xs text-neutral-400">{event.timestamp}</span>}
               </div>
 
+              {noticeKind && (
+                <p
+                  className={`mt-1 text-sm font-medium ${
+                    noticeKind === "received" ? "text-blue-700" : "text-amber-700"
+                  }`}
+                >
+                  {event.note}
+                </p>
+              )}
+
               <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-neutral-500">
                 {event.customer && <span>Customer: {event.customer}</span>}
                 {event.blOrPro && <span>BL/PRO: {event.blOrPro}</span>}
@@ -141,7 +157,7 @@ export function GmailIngestionCard({
               </div>
 
               {event.issues && <p className="mt-1 text-xs text-amber-700">{event.issues}</p>}
-              {event.note && <p className="mt-1 text-xs text-neutral-400">{event.note}</p>}
+              {!noticeKind && event.note && <p className="mt-1 text-xs text-neutral-400">{event.note}</p>}
 
               <div className="mt-1 flex gap-3 text-xs">
                 {event.sourceEmailUrl && (
@@ -185,7 +201,8 @@ export function GmailIngestionCard({
                 </div>
               )}
             </li>
-          ))}
+            );
+          })}
         </ul>
       </div>
     </section>

@@ -125,6 +125,39 @@ function addPendingRow_(entry) {
 }
 
 /**
+ * Records an already-committed (never reviewed) email-ingestion event as its
+ * own PENDING VERIFICATION row, Status written straight to COMMITTED. Today
+ * the dashboard's Shipment Notices card only ever sees rows that failed
+ * validation or were later approved — a record that matched cleanly and
+ * committed silently (the common case) has no visible trace anywhere. This
+ * shares the same sheet/columns as addPendingRow_, so no worker-side parsing
+ * changes are needed to surface it.
+ */
+function addCommittedAuditRow_(entry) {
+  var sheet = ensurePendingSheet_();
+  var r = entry.record || {};
+  sheet.appendRow([
+    new Date(),
+    entry.kind || "",
+    "COMMITTED",
+    "",
+    r.customer || "",
+    r.invoice || "",
+    r.pro || "",
+    r.container || "",
+    r.shipDate || r.eta || "",
+    r.qty || "",
+    r.carrier || r.vessel || "",
+    entry.note || "",
+    (entry.meta && entry.meta.permalink) || r._sourceEmail || "",
+    entry.driveUrl || r._driveFolder || "",
+    JSON.stringify(r).slice(0, 5000)
+  ]);
+  sheet.getRange(sheet.getLastRow(), 1, 1, VALIDATION.pendingHeaders.length)
+    .setBackground(VALIDATION.colors.committed);
+}
+
+/**
  * Commits one PENDING VERIFICATION row (Status already APPROVED) into the
  * live Imports / WH Trucking Request sheet, then recolors it COMMITTED.
  * Shared by the 30-minute batch job (processApprovedPending) and the instant

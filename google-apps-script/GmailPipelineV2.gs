@@ -259,6 +259,7 @@ function processLogisticsMessageV2_(message) {
     if (upsert.matched) {
       result[upsert.action] = (result[upsert.action] || 0) + 1;
       logGmailIngestionCommit_(kind, upsert.action, upsert.row, record, meta, documentFolderUrl);
+      recordShipmentNoticeV2_(kind, upsert, record, meta, documentFolderUrl);
       return;
     }
     var validation = validateRecord_(record, kind);
@@ -271,10 +272,12 @@ function processLogisticsMessageV2_(message) {
     if (inserted.action === "inserted") {
       result.inserted++;
       logGmailIngestionCommit_(kind, "inserted", inserted.row, record, meta, documentFolderUrl);
+      recordShipmentNoticeV2_(kind, inserted, record, meta, documentFolderUrl);
     }
     else if (inserted.matched) {
       result[inserted.action]++;
       logGmailIngestionCommit_(kind, inserted.action, inserted.row, record, meta, documentFolderUrl);
+      recordShipmentNoticeV2_(kind, inserted, record, meta, documentFolderUrl);
     }
     else {
       addPendingRow_({ kind: kind, issues: ["Validated record could not be matched or safely inserted."], record: record, meta: meta, driveUrl: record._driveFolder || documentFolderUrl });
@@ -304,6 +307,28 @@ function logGmailIngestionCommit_(kind, action, row, record, meta, driveUrl) {
     driveUrl: driveUrl || record._driveFolder || "",
     sender: meta.from || ""
   }));
+}
+
+/**
+ * Surfaces a silently-committed email (inserted, or updated with an actual
+ * field change) as a "Received:"/"Changed:" row in PENDING VERIFICATION, so
+ * the dashboard's Shipment Notices card has something to show for commits
+ * that never needed a human review. Never called for "noop" — a re-processed
+ * email that changed nothing must stay invisible, not spam the feed.
+ */
+function recordShipmentNoticeV2_(kind, upsert, record, meta, driveUrl) {
+  if (upsert.action === "noop") return;
+  var note = upsert.action === "inserted"
+    ? "Received: " + briefShipmentSummaryV2_(kind, record)
+    : "Changed: " + ((upsert.changes && upsert.changes.length) ? upsert.changes.join(", ") : "fields updated");
+  addCommittedAuditRow_({ kind: kind, record: record, meta: meta, driveUrl: driveUrl, note: note });
+}
+
+function briefShipmentSummaryV2_(kind, record) {
+  var parts = kind === "inbound"
+    ? [record.shipmentNo, record.container, record.eta && ("ETA " + record.eta)]
+    : [record.customer, record.invoice, record.shipDate && ("Ship " + record.shipDate)];
+  return parts.filter(Boolean).join(" · ") || "Details in source email";
 }
 
 function extractEmailContextV2_(subject, body) {
@@ -731,8 +756,8 @@ function upsertInboundEmailV2_(record, allowInsert) {
   }
   candidates.sort(function (a, b) { return b.score - a.score; });
   if (candidates.length && (!candidates[1] || candidates[0].score > candidates[1].score)) {
-    var changed = updateInboundRowV2_(sheet, candidates[0].row, data[candidates[0].row - 1], record);
-    return { matched: true, action: changed ? "updated" : "noop", row: candidates[0].row };
+    var updateResult = updateInboundRowV2_(sheet, candidates[0].row, data[candidates[0].row - 1], record);
+    return { matched: true, action: updateResult.changed ? "updated" : "noop", row: candidates[0].row, changes: updateResult.changes };
   }
   if (!allowInsert) return { matched: false, action: "noop" };
   if (!record.eta || !(record.shipmentNo || record.container || record.mbl || record.hbl)) return { matched: false, action: "noop" };
@@ -773,41 +798,43 @@ function inboundMatchScoreV2_(row, record) {
 
 function updateInboundRowV2_(sheet, rowNumber, oldRow, record) {
   var changed = false;
-  function set(col, value, overwrite) {
+  var changes = [];
+  function set(col, value, overwrite, label) {
     if (!value) return;
     var old = String(oldRow[col - 1] || "").trim();
     if (old === String(value).trim()) return;
     if (old && !overwrite) return;
     sheet.getRange(rowNumber, col).setValue(value);
+    if (label) changes.push(label + " " + (old || "—") + " → " + String(value).trim());
     oldRow[col - 1] = value;
     changed = true;
   }
-  set(1, record.shipmentNo, false);
+  set(1, record.shipmentNo, false, "Shipment #");
   if (record._driveFolder && setInboundDocsLinkV2_(sheet, rowNumber, record.shipmentNo || record.hbl || oldRow[1] || "DOCS", record._driveFolder)) changed = true;
   if (record.invoice) {
     var mergedInvoices = mergeMultilineV2_(oldRow[2], record.invoice);
-    if (mergedInvoices !== String(oldRow[2] || "").trim()) set(3, mergedInvoices, true);
+    if (mergedInvoices !== String(oldRow[2] || "").trim()) set(3, mergedInvoices, true, "Invoice");
   }
-  set(4, record.mbl, false);
-  set(5, record.hbl, false);
-  set(8, record.container, false);
-  set(11, record.filing, false);
-  if (isPlausibleVesselV2_(record.vessel)) set(13, record.vessel, true);
-  set(14, record.etd, true);
-  set(15, record.eta, true);
+  set(4, record.mbl, false, "MBL");
+  set(5, record.hbl, false, "HBL");
+  set(8, record.container, false, "Container");
+  set(11, record.filing, false, "Filing #");
+  if (isPlausibleVesselV2_(record.vessel)) set(13, record.vessel, true, "Vessel");
+  set(14, record.etd, true, "ETD");
+  set(15, record.eta, true, "ETA");
   if (record.note || record._emailSubject) {
     var note = emailNoteV2_(record);
     var existing = String(oldRow[11] || "");
-    if (note && existing.indexOf(note) === -1) set(12, existing ? existing + "\n" + note : note, true);
+    if (note && existing.indexOf(note) === -1) set(12, existing ? existing + "\n" + note : note, true, "Note");
   }
   if (record.status) {
     var normalizedStatus = canonicalLogisticsStatus_(record.status);
     if (!normalizedStatus) throw new Error("Unsupported logistics status: " + record.status);
     var current = String(oldRow[27] || "").trim();
-    if (canAutoTransitionLogisticsStatus_(current, normalizedStatus)) set(28, normalizedStatus, true);
+    if (canAutoTransitionLogisticsStatus_(current, normalizedStatus)) set(28, normalizedStatus, true, "Status");
   }
   if (changed) formatEmailStatusRowV2_(sheet, rowNumber, String(oldRow[27] || record.status || ""));
-  return changed;
+  return { changed: changed, changes: changes };
 }
 
 function setInboundDocsLinkV2_(sheet, rowNumber, label, folderUrl) {
@@ -840,27 +867,30 @@ function upsertOutboundEmailV2_(record, allowInsert) {
     var rowNumber = candidates[0].row;
     var old = data[rowNumber - 1];
     var changed = false;
-    function set(col, value, overwrite) {
+    var changes = [];
+    function set(col, value, overwrite, label) {
       if (!value) return;
       var prior = String(old[col - 1] || "").trim();
       if (prior === String(value).trim()) return;
       if (prior && !overwrite) return;
-      sheet.getRange(rowNumber, col).setValue(value); old[col - 1] = value; changed = true;
+      sheet.getRange(rowNumber, col).setValue(value);
+      if (label) changes.push(label + " " + (prior || "—") + " → " + String(value).trim());
+      old[col - 1] = value; changed = true;
     }
-    if (record.invoice) set(2, mergeMultilineV2_(old[1], record.invoice), true);
-    set(17, record.carrier, false);
-    set(19, record.pro, false);
-    if (record.shipDate) set(4, record.shipDate, true);
+    if (record.invoice) set(2, mergeMultilineV2_(old[1], record.invoice), true, "Invoice");
+    set(17, record.carrier, false, "Carrier");
+    set(19, record.pro, false, "PRO #");
+    if (record.shipDate) set(4, record.shipDate, true, "Ship Date");
     if (record.status) {
       var normalizedOutbound = canonicalLogisticsStatus_(record.status);
       if (!normalizedOutbound) throw new Error("Unsupported logistics status: " + record.status);
       var currentOutbound = String(old[20] || "").trim();
-      if (canAutoTransitionLogisticsStatus_(currentOutbound, normalizedOutbound)) set(21, normalizedOutbound, true);
+      if (canAutoTransitionLogisticsStatus_(currentOutbound, normalizedOutbound)) set(21, normalizedOutbound, true, "Status");
     }
     var note = emailNoteV2_(record);
-    if (note && String(old[19] || "").indexOf(note) === -1) set(20, String(old[19] || "") ? String(old[19]) + "\n" + note : note, true);
+    if (note && String(old[19] || "").indexOf(note) === -1) set(20, String(old[19] || "") ? String(old[19]) + "\n" + note : note, true, "Note");
     if (changed) formatEmailStatusRowV2_(sheet, rowNumber, String(old[20] || record.status || ""));
-    return { matched: true, action: changed ? "updated" : "noop", row: rowNumber };
+    return { matched: true, action: changed ? "updated" : "noop", row: rowNumber, changes: changes };
   }
   if (!allowInsert) return { matched: false, action: "noop" };
   if (!record.customer || !record.shipDate || !(record.invoice || record.pro)) return { matched: false, action: "noop" };

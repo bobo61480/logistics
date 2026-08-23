@@ -139,7 +139,7 @@ const fulfill = (route: Route, body: string, contentType = "text/plain") =>
     body,
   });
 
-// Feed rendered by the Gmail Ingestion card, served inside the Worker snapshot.
+// Feed rendered by the Shipment Notices card, served inside the Worker snapshot.
 const gmailIngestionEvents = () => [
   {
     status: "needsReview",
@@ -167,7 +167,7 @@ const gmailIngestionEvents = () => [
     container: "MSKU1234567",
     shipDateOrEta: "",
     carrierOrVessel: "EVER GIVEN",
-    note: "",
+    note: "Received: IN00777 · MSKU1234567 · ETA 8/30",
     issues: "",
     sourceEmailUrl: "https://mail.google.com/mail/u/0/#all/abc123",
     driveFileUrl: "",
@@ -371,11 +371,13 @@ test("renders live schedules and KPI cards computed from the workbooks", async (
   await expect(kpiCard("AVG TRUCKING COST")).toContainText("$1,200");
   await expect(kpiCard("AVG TRUCKING COST")).toContainText("$3,400");
 
-  // Gmail Ingestion card renders the snapshot's ingestion feed.
-  await expect(page.getByRole("heading", { name: "Gmail Ingestion" })).toBeVisible();
+  // Shipment Notices card renders the snapshot's ingestion feed.
+  await expect(page.getByRole("heading", { name: "Shipment Notices" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Needs review (1)" })).toBeVisible();
   await expect(page.getByText("IN00778")).toBeVisible();
   await expect(page.getByText("No ETA or ship date found.")).toBeVisible();
+  // A silently-committed row surfaces its "Received: ..." summary prominently.
+  await expect(page.getByText("Received: IN00777 · MSKU1234567 · ETA 8/30")).toBeVisible();
   await expect(page.getByRole("link", { name: "Source email" }).first()).toHaveAttribute(
     "href",
     "https://mail.google.com/mail/u/0/#all/pending1",
