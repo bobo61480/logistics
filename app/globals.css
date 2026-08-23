@@ -2134,3 +2134,77 @@ footer strong {
 [data-theme="dark"] .hct-card-body li { color: var(--text); }
 [data-theme="dark"] .hct-card-body li .text-neutral-900 { color: var(--text) !important; }
 [data-theme="dark"] .hct-card-body li .text-neutral-400 { color: var(--text-faint) !important; }
+
+/* ============================================================
+   Gmail Shipping-Doc Ingestion roadmap placeholder (PR-6)
+   Purely static — no fetches, no backend. Styled to read clearly as
+   "proposed," not as a live feature.
+   ============================================================ */
+.roadmap-panel {
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, .86);
+  box-shadow: inset 0 4px 0 var(--muted);
+}
+.roadmap-heading { align-items: flex-start; }
+
+.status-tag {
+  font: 700 9.5px "IBM Plex Mono", monospace;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  padding: 3px 9px;
+  border-radius: 20px;
+  white-space: nowrap;
+}
+.status-tag.proposed { color: var(--muted); background: #eef1f1; }
+
+.roadmap-inbox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 14px 14px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f6f8f8;
+}
+.roadmap-inbox-icon { font-size: 18px; color: var(--muted); }
+.roadmap-inbox-addr { font: 700 12px "IBM Plex Mono", monospace; }
+.roadmap-inbox-note { max-width: 46ch; color: var(--muted); font-size: 10.5px; margin-top: 2px; }
+.roadmap-inbox-status { margin-left: auto; }
+
+.pipe-row {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr auto 1fr;
+  gap: 8px;
+  align-items: stretch;
+  padding: 14px;
+}
+.pipe-node { border: 1px solid var(--line); border-radius: 6px; background: #f6f8f8; padding: 12px 13px; }
+.pipe-eyebrow { color: var(--muted); font: 700 9px "IBM Plex Mono", monospace; letter-spacing: .06em; text-transform: uppercase; }
+.pipe-title { margin-top: 3px; font: 800 15px "Saira Condensed", sans-serif; text-transform: uppercase; }
+.pipe-desc { margin: 7px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.5; }
+.pipe-arrow { display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 16px; }
+
+.roadmap-note { padding: 0 14px 14px; }
+
+@media (max-width: 780px) {
+  .pipe-row { grid-template-columns: 1fr; }
+  .pipe-arrow { transform: rotate(90deg); }
+}
+
+[data-theme="dark"] .roadmap-panel { border-color: var(--hairline-strong); background: var(--surface); }
+[data-theme="dark"] .roadmap-panel .panel-heading { border-bottom-color: var(--hairline); }
+[data-theme="dark"] .roadmap-panel .panel-heading h2 { color: var(--text); }
+[data-theme="dark"] .status-tag.proposed { color: var(--text-faint); background: var(--surface-inset); }
+[data-theme="dark"] .roadmap-inbox { border-color: var(--hairline); background: var(--surface-inset); }
+[data-theme="dark"] .roadmap-inbox-addr { color: var(--text); }
+[data-theme="dark"] .roadmap-inbox-icon,
+[data-theme="dark"] .roadmap-inbox-note { color: var(--text-faint); }
+[data-theme="dark"] .pipe-node { border-color: var(--hairline); background: var(--surface-inset); }
+[data-theme="dark"] .pipe-eyebrow,
+[data-theme="dark"] .pipe-desc,
+[data-theme="dark"] .pipe-arrow { color: var(--text-faint); }
+[data-theme="dark"] .pipe-title { color: var(--text); }
+[data-theme="dark"] .roadmap-note { color: var(--text-faint); }

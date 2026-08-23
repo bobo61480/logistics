@@ -12,6 +12,7 @@ import ShipmentEventTrackerCard from "./ShipmentEventTrackerCard";
 import { LiveMapPanel, useParcelTracking, type MilestoneShipment, type TrackableShipment, type TrackingResult } from "./live-map";
 import { ThemeToggle } from "./theme-toggle";
 import { DataGrids } from "./data-grids";
+import { IngestionRoadmapCard } from "./ingestion-roadmap-card";
 
 const SHEET_ID =
   process.env.NEXT_PUBLIC_LOGISTICS_MASTER_SHEET_ID ??
@@ -3406,6 +3407,8 @@ export default function Home() {
         <GmailIngestionCard events={gmailIngestion} loading={loading} onReview={handleReview} reviewingKey={reviewingKey} sheetUrl={SHEET_URL} />
         <DriveArchiveCard />
       </div>
+
+      <IngestionRoadmapCard />
 
       <ShipmentEventTrackerCard />
 
