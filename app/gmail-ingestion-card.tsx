@@ -76,8 +76,8 @@ export function GmailIngestionCard({
   }, {});
 
   return (
-    <section className="rounded-xl border border-neutral-200 bg-white shadow-sm">
-      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-100 px-5 py-4">
+    <section className="hct-card rounded-xl border border-neutral-200 bg-white shadow-sm">
+      <header className="hct-card-header flex flex-wrap items-center justify-between gap-2 border-b border-neutral-100 px-5 py-4">
         <div>
           <h3 className="text-lg font-extrabold text-neutral-900">Shipment Notices</h3>
           <p className="text-xs text-neutral-500">
@@ -102,7 +102,7 @@ export function GmailIngestionCard({
         </div>
       </header>
 
-      <div className="max-h-96 overflow-y-auto">
+      <div className="hct-card-body max-h-96 overflow-y-auto">
         {unavailable && (
           <p className="px-5 py-4 text-sm text-red-600">
             {/* null covers several causes (PENDING VERIFICATION read failed, the
