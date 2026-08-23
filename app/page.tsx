@@ -926,7 +926,8 @@ function importSourceRecords(rows: string[][]): ImportSourceRecord[] {
         hbl,
         container: cell(row, 7),
         vessel: cell(row, 14),
-        status: cell(row, 29),
+        // Column AB is "WEBSITE STATUS"; AD is "CONTAINER RAW (SYSTEM)", not status.
+        status: cell(row, 27),
         etd: cell(row, 15),
         eta: cell(row, 16),
         deliveryExpected: cell(row, 18),
@@ -1031,7 +1032,9 @@ function inboundParcelItems(rows: string[][]): ScheduleItem[] {
     if (isSectionHeader) return [];
 
     const sourceRow = index + 1;
-    const status = normalizeStatus(cell(row, 29));
+    // Column AB holds the small-parcel status ("Delivered", "FDA Review / Hold", etc.);
+    // column AD is "BRAND", not status.
+    const status = normalizeStatus(cell(row, 27));
     const datedValue = firstDatedValue(etaSource, description);
     const sourceDate = datedValue?.date ?? today;
     const unfinished = !finished.has(status.toLowerCase());
@@ -1742,10 +1745,12 @@ async function postStatus(item: ScheduleItem, status: string) {
     try {
       let persisted = "";
       if (item.sourceSheet === "IMPORTS") {
+        // Apps Script writes status to whichever column is headed "WEBSITE STATUS" in rows
+        // 1-3 (see findInboundTarget_ in google-apps-script/Code.gs) — that's column AB, not AD.
         const table = await fetchTable(
           SHEET_ID,
           1497250700,
-          `AD${sourceRow}:AD${sourceRow}`,
+          `AB${sourceRow}:AB${sourceRow}`,
           0,
         );
         persisted = cell(table.rows?.[0], 0);
