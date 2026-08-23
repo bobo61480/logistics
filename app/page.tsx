@@ -13,6 +13,7 @@ import { LiveMapPanel, useParcelTracking, type MilestoneShipment, type Trackable
 import { ThemeToggle } from "./theme-toggle";
 import { DataGrids } from "./data-grids";
 import { IngestionRoadmapCard } from "./ingestion-roadmap-card";
+import { LOGISTICS_STATUS_OPTIONS } from "../lib/domain/status";
 
 const SHEET_ID =
   process.env.NEXT_PUBLIC_LOGISTICS_MASTER_SHEET_ID ??
@@ -339,12 +340,51 @@ function startOfToday() {
   return new Date(Number(value.year), Number(value.month) - 1, Number(value.day));
 }
 
+// Five-bucket classification covering every value in LOGISTICS_STATUS_OPTIONS
+// (lib/domain/status.ts) with no gaps — see tests/status-pills.test.ts, which
+// asserts each of the 16 canonical statuses maps to exactly one bucket.
+// Regex-based (not an exact lookup) so it still classifies reasonably for
+// free-text status variants real sheet data can contain beyond the
+// canonical list.
 export function statusClass(status: string) {
   const value = status.toLowerCase();
-  if (/delay|hold|review|pending/.test(value)) return "status warning";
-  if (/deliver|receive|complete|shipped/.test(value)) return "status done";
-  if (/work|shipping|clearance/.test(value)) return "status active";
-  return "status";
+  if (/cancel/.test(value)) return "status stop";
+  if (/delay|pending/.test(value)) return "status warn";
+  if (/customs|fda|fws|aqi|detained|hold|review/.test(value)) return "status hold";
+  if (/deliver|receive|complete|shipped/.test(value)) return "status good";
+  return "status neutral";
+}
+
+/**
+ * Every canonical status this app recognizes (lib/domain/status.ts), each
+ * shown through the same statusClass() pill classifier the schedule cards
+ * and Data Grids use — so this legend can never silently drift from what
+ * those actually render, and can never omit a real status the way a
+ * hand-maintained list could.
+ */
+function StatusLegend() {
+  return (
+    <section className="status-legend-panel" aria-labelledby="status-legend-heading">
+      <div className="panel-heading status-legend-heading">
+        <div>
+          <p className="eyebrow">Shared Vocabulary</p>
+          <h2 id="status-legend-heading">Status Workflow</h2>
+        </div>
+      </div>
+      <div className="status-legend-row">
+        {LOGISTICS_STATUS_OPTIONS.map((option) => (
+          <span key={option} className={statusClass(option)}>
+            {option}
+          </span>
+        ))}
+      </div>
+      <p className="panel-note status-legend-note">
+        Normalized from raw sheet text (lib/domain/status.ts). The five colors group statuses by
+        what they mean operationally — complete, needs attention now, delayed/pending, held for
+        review, or in progress — not by which department&apos;s sheet a row came from.
+      </p>
+    </section>
+  );
 }
 
 function importsCellUrl(row: number, column: string) {
@@ -3409,6 +3449,8 @@ export default function Home() {
       </div>
 
       <IngestionRoadmapCard />
+
+      <StatusLegend />
 
       <ShipmentEventTrackerCard />
 

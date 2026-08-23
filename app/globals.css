@@ -1089,9 +1089,11 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
   white-space: nowrap;
   text-transform: uppercase;
 }
-.status.active { background: #def0f2; color: #176b71; }
-.status.warning { background: #f7e9ca; color: #7e5812; }
-.status.done { background: #deeee4; color: #2a6848; }
+.status.good { background: #deeee4; color: #2a6848; }
+.status.warn { background: #f7e9ca; color: #7e5812; }
+.status.hold { background: #fbe3d8; color: #a1481f; }
+.status.stop { background: #fbdada; color: #a12f2f; }
+.status.neutral { background: #def0f2; color: #176b71; }
 
 .status-field { display: grid; gap: 4px; margin-top: 11px; }
 .status-field span { color: var(--muted); font: 500 8px "IBM Plex Mono", monospace; text-transform: uppercase; }
@@ -2208,3 +2210,26 @@ footer strong {
 [data-theme="dark"] .pipe-arrow { color: var(--text-faint); }
 [data-theme="dark"] .pipe-title { color: var(--text); }
 [data-theme="dark"] .roadmap-note { color: var(--text-faint); }
+
+/* ============================================================
+   Status Workflow legend (PR-7)
+   ============================================================ */
+.status-legend-panel {
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, .86);
+  box-shadow: inset 0 4px 0 var(--teal);
+}
+.status-legend-row { display: flex; flex-wrap: wrap; gap: 8px; padding: 14px; }
+.status-legend-note { padding: 0 14px 14px; }
+
+[data-theme="dark"] .status-legend-panel { border-color: var(--hairline-strong); background: var(--surface); }
+[data-theme="dark"] .status-legend-panel .panel-heading { border-bottom-color: var(--hairline); }
+[data-theme="dark"] .status-legend-panel .panel-heading h2 { color: var(--text); }
+[data-theme="dark"] .status-legend-note { color: var(--text-faint); }
+
+[data-theme="dark"] .status.good { background: rgba(12, 163, 12, .16); color: #7be08a; }
+[data-theme="dark"] .status.warn { background: rgba(250, 178, 25, .16); color: #ffcf7d; }
+[data-theme="dark"] .status.hold { background: rgba(236, 131, 90, .18); color: #ff9d80; }
+[data-theme="dark"] .status.stop { background: rgba(208, 59, 59, .18); color: #ff9a95; }
+[data-theme="dark"] .status.neutral { background: rgba(57, 135, 229, .16); color: #8fb4ff; }
