@@ -55,6 +55,18 @@ describe("WMS trucking synchronization safeguards", () => {
     expect(helpers.canonicalWmsCustomer_("Yamibuy")).toBe("YAMIBUY");
   });
 
+  // Regression test for the 2026-08-12 incident (KORHEIM invoices wrongly
+  // merged) — the customer-matching half of that bug class was an unanchored
+  // prefix check (`key.indexOf("MEGA MART") === 0`) that let any customer
+  // name merely *starting with* an aliased brand collapse into it. This must
+  // never canonicalize to the brand unless the match lands on a word boundary.
+  it("does not collapse an unrelated customer that merely shares a name prefix", () => {
+    expect(helpers.canonicalWmsCustomer_("MEGA MARTINEZ DISTRIBUTION")).not.toBe("MEGA MART");
+    expect(helpers.canonicalWmsCustomer_("MEGA MARTINEZ DISTRIBUTION")).toBe("MEGA MARTINEZ DISTRIBUTION");
+    expect(helpers.canonicalWmsCustomer_("TOKTOK BEAUTYLAND SUPPLY")).not.toBe("TOKTOK BEAUTY");
+    expect(helpers.canonicalWmsCustomer_("ROYAL IMEXPORT GROUP")).not.toBe("ROYAL IMEX INC");
+  });
+
   it("accepts freight methods and excludes pickup and parcel carriers", () => {
     expect(helpers.isWmsFreightMethod_("TRUCKING")).toBe(true);
     expect(helpers.isWmsFreightMethod_("LTL Freight")).toBe(true);
