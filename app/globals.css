@@ -719,7 +719,7 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
 .summary-primary small,
 .summary-invoices small {
   color: var(--muted);
-  font: 600 7px/1.1 "IBM Plex Mono", monospace;
+  font: 600 10px/1.1 "IBM Plex Mono", monospace;
   letter-spacing: .05em;
 }
 
@@ -771,7 +771,7 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
   gap: 4px;
   align-items: center;
 }
-.direction-label { color: var(--teal); font: 800 9px "IBM Plex Mono", monospace; letter-spacing: .08em; }
+.direction-label { color: var(--teal); font: 800 10px "IBM Plex Mono", monospace; letter-spacing: .08em; }
 .outbound .direction-label { color: var(--orange); }
 .department-badge {
   display: inline-flex;
@@ -783,7 +783,7 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
   border-radius: 3px;
   background: var(--department-color, var(--department-wholesale));
   color: #fff;
-  font: 800 8px "IBM Plex Mono", monospace;
+  font: 800 10px "IBM Plex Mono", monospace;
   letter-spacing: .04em;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -798,6 +798,8 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
   border-radius: 3px;
   background: var(--source-color, var(--source-wholesale));
   color: #fff !important;
+  font: 800 10px "IBM Plex Mono", monospace;
+  letter-spacing: .04em;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -807,7 +809,7 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
   overflow: hidden;
   margin: 5px 0 0;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -833,7 +835,7 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
 
 .data-field dt {
   color: var(--muted);
-  font: 600 7px/1.15 "IBM Plex Mono", monospace;
+  font: 600 10px/1.15 "IBM Plex Mono", monospace;
   letter-spacing: .03em;
   text-transform: uppercase;
 }
@@ -843,7 +845,7 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
   margin: 0;
   overflow: hidden;
   color: var(--ink);
-  font: 650 9px/1.25 "IBM Plex Mono", monospace;
+  font: 650 10px/1.25 "IBM Plex Mono", monospace;
   text-overflow: ellipsis;
 }
 
@@ -983,11 +985,11 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
   cursor: pointer;
 }
 
-.parcel-summary .source-badge { font-size: 8px; }
+.parcel-summary .source-badge { font-size: 10px; }
 .parcel-invoice {
   overflow: hidden;
   color: var(--muted);
-  font: 600 8px "IBM Plex Mono", monospace;
+  font: 600 10px "IBM Plex Mono", monospace;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1019,16 +1021,16 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
   min-height: 31px;
   margin: 7px 0 11px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.5;
 }
 
 .parcel-footer {
   color: var(--ink-soft);
-  font: 600 9px "IBM Plex Mono", monospace;
+  font: 600 10px "IBM Plex Mono", monospace;
 }
 
-.parcel-footer b { margin-right: 3px; font-size: 8px; }
+.parcel-footer b { margin-right: 3px; font-size: 10px; }
 
 .parcel-footer a {
   min-height: 28px;

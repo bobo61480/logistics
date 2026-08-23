@@ -1540,8 +1540,12 @@ function salesOutboundItems(table: any): ScheduleItem[] {
     const isTrucking = /\btruck(?:ing)?\b/i.test(shippingMethod);
     if (!date || !customer || (!isSmallParcel && !isTrucking)) return [];
     const sourceRow = index + 3;
-    const issue = cell(row, 7);
-    const status = /yes|issue|hold|pending/i.test(issue) ? "Pending" : "Scheduled";
+    const issueType = cell(row, 6);
+    // Column L ("YES"/blank) is the claim-resolved flag; once set the row is done and
+    // should drop out like any other finished shipment instead of lingering forever.
+    const resolved = /^\s*(yes|y|resolved|closed|done)\s*$/i.test(cell(row, 11));
+    const status = resolved ? "Completed" : issueType ? "Pending" : "Scheduled";
+    const invoice = cell(row, 3);
     const trackingNumber = isSmallParcel
       ? trackingCandidate(...Array.from({ length: 24 }, (_, offset) => cell(row, offset + 8)))
       : "";
@@ -1552,8 +1556,8 @@ function salesOutboundItems(table: any): ScheduleItem[] {
         date,
         dateText: shipDate,
         title: customer,
-        reference: trackingNumber || cell(row, 1) || "Sales shipment",
-        secondary: [cell(row, 3), cell(row, 5), issue && `Issue: ${issue}`]
+        reference: trackingNumber || invoice || "Sales shipment",
+        secondary: [invoice, cell(row, 5), issueType && `Issue: ${issueType}`]
           .filter(Boolean)
           .join(" · "),
         status,
@@ -1563,7 +1567,7 @@ function salesOutboundItems(table: any): ScheduleItem[] {
         editable: false,
         customer,
         customerNo: customer,
-        invoice: cell(row, 1),
+        invoice,
         carrier: carrier || shippingMethod,
         trackingNumber,
         pro: trackingNumber,
