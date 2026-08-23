@@ -11,6 +11,10 @@ const TRACKING_ENDPOINT =
 // that many entries in a single call, so a board with more trackable parcels than this needs
 // to split across multiple requests or the extras vanish from the map with no error.
 const TRACKING_BATCH_SIZE = 25;
+// Re-poll carrier tracking on this cadence — tracking-command.ts caches each
+// carrier+number lookup for 15 minutes anyway, so polling more often than that
+// wouldn't surface anything new, just spend rate-limit budget re-asking.
+const TRACKING_POLL_MS = 2 * 60 * 60 * 1000;
 const CONTINENTAL_US_CENTER: LatLng = [39.5, -98.35];
 const PORT_LOOKUP: Record<string, { label: string; coords: LatLng }> = {
   LAX: { label: "Port of Los Angeles", coords: [33.7395, -118.2601] },
@@ -31,7 +35,7 @@ function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;");
 }
 
-type Carrier = "ups" | "fedex" | "usps";
+export type Carrier = "ups" | "fedex" | "usps";
 
 export type MilestoneShipment = {
   id: string;
@@ -52,7 +56,7 @@ export type TrackableShipment = {
   status?: string;
 };
 
-type TrackingResult = {
+export type TrackingResult = {
   carrier: Carrier;
   number: string;
   ok: boolean;
@@ -64,6 +68,86 @@ type TrackingResult = {
   timestamp?: string;
   error?: string;
 };
+
+/**
+ * Shared carrier-tracking poll for TrackableShipment lists. Hoisted out of
+ * LiveMapPanel so a page can fetch each carrier+number combination once and
+ * hand the results to multiple cards (the map, the outbound small-parcel
+ * schedule) instead of every consumer opening its own duplicate batch of
+ * requests against the shared per-IP rate limiter.
+ */
+export function useParcelTracking(trackable: TrackableShipment[]) {
+  const [tracking, setTracking] = useState<Record<string, TrackingResult>>({});
+  const [configured, setConfigured] = useState<Record<Carrier, boolean> | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const trackableKey = useMemo(
+    () => trackable.map((item) => `${item.carrier}:${item.trackingNumber}`).join("|"),
+    [trackable],
+  );
+
+  useEffect(() => {
+    if (!trackable.length) {
+      setConfigured((current) => current ?? { ups: false, fedex: false, usps: false });
+      return;
+    }
+    let cancelled = false;
+
+    const poll = () => {
+      setLoading(true);
+      const unique = Array.from(
+        new Map(trackable.map((item) => [`${item.carrier}:${item.trackingNumber}`, item])).values(),
+      );
+      const batches: TrackableShipment[][] = [];
+      for (let i = 0; i < unique.length; i += TRACKING_BATCH_SIZE) {
+        batches.push(unique.slice(i, i + TRACKING_BATCH_SIZE));
+      }
+
+      Promise.all(
+        batches.map((batch) =>
+          fetch(TRACKING_ENDPOINT, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              requests: batch.map((item) => ({ carrier: item.carrier, number: item.trackingNumber })),
+            }),
+          }).then((response) => response.json() as Promise<{ ok?: boolean; results?: TrackingResult[]; configured?: Record<Carrier, boolean> }>),
+        ),
+      )
+        .then((batchResponses) => {
+          if (cancelled) return;
+          const byNumber: Record<string, TrackingResult> = {};
+          let configuredResult: Record<Carrier, boolean> | null = null;
+          batchResponses.forEach((data) => {
+            if (!data?.ok) return;
+            (data.results ?? []).forEach((result) => {
+              byNumber[`${result.carrier}:${result.number}`] = result;
+            });
+            if (data.configured) configuredResult = data.configured;
+          });
+          setTracking(byNumber);
+          setConfigured(configuredResult);
+        })
+        .catch(() => {
+          /* Tracking is best-effort — cards still show scheduled data without it. */
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+    };
+
+    poll();
+    const interval = window.setInterval(poll, TRACKING_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+    // trackableKey is a stable string fingerprint of trackable — safe dep
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trackableKey]);
+
+  return { tracking, configured, loading };
+}
 
 function originForMode(mode?: string): { label: string; coords: LatLng } {
   const isAir = /air/i.test(mode ?? "");
@@ -98,23 +182,21 @@ function loadLeaflet(): Promise<any> {
 export function LiveMapPanel({
   milestones,
   trackable,
+  tracking,
+  configured,
+  trackingLoading,
 }: {
   milestones: MilestoneShipment[];
   trackable: TrackableShipment[];
+  tracking: Record<string, TrackingResult>;
+  configured: Record<Carrier, boolean> | null;
+  trackingLoading: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<any>(null);
   const layerRef = useRef<any>(null);
   const [ready, setReady] = useState(false);
   const [mapError, setMapError] = useState("");
-  const [tracking, setTracking] = useState<Record<string, TrackingResult>>({});
-  const [configured, setConfigured] = useState<Record<Carrier, boolean> | null>(null);
-  const [trackingLoading, setTrackingLoading] = useState(false);
-
-  const trackableKey = useMemo(
-    () => trackable.map((item) => `${item.carrier}:${item.trackingNumber}`).join("|"),
-    [trackable],
-  );
 
   useEffect(() => {
     let cancelled = false;
@@ -136,60 +218,6 @@ export function LiveMapPanel({
       cancelled = true;
     };
   }, []);
-
-  useEffect(() => {
-    if (!trackable.length) {
-      setConfigured((current) => current ?? { ups: false, fedex: false, usps: false });
-      return;
-    }
-    let cancelled = false;
-    setTrackingLoading(true);
-
-    const unique = Array.from(
-      new Map(trackable.map((item) => [`${item.carrier}:${item.trackingNumber}`, item])).values(),
-    );
-    const batches: TrackableShipment[][] = [];
-    for (let i = 0; i < unique.length; i += TRACKING_BATCH_SIZE) {
-      batches.push(unique.slice(i, i + TRACKING_BATCH_SIZE));
-    }
-
-    Promise.all(
-      batches.map((batch) =>
-        fetch(TRACKING_ENDPOINT, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            requests: batch.map((item) => ({ carrier: item.carrier, number: item.trackingNumber })),
-          }),
-        }).then((response) => response.json() as Promise<{ ok?: boolean; results?: TrackingResult[]; configured?: Record<Carrier, boolean> }>),
-      ),
-    )
-      .then((batchResponses) => {
-        if (cancelled) return;
-        const byNumber: Record<string, TrackingResult> = {};
-        let configuredResult: Record<Carrier, boolean> | null = null;
-        batchResponses.forEach((data) => {
-          if (!data?.ok) return;
-          (data.results ?? []).forEach((result) => {
-            byNumber[`${result.carrier}:${result.number}`] = result;
-          });
-          if (data.configured) configuredResult = data.configured;
-        });
-        setTracking(byNumber);
-        setConfigured(configuredResult);
-      })
-      .catch(() => {
-        /* Tracking is best-effort — the map still shows inbound milestones without it. */
-      })
-      .finally(() => {
-        if (!cancelled) setTrackingLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-    // trackableKey is a stable string fingerprint of trackable — safe dep
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trackableKey]);
 
   useEffect(() => {
     if (!ready || !mapRef.current || !layerRef.current) return;

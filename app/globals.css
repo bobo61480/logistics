@@ -1080,6 +1080,16 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
   white-space: nowrap;
 }
 
+.parcel-tracking-number {
+  display: block;
+  overflow: hidden;
+  color: var(--muted);
+  font: 600 10px "IBM Plex Mono", monospace;
+  letter-spacing: .01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .parcel-card p {
   min-height: 31px;
   margin: 7px 0 11px;
