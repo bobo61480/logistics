@@ -1370,6 +1370,11 @@ function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
       eta,
       deliveryExpected: record.deliveryExpected,
       isSmallParcel: false,
+      // No dedicated carrier column exists in IMPORTS for Air/Ocean freight —
+      // vessel is the closest available proxy (ocean vessel names are usually
+      // carrier-branded, e.g. "MAERSK EDMONTON") and is already surfaced in
+      // `secondary` above, so reuse it rather than leaving Top Carriers blank.
+      carrier: record.vessel,
       shippingMethod: mode,
       sourceType: mode,
     }];
@@ -1594,7 +1599,9 @@ function inboundItems(table: any, importsRows: string[][]): ScheduleItem[] {
         vessel,
         pod: /^OSL/i.test(shipmentNo) ? "LGB" : "LAX",
         eta: expectedDelivery || eta,
-        carrier: "",
+        // See pendingImportItems: no dedicated carrier column exists for Air/Ocean
+        // freight, so vessel (already computed above) is the best available proxy.
+        carrier: vessel,
         trackingNumber: "",
         pro: "",
         isSmallParcel: false,
@@ -2485,14 +2492,50 @@ function scheduleCarrierName(item: ScheduleItem): string {
   return /^trucking$/i.test(name) ? "" : name;
 }
 
-function carrierCounts(source: ScheduleItem[], limit = 6): CountEntry[] {
-  const counts = new Map<string, number>();
-  for (const item of source) {
-    const name = scheduleCarrierName(item);
-    if (!name) continue;
-    counts.set(name, (counts.get(name) ?? 0) + 1);
-  }
-  return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit);
+const CARRIER_CATEGORIES = ["Air", "Ocean", "Domestic Transportation", "Small Parcels"] as const;
+type CarrierCategory = (typeof CARRIER_CATEGORIES)[number];
+
+// Same bucketing as scheduleFreightMode, renamed for display and restricted to the four
+// named categories the Top Carriers card reports on (unclassified "Other" freight is only
+// surfaced in the Freight Mix card, not here).
+function scheduleCarrierCategory(item: ScheduleItem): CarrierCategory | null {
+  if (item.isSmallParcel) return "Small Parcels";
+  if (item.mode === "Air") return "Air";
+  if (item.mode === "Ocean") return "Ocean";
+  if (/^trucking$/i.test(item.shippingMethod ?? "")) return "Domestic Transportation";
+  return null;
+}
+
+type CategoryCarrierStats = {
+  category: CarrierCategory;
+  mtdCount: number;
+  ytdCount: number;
+  topCarriers: CountEntry[];
+};
+
+// All rows count here, including finished/completed ones — these are shipment-volume totals,
+// not the "active" alerts the rest of the Control Tower row reports, matching how the KPI
+// panel's own topCarriers/MTD/YTD figures are computed (see lib/sales-kpis.ts).
+function categoryCarrierStats(source: ScheduleItem[], today: Date): CategoryCarrierStats[] {
+  const yearStart = new Date(today.getFullYear(), 0, 1);
+  return CARRIER_CATEGORIES.map((category) => {
+    const ytdItems = source.filter((item) => {
+      if (scheduleCarrierCategory(item) !== category) return false;
+      const time = item.date.getTime();
+      return time >= yearStart.getTime() && time <= today.getTime();
+    });
+    const mtdCount = ytdItems.filter(
+      (item) => item.date.getFullYear() === today.getFullYear() && item.date.getMonth() === today.getMonth(),
+    ).length;
+    const carrierCounts = new Map<string, number>();
+    ytdItems.forEach((item) => {
+      const name = scheduleCarrierName(item);
+      if (!name) return;
+      carrierCounts.set(name, (carrierCounts.get(name) ?? 0) + 1);
+    });
+    const topCarriers = [...carrierCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+    return { category, mtdCount, ytdCount: ytdItems.length, topCarriers };
+  });
 }
 
 function scheduleFreightMode(item: ScheduleItem): string {
@@ -2520,27 +2563,33 @@ function freightModeCounts(source: ScheduleItem[]): CountEntry[] {
   return [...counts.entries()].sort((a, b) => b[1] - a[1]);
 }
 
-function ControlTowerCarriers({ carriers }: { carriers: CountEntry[] }) {
-  const max = carriers[0]?.[1] || 1;
+function ControlTowerCarriers({ categories }: { categories: CategoryCarrierStats[] }) {
   return (
-    <article className="ct-panel">
+    <article className="ct-panel ct-panel-carriers">
       <div className="ct-panel-head">
-        <span className="ct-eyebrow">By shipment count · active</span>
+        <span className="ct-eyebrow">By shipment count · MTD / YTD</span>
         <h2>Top Carriers</h2>
       </div>
-      <div className="ct-bar-list">
-        {carriers.map(([name, count]) => (
-          <div key={name}>
-            <div className="ct-bar-row-label">
-              <span className="ct-bar-name">{name}</span>
-              <span className="ct-bar-stat">{count} {count === 1 ? "shipment" : "shipments"}</span>
+      <div className="ct-carrier-categories">
+        {categories.map(({ category, mtdCount, ytdCount, topCarriers }) => (
+          <div className="ct-carrier-category" key={category}>
+            <div className="ct-carrier-category-head">
+              <span className="ct-carrier-category-name">{category}</span>
+              <span className="ct-carrier-category-counts">
+                <b>{mtdCount}</b> MTD · <b>{ytdCount}</b> YTD
+              </span>
             </div>
-            <div className="ct-bar-track">
-              <div className="ct-bar-fill" style={{ width: `${Math.max(8, (count / max) * 100)}%` }} />
-            </div>
+            <ol className="ct-carrier-category-list">
+              {topCarriers.map(([name, count]) => (
+                <li key={name}>
+                  <span className="ct-carrier-category-carrier">{name}</span>
+                  <span className="ct-carrier-category-carrier-count">{count}</span>
+                </li>
+              ))}
+              {!topCarriers.length && <li className="ct-empty">No named carriers</li>}
+            </ol>
           </div>
         ))}
-        {!carriers.length && <p className="ct-empty">No named carriers in the active schedule.</p>}
       </div>
     </article>
   );
@@ -2826,7 +2875,7 @@ export default function Home() {
     [visibleItems],
   );
 
-  const activeCarrierCounts = useMemo(() => carrierCounts(activeItems), [activeItems]);
+  const carrierCategoryStats = useMemo(() => categoryCarrierStats(items, startOfToday()), [items]);
   const activeFreightModeCounts = useMemo(() => freightModeCounts(activeItems), [activeItems]);
 
   const mapMilestones = useMemo<MilestoneShipment[]>(
@@ -3102,7 +3151,7 @@ export default function Home() {
       </section>
 
       <section className="ct-row" aria-label="Active carrier and freight mode rollups">
-        <ControlTowerCarriers carriers={activeCarrierCounts} />
+        <ControlTowerCarriers categories={carrierCategoryStats} />
         <ControlTowerFreightMix modes={activeFreightModeCounts} />
       </section>
 
