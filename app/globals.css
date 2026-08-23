@@ -255,6 +255,28 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
 .inventory-table td { padding: 8px; border-bottom: 1px solid #e2ddd4; vertical-align: top; }
 .inventory-table td:nth-last-child(-n+2) { font-family: "IBM Plex Mono", monospace; }
 .inventory-table td.inventory-pallet { color: var(--orange-dark); font-family: "IBM Plex Mono", monospace; font-weight: 750; white-space: nowrap; }
+
+/* Expiration-age emphasis: under 1 year (or already expired), 1-2 years out, 2+ years out. */
+.inventory-table td.exp-urgent { background: #fde2de; color: #a12f24; font-weight: 700; }
+.inventory-table td.exp-soon { background: #fff3d6; color: #845d05; font-weight: 700; }
+.inventory-table td.exp-ok { background: #e5f4ea; color: #1f6b3c; }
+
+/* Warehouse-location color coding — best-guess against SK/BP/FT/HOLD/DAMAGED, not a verified enum. */
+.inventory-table td.loc-sk { background: #e4eff8; color: #2a648d; font-weight: 700; }
+.inventory-table td.loc-bp { background: #eee8f8; color: #65468f; font-weight: 700; }
+.inventory-table td.loc-ft { background: #fff0cc; color: #845d05; font-weight: 700; }
+.inventory-table td.loc-hold { background: #ffe1dc; color: #a12f24; font-weight: 700; }
+.inventory-table td.loc-damaged { background: #2a2320; color: #ffb199; font-weight: 700; }
+.inventory-table td.loc-other { color: var(--muted); }
+
+/* SKU-revision family color coding — best-guess suffix heuristic, only applied when a base SKU
+   actually has more than one distinct SKU sharing it. */
+.inventory-table td.sku-group-0 { box-shadow: inset 3px 0 var(--blue); }
+.inventory-table td.sku-group-1 { box-shadow: inset 3px 0 var(--green); }
+.inventory-table td.sku-group-2 { box-shadow: inset 3px 0 var(--orange); }
+.inventory-table td.sku-group-3 { box-shadow: inset 3px 0 var(--yellow); }
+.inventory-table td.sku-group-4 { box-shadow: inset 3px 0 var(--teal); }
+.inventory-table td.sku-group-5 { box-shadow: inset 3px 0 var(--source-fedex-parcel); }
 .inventory-table small { display: block; margin-top: 3px; color: var(--muted); font: 600 8px "IBM Plex Mono", monospace; }
 .inventory-shipment-links { display: flex !important; flex-wrap: wrap; gap: 3px 8px; }
 .inventory-shipment-links a { color: var(--blue); font-weight: 700; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
