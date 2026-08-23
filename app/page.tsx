@@ -10,6 +10,7 @@ import { GmailIngestionCard, type GmailIngestionEvent } from "./gmail-ingestion-
 import { DriveArchiveCard, driveLinkGlyph } from "./drive-archive-card";
 import ShipmentEventTrackerCard from "./ShipmentEventTrackerCard";
 import { LiveMapPanel, useParcelTracking, type MilestoneShipment, type TrackableShipment, type TrackingResult } from "./live-map";
+import { ThemeToggle } from "./theme-toggle";
 
 const SHEET_ID =
   process.env.NEXT_PUBLIC_LOGISTICS_MASTER_SHEET_ID ??
@@ -2994,6 +2995,7 @@ export default function Home() {
             </p>
           </div>
           <div className="manifest-actions">
+            <ThemeToggle />
             <button className="button primary" onClick={load} disabled={loading}>
               {loading ? "SYNCING…" : "↻ REFRESH DATA"}
             </button>
