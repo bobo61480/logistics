@@ -816,7 +816,7 @@ function InventoryPanel({
   const filteredItems = useMemo(() => {
     const needle = inventoryQuery.trim().toLowerCase();
     if (!needle) return items;
-    return items.filter((item) => [item.productName, item.sku, item.upc, item.expirationDate, item.location, item.shipmentNo]
+    return items.filter((item) => [item.productName, item.sku, item.upc, item.expirationDate, item.location, item.shipmentNo, item.palletNumber]
       .join(" ")
       .toLowerCase()
       .includes(needle));
@@ -856,7 +856,7 @@ function InventoryPanel({
         <input
           aria-label={`Search ${title}`}
           onChange={(event) => setInventoryQuery(event.target.value)}
-          placeholder="Search product, SKU, UPC, shipment, location…"
+          placeholder="Search product, SKU, UPC, shipment, pallet #, location…"
           type="search"
           value={inventoryQuery}
         />
@@ -2978,26 +2978,29 @@ export default function Home() {
             <div><small>OUT OF STATE</small><strong>{money(kpis.avgOutOfStateMtd)}</strong><strong>{money(kpis.avgOutOfState)}</strong></div>
           </article>
         </div>
-        <p className="kpi-method">
-          All rows, including hidden/completed entries. Shipping costs use freight Invoice first,
-          then Rate when Invoice is blank—never shipment Invoice Amount. Nationals sales use
-          Order Date (column G) and Amount (column E), expand K values, and exclude cancelled
-          orders. WMS wholesale sales use Date (column A) and numeric INVOICE AMOUNT (column G);
-          text entries such as “FREE SAMPLE,” “FOC,” “Sample,” and operational notes are excluded.
-          MTD is the current month through today; YTD begins January 1, 2026. Trucking averages
-          exclude transfers and unclassified destinations; local / regional uses a destination city/ZIP heuristic for the Southern California operating area and is not a measured mileage radius.
-          The NJ transfer card includes only TRANSFERS rows whose TO field is NJ or New Jersey.
-          Carrier freight spend uses the same freight Invoice-first, Rate-fallback cost, and shipment share
-          is each carrier’s moves divided by all YTD moves with a named carrier.{" "}
-          <a href={NATIONAL_SHEET_URL} target="_blank" rel="noreferrer">
-            Open Nationals source
-          </a>
-          {" · "}
-          <a href={SALES_SHEET_URL} target="_blank" rel="noreferrer">
-            Open WMS source
-          </a>
-          .
-        </p>
+        <details className="kpi-method">
+          <summary>Methodology notes</summary>
+          <p>
+            All rows, including hidden/completed entries. Shipping costs use freight Invoice first,
+            then Rate when Invoice is blank—never shipment Invoice Amount. Nationals sales use
+            Order Date (column G) and Amount (column E), expand K values, and exclude cancelled
+            orders. WMS wholesale sales use Date (column A) and numeric INVOICE AMOUNT (column G);
+            text entries such as “FREE SAMPLE,” “FOC,” “Sample,” and operational notes are excluded.
+            MTD is the current month through today; YTD begins January 1, 2026. Trucking averages
+            exclude transfers and unclassified destinations; local / regional uses a destination city/ZIP heuristic for the Southern California operating area and is not a measured mileage radius.
+            The NJ transfer card includes only TRANSFERS rows whose TO field is NJ or New Jersey.
+            Carrier freight spend uses the same freight Invoice-first, Rate-fallback cost, and shipment share
+            is each carrier’s moves divided by all YTD moves with a named carrier.{" "}
+            <a href={NATIONAL_SHEET_URL} target="_blank" rel="noreferrer">
+              Open Nationals source
+            </a>
+            {" · "}
+            <a href={SALES_SHEET_URL} target="_blank" rel="noreferrer">
+              Open WMS source
+            </a>
+            .
+          </p>
+        </details>
       </section>
 
       <section className="ct-row" aria-label="Active carrier and freight mode rollups">
@@ -3119,7 +3122,7 @@ export default function Home() {
       {/* .ingestion-archive-row keeps this row ordered above the footer on the
           flex-reordered /light, /light-full, and /fulfillment-style variants. */}
       <div className="ingestion-archive-row mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2" aria-label="Email ingestion and document archive">
-        <GmailIngestionCard events={gmailIngestion} loading={loading} onReview={handleReview} reviewingKey={reviewingKey} />
+        <GmailIngestionCard events={gmailIngestion} loading={loading} onReview={handleReview} reviewingKey={reviewingKey} sheetUrl={SHEET_URL} />
         <DriveArchiveCard />
       </div>
 
