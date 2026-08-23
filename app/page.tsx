@@ -1554,7 +1554,7 @@ function salesOutboundItems(table: any): ScheduleItem[] {
         dateText: shipDate,
         title: customer,
         reference: trackingNumber || invoice || "Sales shipment",
-        secondary: [invoice, cell(row, 5), issue && `Issue: ${issue}`]
+        secondary: [cell(row, 3), cell(row, 5), issue && `Issue: ${issue}`]
           .filter(Boolean)
           .join(" · "),
         status,
