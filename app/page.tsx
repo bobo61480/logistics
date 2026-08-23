@@ -1649,6 +1649,9 @@ function consolidateTruckingItems(records: ScheduleItem[]) {
     ));
     const warningStatus = items.find((item) => /pending|delay|hold|review/i.test(item.status));
     const unfinishedStatus = items.find((item) => !finished.has(item.status.toLowerCase()));
+    // Only report a finished status once every grouped shipment is finished — otherwise the
+    // whole group would hide while a constituent shipment is still outstanding.
+    const statusSource = warningStatus ?? unfinishedStatus ?? primary;
     const secondary = Array.from(new Set(items.map((item) => item.secondary).filter(Boolean))).join(" · ");
     const invoice = invoices.join("\n");
     return {
@@ -1657,9 +1660,13 @@ function consolidateTruckingItems(records: ScheduleItem[]) {
       invoice,
       reference: invoice || primary.reference,
       secondary,
-      // Only report a finished status once every grouped shipment is finished — otherwise
-      // the whole group would hide while a constituent shipment is still outstanding.
-      status: warningStatus?.status ?? unfinishedStatus?.status ?? primary.status,
+      status: statusSource.status,
+      // The status dropdown and "source row" link act on primary's row — if a different
+      // constituent supplied the displayed status, editing here would silently write to the
+      // wrong shipment, so fall back to that constituent's own source and make it read-only.
+      editable: statusSource === primary ? primary.editable : false,
+      sourceSheet: statusSource.sourceSheet,
+      sourceRow: statusSource.sourceRow,
     };
   });
 
