@@ -185,6 +185,7 @@ const STATUS_OPTIONS = [
 
 const INBOUND_STATUS_OPTIONS = [
   ...STATUS_OPTIONS,
+  "N/A",
   "Customs Clearance",
   "FDA Review/Hold",
   "FWS Review/Hold",
@@ -1954,6 +1955,10 @@ async function postStatus(item: ScheduleItem, status: string) {
     customer: item.customer ?? "",
     shipDate: item.shipDate ?? "",
     currentStatus: item.status,
+    // findInboundTarget_ (Code.gs) needs isSmallParcel to route the write into the
+    // IMPORTS sheet's PARCELS section instead of validating it as a regular import row.
+    isSmallParcel: item.isSmallParcel ?? false,
+    trackingNumber: item.trackingNumber ?? "",
     status,
   };
 
