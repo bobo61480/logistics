@@ -97,8 +97,8 @@ export function DriveLinkIcon({ label, url }: { label: string; url: string }) {
 /** Static quick-links into the pipeline's configured Drive destinations. */
 export function DriveArchiveCard({ links = DEFAULT_LINKS }: { links?: DriveLink[] }) {
   return (
-    <section className="rounded-xl border border-neutral-200 bg-white shadow-sm">
-      <header className="border-b border-neutral-100 px-5 py-4">
+    <section className="hct-card rounded-xl border border-neutral-200 bg-white shadow-sm">
+      <header className="hct-card-header border-b border-neutral-100 px-5 py-4">
         <h3 className="text-lg font-extrabold text-neutral-900">Document Folders</h3>
         <p className="text-xs text-neutral-500">Warehouse Documents drive — source documents and Gmail-archived attachments.</p>
       </header>
@@ -109,7 +109,7 @@ export function DriveArchiveCard({ links = DEFAULT_LINKS }: { links?: DriveLink[
               href={link.url}
               target="_blank"
               rel="noreferrer"
-              className="flex items-center gap-3 px-5 py-3 text-sm text-neutral-800 hover:bg-neutral-50"
+              className="hct-card-row flex items-center gap-3 px-5 py-3 text-sm text-neutral-800 hover:bg-neutral-50"
             >
               <DriveLinkIcon label={link.label} url={link.url} />
               <span className="flex flex-1 items-center justify-between gap-3">
