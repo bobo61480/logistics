@@ -9,6 +9,7 @@ import FulfillmentTkOrders from "./FulfillmentTkOrders";
 import { GmailIngestionCard, type GmailIngestionEvent } from "./gmail-ingestion-card";
 import { DriveArchiveCard, driveLinkGlyph } from "./drive-archive-card";
 import ShipmentEventTrackerCard from "./ShipmentEventTrackerCard";
+import { LiveMapPanel, type MilestoneShipment, type TrackableShipment } from "./live-map";
 
 const SHEET_ID =
   process.env.NEXT_PUBLIC_LOGISTICS_MASTER_SHEET_ID ??
@@ -432,6 +433,16 @@ function carrierFromTrackingNumber(value: string) {
   if (/^\d{12}$/.test(tracking) || /^\d{15}$/.test(tracking)) return "FedEx";
   if (/^\d{20,22}$/.test(tracking) && !tracking.startsWith("9")) return "FedEx";
   return "";
+}
+
+// The live-map tracking backend only integrates UPS/FedEx/USPS (carrier-tracking.ts) —
+// DHL and Amazon don't have a server-side lookup, so they're intentionally excluded here.
+function trackableCarrier(value?: string): "ups" | "fedex" | "usps" | null {
+  const normalized = clean(value).toLowerCase();
+  if (normalized.includes("ups")) return "ups";
+  if (normalized.includes("fedex")) return "fedex";
+  if (normalized.includes("usps")) return "usps";
+  return null;
 }
 
 function sourceClass(value: string) {
@@ -2720,6 +2731,40 @@ export default function Home() {
   const activeCarrierCounts = useMemo(() => carrierCounts(activeItems), [activeItems]);
   const activeFreightModeCounts = useMemo(() => freightModeCounts(activeItems), [activeItems]);
 
+  const mapMilestones = useMemo<MilestoneShipment[]>(
+    () =>
+      activeItems
+        .filter((item) => item.direction === "inbound" && !item.isSmallParcel && (item.mode === "Air" || item.mode === "Ocean"))
+        .map((item) => ({
+          id: item.id,
+          title: item.shipmentNo || item.title,
+          mode: item.mode,
+          pod: item.pod,
+          eta: item.eta,
+          status: item.status,
+          vessel: item.vessel,
+        })),
+    [activeItems],
+  );
+
+  const mapTrackable = useMemo<TrackableShipment[]>(
+    () =>
+      activeItems.flatMap((item) => {
+        if (!item.isSmallParcel || !item.trackingNumber) return [];
+        const carrier = trackableCarrier(item.carrier || item.shippingMethod);
+        if (!carrier) return [];
+        return [{
+          id: item.id,
+          title: item.title,
+          carrier,
+          trackingNumber: item.trackingNumber,
+          direction: item.direction,
+          status: item.status,
+        }];
+      }),
+    [activeItems],
+  );
+
   const handleStatus = async (item: ScheduleItem, status: string) => {
     setSavingId(item.id);
     setNotice(`Saving ${item.title}…`);
@@ -2959,6 +3004,8 @@ export default function Home() {
         <ControlTowerCarriers carriers={activeCarrierCounts} />
         <ControlTowerFreightMix modes={activeFreightModeCounts} />
       </section>
+
+      <LiveMapPanel milestones={mapMilestones} trackable={mapTrackable} />
 
       <section className="control-panel" aria-label="Schedule filters">
         <label className="search">

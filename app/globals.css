@@ -261,6 +261,15 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
 .inventory-shipment-links a:hover { color: var(--orange-dark); }
 .inventory-shipment-links a:focus-visible { border-radius: 3px; outline: 2px solid var(--orange); outline-offset: 2px; }
 
+.live-map-panel { box-shadow: inset 0 4px 0 var(--teal); margin-top: 14px; }
+.live-map-container { width: 100%; height: 360px; border-top: 1px solid var(--line); background: #eef2f1; }
+.live-map-container .leaflet-container { height: 100%; width: 100%; font-family: "IBM Plex Mono", monospace; }
+.live-map-pin { display: inline-flex; align-items: center; justify-content: center; font-size: 15px; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .35)); }
+.live-map-legend { display: flex; flex-wrap: wrap; gap: 10px 16px; padding: 10px 13px; border-top: 1px solid var(--line); color: var(--muted); font: 600 9px "IBM Plex Mono", monospace; }
+.live-map-legend .live-map-pin { margin-right: 4px; font-size: 12px; }
+.live-map-hint, .live-map-error { margin: 0; padding: 8px 13px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; line-height: 1.5; }
+.live-map-error { color: var(--orange-dark); }
+
 .kpi-heading {
   display: flex;
   align-items: end;

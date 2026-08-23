@@ -8,6 +8,7 @@ import {
 import { fetchOperationalSources } from "./sources";
 import { handleStatusCommand } from "./status-command";
 import { handlePendingReviewCommand } from "./pending-review-command";
+import { handleTrackingCommand } from "./tracking-command";
 
 const WORKER_VERSION = "2026-08-13-worker-v8-public-guardrails";
 const SNAPSHOT_CACHE_URL = "https://stylekorean.internal/api/logistics/snapshot";
@@ -252,6 +253,8 @@ export default {
       response = await handleStatusCommand(request, env, context);
     } else if (url.pathname === "/api/logistics/pending-review") {
       response = await handlePendingReviewCommand(request, env, context);
+    } else if (url.pathname === "/api/logistics/tracking") {
+      response = await handleTrackingCommand(request, env);
     } else if (url.pathname === "/api/logistics/health") {
       response = request.method === "GET"
         ? await handleHealth(env)
