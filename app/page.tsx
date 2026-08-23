@@ -2426,10 +2426,13 @@ export default function Home() {
     return { inbound, outbound, dueToday, exceptions };
   }, [days, outboundParcelVisibleItems, outboundVisibleItems, visibleItems]);
 
-  // Reuse visibleItems (already bounded to the schedule board's day window plus the
-  // finished/stale/search filters) so these rollups can't be dominated by shipments
-  // that aren't shown anywhere on the active board below.
-  const activeItems = visibleItems;
+  // Reuse visibleItems's day-window/search bounds so these rollups can't be dominated by
+  // shipments that aren't shown anywhere on the active board below, but always drop finished
+  // statuses ourselves — visibleItems keeps them when "Show completed" is toggled on.
+  const activeItems = useMemo(
+    () => visibleItems.filter((item) => !finished.has(item.status.toLowerCase())),
+    [visibleItems],
+  );
 
   const activeCarrierCounts = useMemo(() => carrierCounts(activeItems), [activeItems]);
   const activeFreightModeCounts = useMemo(() => freightModeCounts(activeItems), [activeItems]);
