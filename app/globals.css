@@ -2019,3 +2019,76 @@ footer strong {
 [data-theme="dark"] .empty-day { color: var(--text-faint); }
 [data-theme="dark"] .empty-day span { color: var(--hairline-strong); }
 [data-theme="dark"] .loading-card { background: linear-gradient(90deg, var(--surface-inset) 25%, var(--surface-2) 50%, var(--surface-inset) 75%); background-size: 200% 100%; }
+
+/* ============================================================
+   Data Grids tabbed section (PR-4)
+   ============================================================ */
+.data-grids-panel {
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, .86);
+  box-shadow: inset 0 4px 0 var(--blue);
+}
+
+.grid-tabs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 12px 14px 0;
+}
+.grid-tab {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .03em;
+  border: 1px solid var(--line);
+  background: #f6f8f8;
+  color: var(--muted);
+  padding: 6px 12px;
+  border-radius: 20px;
+  cursor: pointer;
+}
+.grid-tab.active { background: var(--blue); border-color: var(--blue); color: #fff; }
+
+.grid-pane { padding: 14px; }
+.grid-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  color: var(--muted);
+  font: 600 10.5px "IBM Plex Mono", monospace;
+}
+.grid-placeholder-note {
+  margin: 0;
+  padding: 12px;
+  color: var(--muted);
+  font: 500 11px/1.5 "IBM Plex Mono", monospace;
+}
+
+.table-scroll { overflow-x: auto; }
+.grid-table { width: 100%; border-collapse: collapse; font-size: 12px; min-width: 560px; }
+.grid-table th {
+  text-align: left;
+  padding: 0 10px 8px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font: 700 9.5px "IBM Plex Mono", monospace;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.grid-table td { padding: 8px 10px; border-bottom: 1px solid #ece7dd; vertical-align: middle; }
+.grid-table tbody tr:hover { background: #f6f8f8; }
+.grid-table .mono { font-family: "IBM Plex Mono", monospace; color: var(--muted); font-size: 11px; }
+
+[data-theme="dark"] .data-grids-panel { border-color: var(--hairline-strong); background: var(--surface); }
+[data-theme="dark"] .data-grids-panel .panel-heading { border-bottom-color: var(--hairline); }
+[data-theme="dark"] .data-grids-panel .panel-heading h2 { color: var(--text); }
+[data-theme="dark"] .grid-tab { border-color: var(--hairline); background: var(--surface-inset); color: var(--text-soft); }
+[data-theme="dark"] .grid-tab.active { background: var(--accent-imports); border-color: var(--accent-imports); color: #eaf0fa; }
+[data-theme="dark"] .grid-toggle,
+[data-theme="dark"] .grid-placeholder-note { color: var(--text-faint); }
+[data-theme="dark"] .grid-table th { border-bottom-color: var(--hairline-strong); color: var(--text-faint); }
+[data-theme="dark"] .grid-table td { border-bottom-color: var(--hairline); color: var(--text); }
+[data-theme="dark"] .grid-table tbody tr:hover { background: var(--surface-inset); }
+[data-theme="dark"] .grid-table .mono { color: var(--text-soft); }

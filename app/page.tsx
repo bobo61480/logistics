@@ -11,6 +11,7 @@ import { DriveArchiveCard, driveLinkGlyph } from "./drive-archive-card";
 import ShipmentEventTrackerCard from "./ShipmentEventTrackerCard";
 import { LiveMapPanel, useParcelTracking, type MilestoneShipment, type TrackableShipment, type TrackingResult } from "./live-map";
 import { ThemeToggle } from "./theme-toggle";
+import { DataGrids } from "./data-grids";
 
 const SHEET_ID =
   process.env.NEXT_PUBLIC_LOGISTICS_MASTER_SHEET_ID ??
@@ -44,7 +45,7 @@ const AUTO_REFRESH_MS = 30 * 60 * 1000;
 type Direction = "inbound" | "outbound";
 type OutboundDepartment = "Wholesale" | "B2B/E-Com" | "Nationals" | "MBX" | "NJ";
 
-type ScheduleItem = {
+export type ScheduleItem = {
   id: string;
   direction: Direction;
   date: Date;
@@ -111,7 +112,7 @@ type KpiSnapshot = {
   avgOutOfStateMtd: number;
 };
 
-type InventoryItem = {
+export type InventoryItem = {
   id: string;
   shipmentNo: string;
   productName: string;
@@ -337,7 +338,7 @@ function startOfToday() {
   return new Date(Number(value.year), Number(value.month) - 1, Number(value.day));
 }
 
-function statusClass(status: string) {
+export function statusClass(status: string) {
   const value = status.toLowerCase();
   if (/delay|hold|review|pending/.test(value)) return "status warning";
   if (/deliver|receive|complete|shipped/.test(value)) return "status done";
@@ -2889,6 +2890,21 @@ export default function Home() {
     [visibleItems],
   );
 
+  // Data Grids tabs (Nationals / WMS) — same 14-day/search/completed filtering
+  // as every other schedule view, just sliced by sourceSheet instead of
+  // direction. sourceSheet values are set once in nationalOutboundItems_/
+  // salesOutboundItems_ at load time (see the ...nationalOutboundItems(...)
+  // spread building `items`).
+  const nationalsGridItems = useMemo(
+    () => visibleItems.filter((item) => item.sourceSheet === "NATIONAL ORDER PROGRESS"),
+    [visibleItems],
+  );
+
+  const wmsGridItems = useMemo(
+    () => visibleItems.filter((item) => item.sourceSheet === "Stylekorean"),
+    [visibleItems],
+  );
+
   const importScheduleItems = useMemo(
     () => {
       const needle = query.trim().toLowerCase();
@@ -3372,6 +3388,17 @@ export default function Home() {
           tracking={parcelTracking}
         />
       </div>
+
+      <DataGrids
+        imports={importScheduleItems}
+        outbound={outboundVisibleItems}
+        nationals={nationalsGridItems}
+        wms={wmsGridItems}
+        inventory={[...inboundInventory, ...warehouseStock]}
+        loading={loading}
+        includeFinished={includeFinished}
+        onToggleFinished={setIncludeFinished}
+      />
 
       {/* .ingestion-archive-row keeps this row ordered above the footer on the
           flex-reordered /light, /light-full, and /fulfillment-style variants. */}
