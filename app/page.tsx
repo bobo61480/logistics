@@ -1540,12 +1540,9 @@ function salesOutboundItems(table: any): ScheduleItem[] {
     const isTrucking = /\btruck(?:ing)?\b/i.test(shippingMethod);
     if (!date || !customer || (!isSmallParcel && !isTrucking)) return [];
     const sourceRow = index + 3;
-    const issueType = cell(row, 6);
-    // Column L ("YES"/blank) is the claim-resolved flag; once set the row is done and
-    // should drop out like any other finished shipment instead of lingering forever.
-    const resolved = /^\s*(yes|y|resolved|closed|done)\s*$/i.test(cell(row, 11));
-    const status = resolved ? "Completed" : issueType ? "Pending" : "Scheduled";
-    const invoice = cell(row, 3);
+    const issue = cell(row, 7);
+    const status = /yes|issue|hold|pending/i.test(issue) ? "Pending" : "Scheduled";
+    const invoice = cell(row, 1);
     const trackingNumber = isSmallParcel
       ? trackingCandidate(...Array.from({ length: 24 }, (_, offset) => cell(row, offset + 8)))
       : "";
@@ -1557,7 +1554,7 @@ function salesOutboundItems(table: any): ScheduleItem[] {
         dateText: shipDate,
         title: customer,
         reference: trackingNumber || invoice || "Sales shipment",
-        secondary: [invoice, cell(row, 5), issueType && `Issue: ${issueType}`]
+        secondary: [invoice, cell(row, 5), issue && `Issue: ${issue}`]
           .filter(Boolean)
           .join(" · "),
         status,
@@ -1651,6 +1648,7 @@ function consolidateTruckingItems(records: ScheduleItem[]) {
       items.flatMap((item) => splitValues(item.invoice ?? "")).map((value) => value.trim()).filter(Boolean),
     ));
     const warningStatus = items.find((item) => /pending|delay|hold|review/i.test(item.status));
+    const unfinishedStatus = items.find((item) => !finished.has(item.status.toLowerCase()));
     const secondary = Array.from(new Set(items.map((item) => item.secondary).filter(Boolean))).join(" · ");
     const invoice = invoices.join("\n");
     return {
@@ -1659,7 +1657,9 @@ function consolidateTruckingItems(records: ScheduleItem[]) {
       invoice,
       reference: invoice || primary.reference,
       secondary,
-      status: warningStatus?.status ?? primary.status,
+      // Only report a finished status once every grouped shipment is finished — otherwise
+      // the whole group would hide while a constituent shipment is still outstanding.
+      status: warningStatus?.status ?? unfinishedStatus?.status ?? primary.status,
     };
   });
 
@@ -2105,7 +2105,10 @@ function ScheduleBoard({
 type CountEntry = [string, number];
 
 function scheduleCarrierName(item: ScheduleItem): string {
-  return clean(item.carrier) || (item.isSmallParcel ? clean(item.shippingMethod) : "");
+  const name = clean(item.carrier) || (item.isSmallParcel ? clean(item.shippingMethod) : "");
+  // "Trucking" is a freight mode stylekorean sometimes falls back to as a carrier value,
+  // not an actual named carrier — exclude it so it can't displace a real carrier in the ranking.
+  return /^trucking$/i.test(name) ? "" : name;
 }
 
 function carrierCounts(source: ScheduleItem[], limit = 6): CountEntry[] {
