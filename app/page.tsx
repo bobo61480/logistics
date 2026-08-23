@@ -562,6 +562,62 @@ function inventoryProductsMatch(left: InventoryItem, right: InventoryItem) {
   );
 }
 
+function parseFullDate(value: string): Date | null {
+  const text = clean(value);
+  if (!text) return null;
+  const mdy = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (mdy) {
+    let year = Number(mdy[3]);
+    if (year < 100) year += 2000;
+    return new Date(year, Number(mdy[1]) - 1, Number(mdy[2]));
+  }
+  const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (iso) return new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
+  return null;
+}
+
+// Buckets relative to today: already-expired or expiring within a year is urgent, 1-2 years out
+// is a warning, anything further away (or unparseable) needs no emphasis.
+function expirationBucketClass(expirationDate: string): string {
+  const date = parseFullDate(expirationDate);
+  if (!date) return "";
+  const today = new Date();
+  const oneYearOut = new Date(today.getFullYear() + 1, today.getMonth(), today.getDate());
+  const twoYearsOut = new Date(today.getFullYear() + 2, today.getMonth(), today.getDate());
+  if (date.getTime() < oneYearOut.getTime()) return "exp-urgent";
+  if (date.getTime() < twoYearsOut.getTime()) return "exp-soon";
+  return "exp-ok";
+}
+
+// No fixed warehouse-zone vocabulary exists in the data — this is a best-guess prefix/substring
+// match against common zone codes (SK/BP/FT) and exception states (HOLD/DAMAGED), not a verified
+// enum. Needs checking against real location values.
+function inventoryLocationClass(location: string): string {
+  const text = clean(location).toUpperCase();
+  if (!text) return "";
+  if (text.includes("DAMAG")) return "loc-damaged";
+  if (text.includes("HOLD")) return "loc-hold";
+  if (text.startsWith("SK")) return "loc-sk";
+  if (text.startsWith("BP")) return "loc-bp";
+  if (text.startsWith("FT")) return "loc-ft";
+  return "loc-other";
+}
+
+// No confirmed SKU-revision naming convention exists — this is a best-guess heuristic (a
+// -R/-REV/-V# suffix with a separator, or a single trailing letter glued onto a numeric SKU body)
+// grouping a SKU with its likely revised/renewed sibling. Needs checking against real SKUs.
+function skuBaseGroup(sku: string): string {
+  const text = clean(sku).toUpperCase();
+  if (!text) return "";
+  const withSeparator = text.match(/^(.+)[-_ ](?:REV\d*|R\d*|V\d+|RENEW(?:ED)?)$/);
+  if (withSeparator) return withSeparator[1];
+  const trailingLetter = text.match(/^([A-Z]*\d+)[A-Z]$/);
+  if (trailingLetter) return trailingLetter[1];
+  return text;
+}
+
+const SKU_GROUP_PALETTE = ["sku-group-0", "sku-group-1", "sku-group-2", "sku-group-3", "sku-group-4", "sku-group-5"];
+
 function inventoryShipmentCodes(item: InventoryItem) {
   return new Set(
     inventoryShipmentReferences(item.shipmentNo)
@@ -834,6 +890,27 @@ function InventoryPanel({
       )
       .slice(0, 250);
   }, [filteredItems, items, selectedItem, showLocation]);
+  // Only color a SKU family when it actually has more than one distinct SKU sharing a base —
+  // otherwise every row would get tinted for no reason.
+  const skuGroupColors = useMemo(() => {
+    const bases = new Map<string, Set<string>>();
+    displayedItems.forEach((item) => {
+      const sku = clean(item.sku);
+      if (!sku) return;
+      const base = skuBaseGroup(sku);
+      const set = bases.get(base) ?? new Set<string>();
+      set.add(sku);
+      bases.set(base, set);
+    });
+    const colors = new Map<string, string>();
+    let paletteIndex = 0;
+    bases.forEach((skus, base) => {
+      if (skus.size < 2) return;
+      colors.set(base, SKU_GROUP_PALETTE[paletteIndex % SKU_GROUP_PALETTE.length]);
+      paletteIndex += 1;
+    });
+    return colors;
+  }, [displayedItems]);
   useEffect(() => {
     if (!selectedItem || !showLocation) return;
     const frame = window.requestAnimationFrame(() => {
@@ -910,10 +987,12 @@ function InventoryPanel({
                   </small>
                 )}
               </td>
-              <td>{item.sku || "—"}</td><td>{item.upc || "—"}</td><td>{item.expirationDate || "—"}</td>
+              <td className={skuGroupColors.get(skuBaseGroup(item.sku)) ?? ""}>{item.sku || "—"}</td>
+              <td>{item.upc || "—"}</td>
+              <td className={expirationBucketClass(item.expirationDate)}>{item.expirationDate || "—"}</td>
               {!showLocation && <td className="inventory-pallet">{item.palletNumber || "—"}</td>}
               <td>{item.quantity.toLocaleString()}</td>
-              {showLocation && <td>{item.location || "Unassigned"}</td>}
+              {showLocation && <td className={inventoryLocationClass(item.location)}>{item.location || "Unassigned"}</td>}
             </tr>})}
             {!loading && filteredItems.length === 0 && <tr><td className="import-empty" colSpan={6}>No matching inventory records are currently available.</td></tr>}
             {loading && <tr><td className="import-empty" colSpan={6}>Syncing inventory…</td></tr>}
@@ -943,6 +1022,25 @@ function LowStockPanel({
         .filter((inbound) => inventoryProductsMatch(inbound, item))
         .flatMap((inbound) => inventoryShipmentReferences(inbound.shipmentNo)),
     ));
+  const skuGroupColors = useMemo(() => {
+    const bases = new Map<string, Set<string>>();
+    lowStockItems.forEach((item) => {
+      const sku = clean(item.sku);
+      if (!sku) return;
+      const base = skuBaseGroup(sku);
+      const set = bases.get(base) ?? new Set<string>();
+      set.add(sku);
+      bases.set(base, set);
+    });
+    const colors = new Map<string, string>();
+    let paletteIndex = 0;
+    bases.forEach((skus, base) => {
+      if (skus.size < 2) return;
+      colors.set(base, SKU_GROUP_PALETTE[paletteIndex % SKU_GROUP_PALETTE.length]);
+      paletteIndex += 1;
+    });
+    return colors;
+  }, [lowStockItems]);
   return (
     <section className="inventory-panel low-stock-panel" aria-label="Low Stock">
       <div className="panel-heading inventory-heading">
@@ -958,11 +1056,11 @@ function LowStockPanel({
               return (
                 <tr key={item.id}>
                   <td><strong>{item.productName || "—"}</strong></td>
-                  <td>{item.sku || "—"}</td>
+                  <td className={skuGroupColors.get(skuBaseGroup(item.sku)) ?? ""}>{item.sku || "—"}</td>
                   <td>{item.upc || "—"}</td>
-                  <td>{item.expirationDate || "—"}</td>
+                  <td className={expirationBucketClass(item.expirationDate)}>{item.expirationDate || "—"}</td>
                   <td>{item.quantity.toLocaleString()}</td>
-                  <td>{item.location || "Unassigned"}</td>
+                  <td className={inventoryLocationClass(item.location)}>{item.location || "Unassigned"}</td>
                   <td>
                     {shipments.length ? (
                       <span className="inventory-shipment-links">
