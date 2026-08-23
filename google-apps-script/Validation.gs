@@ -136,6 +136,12 @@ function addPendingRow_(entry) {
 function addCommittedAuditRow_(entry) {
   var sheet = ensurePendingSheet_();
   var r = entry.record || {};
+  // Inbound records identify themselves via shipmentNo/mbl/hbl, not `pro`
+  // (an outbound/trucking concept) — without this fallback, an inbound
+  // update matched solely on one of those fields writes no BL/PRO value,
+  // and the worker (which derives shipmentId from Invoice / BL-PRO /
+  // Container only) shows the notice as "Unidentified shipment".
+  var blOrPro = r.pro || r.shipmentNo || r.mbl || r.hbl || "";
   sheet.appendRow([
     new Date(),
     entry.kind || "",
@@ -143,7 +149,7 @@ function addCommittedAuditRow_(entry) {
     "",
     r.customer || "",
     r.invoice || "",
-    r.pro || "",
+    blOrPro,
     r.container || "",
     r.shipDate || r.eta || "",
     r.qty || "",

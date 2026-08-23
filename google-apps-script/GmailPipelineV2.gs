@@ -315,13 +315,22 @@ function logGmailIngestionCommit_(kind, action, row, record, meta, driveUrl) {
  * the dashboard's Shipment Notices card has something to show for commits
  * that never needed a human review. Never called for "noop" — a re-processed
  * email that changed nothing must stay invisible, not spam the feed.
+ *
+ * The live schedule row has already been written by the time this runs — a
+ * failure here (transient Sheets error, quota) must never look like the
+ * ingestion itself failed, so this swallows its own errors the same way
+ * logGmailIngestionCommit_/logPipeline_ do for the other auxiliary log.
  */
 function recordShipmentNoticeV2_(kind, upsert, record, meta, driveUrl) {
   if (upsert.action === "noop") return;
-  var note = upsert.action === "inserted"
-    ? "Received: " + briefShipmentSummaryV2_(kind, record)
-    : "Changed: " + ((upsert.changes && upsert.changes.length) ? upsert.changes.join(", ") : "fields updated");
-  addCommittedAuditRow_({ kind: kind, record: record, meta: meta, driveUrl: driveUrl, note: note });
+  try {
+    var note = upsert.action === "inserted"
+      ? "Received: " + briefShipmentSummaryV2_(kind, record)
+      : "Changed: " + ((upsert.changes && upsert.changes.length) ? upsert.changes.join(", ") : "fields updated");
+    addCommittedAuditRow_({ kind: kind, record: record, meta: meta, driveUrl: driveUrl, note: note });
+  } catch (e) {
+    Logger.log("recordShipmentNoticeV2_ failed: " + e.message);
+  }
 }
 
 function briefShipmentSummaryV2_(kind, record) {
