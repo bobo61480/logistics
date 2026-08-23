@@ -2,18 +2,22 @@
 @import "tailwindcss";
 
 :root {
-  --ink: #13272d;
-  --ink-soft: #284047;
-  --paper: #f4f0e8;
-  --paper-2: #ebe5d9;
-  --line: #c8c2b7;
-  --muted: #6c7a7d;
+  /* Reference-aligned StyleKorean Logistics Hub visual system — this used to
+     be redeclared a second time further down the file (silently overriding
+     these same names via cascade order); consolidated into one block here
+     so there is a single source of truth for these values. */
+  --ink: #0f2430;
+  --ink-soft: #22404f;
+  --paper: #ecf0f1;
+  --paper-2: #e4eaec;
+  --line: #d5dee1;
+  --muted: #5b6e77;
   --orange: #e4572e;
-  --orange-dark: #a9381e;
-  --teal: #0d8d94;
-  --blue: #2e6f9f;
-  --green: #2f7d55;
-  --yellow: #c58518;
+  --orange-dark: #a74720;
+  --teal: #2a8f84;
+  --blue: #2f7fbf;
+  --green: #2e8b57;
+  --yellow: #b98a2e;
   --source-wholesale: #7556a8;
   --source-fulfillment-tk: #d18a2d;
   --source-ocean: #16899a;
@@ -31,6 +35,46 @@
   --department-nationals: #087f8c;
   --department-mbx: #3769c8;
   --department-nj: #2f7d55;
+
+  /* ---------- Hybrid Control Tower theme system (light, default) ----------
+     Semantic surface/text/accent tokens for the dark-theme redesign. New
+     components should consume these rather than the legacy --ink/--paper/
+     --line/--muted names above, which stay light-only and untouched. */
+  --surface: #ffffff;
+  --surface-2: #f6f8f8;
+  --surface-inset: #eef1f2;
+  --text: var(--ink);
+  --text-soft: var(--muted);
+  --text-faint: #8a99a0;
+  --hairline: var(--line);
+  --hairline-strong: #6a7c81;
+  --accent-imports: #3987e5;
+  --accent-transfers: #199e70;
+  --accent-outbound: #d95926;
+  --status-good: #0ca30c;
+  --status-warning: #b98a2e;
+  --status-serious: #c1602f;
+  --status-critical: #b23a3a;
+  --status-cleared: #2f7fbf;
+}
+
+[data-theme="dark"] {
+  --surface: #111927;
+  --surface-2: #0d1420;
+  --surface-inset: #0b121f;
+  --text: #eaf0fa;
+  --text-soft: #93a0bc;
+  --text-faint: #56607a;
+  --hairline: rgba(147, 160, 188, 0.14);
+  --hairline-strong: rgba(147, 160, 188, 0.28);
+  --accent-imports: #3987e5;
+  --accent-transfers: #199e70;
+  --accent-outbound: #d95926;
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-serious: #ec835a;
+  --status-critical: #d03b3b;
+  --status-cleared: #3987e5;
 }
 
 * { box-sizing: border-box; }
@@ -144,6 +188,23 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
 .button.primary { border-color: var(--orange); background: var(--orange); }
 .button:hover { transform: translateY(-1px); }
 .button:disabled { cursor: wait; opacity: .68; transform: none; }
+
+.theme-toggle {
+  display: inline-flex;
+  min-height: 35px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 14px;
+  border: 1px solid var(--hairline-strong, #6a7c81);
+  border-radius: 2px;
+  color: #fff;
+  background: transparent;
+  font: 700 11px "IBM Plex Mono", monospace;
+  letter-spacing: .035em;
+  cursor: pointer;
+}
+.theme-toggle:hover { transform: translateY(-1px); }
+.theme-toggle:disabled { cursor: default; opacity: .5; }
 
 .sync-strip { justify-content: space-between; background: #11262c; }
 .sync-strip > span { display: inline-flex; align-items: center; gap: 8px; }
@@ -1199,21 +1260,8 @@ footer strong { margin-right: 5px; padding: 3px 6px; background: var(--ink); col
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition: none !important; }
 }
 
-/* Reference-aligned StyleKorean Logistics Hub visual system */
-:root {
-  --ink: #0f2430;
-  --ink-soft: #22404f;
-  --paper: #ecf0f1;
-  --paper-2: #e4eaec;
-  --line: #d5dee1;
-  --muted: #5b6e77;
-  --orange: #e4572e;
-  --orange-dark: #a74720;
-  --teal: #2a8f84;
-  --blue: #2f7fbf;
-  --green: #2e8b57;
-  --yellow: #b98a2e;
-}
+/* Reference-aligned StyleKorean Logistics Hub visual system — values now
+   live in the single :root block near the top of this file. */
 
 html { background: var(--paper); scroll-behavior: smooth; }
 
