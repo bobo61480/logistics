@@ -1967,3 +1967,55 @@ footer strong {
 
 [data-theme="dark"] .period-toggle { background: var(--surface-inset); border-color: var(--hairline); }
 [data-theme="dark"] .period-toggle button { color: var(--text-faint); }
+
+/* ============================================================
+   Dark theme overrides — Hybrid Control Tower redesign (PR-3)
+   Calendar-strip schedule boards (Import/Outbound freight + the two
+   small-parcel strips, now day-grouped the same way).
+   ============================================================ */
+[data-theme="dark"] .schedule-panel,
+[data-theme="dark"] .parcel-panel {
+  border-color: var(--hairline-strong);
+  background: var(--surface);
+}
+[data-theme="dark"] .schedule-panel .panel-heading,
+[data-theme="dark"] .parcel-heading { border-bottom-color: var(--hairline); }
+[data-theme="dark"] .schedule-panel .panel-heading h2,
+[data-theme="dark"] .parcel-heading h2 { color: var(--text); }
+[data-theme="dark"] .board-total,
+[data-theme="dark"] .parcel-total { background: var(--surface-inset); color: var(--text-soft); }
+[data-theme="dark"] .board-total small { color: var(--text-faint); }
+
+[data-theme="dark"] .board-wrap { scrollbar-color: #465066 var(--surface-2); }
+[data-theme="dark"] .day-column {
+  border-right-color: var(--hairline);
+  background: var(--surface-2);
+}
+[data-theme="dark"] .day-column.today { background: rgba(217, 89, 38, .12); }
+[data-theme="dark"] .day-column > header {
+  border-bottom-color: var(--hairline);
+  background: var(--surface-inset);
+}
+[data-theme="dark"] .day-column.today > header { background: #0a1420; color: var(--text); }
+[data-theme="dark"] .day-column header span { color: var(--accent-outbound); }
+[data-theme="dark"] .day-column header strong { color: var(--text); }
+[data-theme="dark"] .day-column header small { color: var(--text-faint); }
+[data-theme="dark"] .day-column header b { border-color: var(--hairline-strong); color: var(--text-soft); }
+
+[data-theme="dark"] .schedule-card {
+  border-color: var(--hairline-strong);
+  background: var(--surface);
+  color: var(--text);
+}
+[data-theme="dark"] .schedule-card h3 { color: var(--text); }
+[data-theme="dark"] .parcel-card {
+  border-color: var(--hairline-strong);
+  background: var(--surface);
+  color: var(--text);
+}
+[data-theme="dark"] .parcel-detail { border-top-color: var(--hairline); }
+[data-theme="dark"] .parcel-invoice { color: var(--text-faint); }
+
+[data-theme="dark"] .empty-day { color: var(--text-faint); }
+[data-theme="dark"] .empty-day span { color: var(--hairline-strong); }
+[data-theme="dark"] .loading-card { background: linear-gradient(90deg, var(--surface-inset) 25%, var(--surface-2) 50%, var(--surface-inset) 75%); background-size: 200% 100%; }
