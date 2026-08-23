@@ -2419,15 +2419,10 @@ export default function Home() {
     return { inbound, outbound, dueToday, exceptions };
   }, [days, outboundParcelVisibleItems, outboundVisibleItems, visibleItems]);
 
-  const activeItems = useMemo(
-    () =>
-      items.filter(
-        (item) =>
-          !finished.has(item.status.toLowerCase()) &&
-          item.date.getTime() >= IMPORT_STALE_CUTOFF,
-      ),
-    [items],
-  );
+  // Reuse visibleItems (already bounded to the schedule board's day window plus the
+  // finished/stale/search filters) so these rollups can't be dominated by shipments
+  // that aren't shown anywhere on the active board below.
+  const activeItems = visibleItems;
 
   const activeCarrierCounts = useMemo(() => carrierCounts(activeItems), [activeItems]);
   const activeFreightModeCounts = useMemo(() => freightModeCounts(activeItems), [activeItems]);
