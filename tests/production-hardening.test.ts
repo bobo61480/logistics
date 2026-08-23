@@ -20,26 +20,34 @@ describe("production hardening", () => {
     expect(workflow).toContain("sourceHealth");
     expect(workflow).toContain("worker-v8-public-guardrails");
     expect(workflow).toContain("d1 migrations apply");
-    expect(workflow).toContain('binding = "DB"');
     // The versions-based release flow was replaced by a canonical
     // `wrangler deploy` (see "Restore Cloudflare production route during
     // deploy"): a version-only deployment cannot recover a detached zone
     // route, so the deploy validates and restores the route, assets, D1
     // binding, and Worker code together — and files a GitHub issue when
     // route recovery fails.
-    expect(workflow).toContain("wrangler deploy --config .wrangler.production.toml --keep-vars");
+    expect(workflow).toContain("wrangler deploy --keep-vars");
     expect(workflow).not.toContain("wrangler versions upload");
     expect(workflow).toContain("A version-only deployment cannot recover a detached zone route.");
     expect(workflow).toContain("Production route recovery failed");
     expect(workflow).toContain("gh issue create");
-    expect(workflow).toContain("EXPECTED_DATABASE_CONFIGURED");
-    expect(workflow).toContain("D1 permission is unavailable");
-    expect(workflow).toContain("Account > D1 > Edit");
-    expect(workflow).toContain("same account as CLOUDFLARE_ACCOUNT_ID");
+    // D1 is declared statically in wrangler.toml (shared by this workflow and
+    // Cloudflare's native Workers Builds Git integration), not injected
+    // dynamically per-run, so the live smoke test always expects it bound.
+    expect(workflow).toContain('EXPECTED_DATABASE_CONFIGURED: "true"');
     expect(workflow).toContain('snapshot.storage!=="d1"');
     expect(workflow).toContain("Number(health.databaseAgeSeconds)>30*60");
     expect(workflow).toContain("snapshot.stale===true");
     expect(workflow).toContain("x-content-type-options: nosniff");
+
+    const wranglerConfig = read("wrangler.toml");
+    expect(wranglerConfig).toContain("[[d1_databases]]");
+    expect(wranglerConfig).toContain('binding = "DB"');
+    expect(wranglerConfig).toContain('database_name = "stylekorean-logistics-read-model"');
+    expect(wranglerConfig).toContain('migrations_dir = "./migrations"');
+    expect(wranglerConfig).toContain("[triggers]");
+    expect(wranglerConfig).toContain('crons = ["*/15 * * * *"]');
+
     const worker = read("worker/index.ts");
     expect(worker).toContain('databaseState: "unbound" | "initializing" | "ready" | "unavailable"');
     expect(worker).toContain('databaseReady: databaseState === "ready"');
