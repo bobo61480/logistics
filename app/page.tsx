@@ -926,7 +926,8 @@ function importSourceRecords(rows: string[][]): ImportSourceRecord[] {
         hbl,
         container: cell(row, 7),
         vessel: cell(row, 14),
-        status: cell(row, 29),
+        // Column AB is "WEBSITE STATUS"; AD is "CONTAINER RAW (SYSTEM)", not status.
+        status: cell(row, 27),
         etd: cell(row, 15),
         eta: cell(row, 16),
         deliveryExpected: cell(row, 18),
