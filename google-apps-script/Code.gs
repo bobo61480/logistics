@@ -493,9 +493,14 @@ function canonicalWmsCustomer_(value) {
     "GLOWISS": "GLOWISS",
     "GLOWISS LLC": "GLOWISS"
   };
-  if (key.indexOf("MEGA MART") === 0) return "MEGA MART";
-  if (key.indexOf("TOKTOK BEAUTY") === 0) return "TOKTOK BEAUTY";
-  if (key.indexOf("ROYAL IMEX") === 0) return "ROYAL IMEX INC";
+  // Word-boundary anchored, not indexOf(...) === 0 — a raw prefix match let an
+  // unrelated customer like "MEGA MARTINEZ DISTRIBUTION" collapse into the
+  // "MEGA MART" canonical key and merge with a real Mega Mart shipment on the
+  // same date. normalizeWmsCustomerKey_ already collapses to single-spaced
+  // tokens, so \b here requires a following space or end-of-string.
+  if (/^MEGA MART\b/.test(key)) return "MEGA MART";
+  if (/^TOKTOK BEAUTY\b/.test(key)) return "TOKTOK BEAUTY";
+  if (/^ROYAL IMEX\b/.test(key)) return "ROYAL IMEX INC";
   if (key === "PPIH GUAM" || key === "GREAT LUCK PPIH GUAM") return "Great Luck Inc. (PPIH - GUAM)";
   return aliases[key] || raw.toUpperCase().replace(/\s+/g, " ").trim();
 }
