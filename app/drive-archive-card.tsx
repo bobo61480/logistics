@@ -6,19 +6,42 @@ interface DriveLink {
   hint?: string;
 }
 
-// Canonical destinations from GmailPipeline.gs (GMAIL_PIPELINE config):
-// importShipmentsFolderId is where GmailPipelineV2 creates every inbound
-// attachment folder; warehouseDocumentsFolderId backs the live IMPORTS
-// document links.
+// Real Warehouse Documents drive folders. A few categories (Shipping
+// Documents, Bill of Ladings, Invoices) don't have one single dedicated
+// folder today, so those point to the nearest matching home — see
+// GmailPipeline.gs (GMAIL_PIPELINE config) for the canonical ingestion
+// targets: importShipmentsFolderId is where GmailPipelineV2 creates every
+// inbound attachment folder; warehouseDocumentsFolderId backs the live
+// IMPORTS document links.
 const DEFAULT_LINKS: DriveLink[] = [
   {
-    label: "Import shipment documents",
+    label: "Shipping Documents",
+    url: "https://drive.google.com/drive/folders/1YBWV9lXAasRt7JolWxk199dPkGbx60M9",
+  },
+  {
+    label: "Bill of Ladings",
+    url: "https://drive.google.com/drive/folders/1m7L79x17oW-qFSq3pVrkWMcJwT-8AHzE",
+  },
+  {
+    label: "Invoices",
     url: "https://drive.google.com/drive/folders/1AhGI2qM2pGFXSb406OY6dsOaN8unlGDM",
     hint: "Canonical archive — Gmail ingestion files every inbound attachment here",
   },
   {
-    label: "Warehouse documents",
-    url: "https://drive.google.com/drive/folders/1YBWV9lXAasRt7JolWxk199dPkGbx60M9",
+    label: "POD",
+    url: "https://drive.google.com/drive/folders/1CsF3FEpPB9_8ROblc2Uq6Y0EGw5fp8Q4",
+  },
+  {
+    label: "Entry Summaries",
+    url: "https://drive.google.com/drive/folders/1BcaMbPfCEPnb-Ig1rNq_pB7WWdauNE1J",
+  },
+  {
+    label: "Supplies Purchase",
+    url: "https://drive.google.com/drive/folders/1vUktkh6D6O3rNFKEv1kV54BKIfJSiXCV",
+  },
+  {
+    label: "Inbound Shipments",
+    url: "https://drive.google.com/drive/folders/1yLstLWGf-wx_qxw0rzthdMzlhKmAZ9gZ",
   },
   {
     label: "SK Logistics Email Archive",
@@ -76,8 +99,8 @@ export function DriveArchiveCard({ links = DEFAULT_LINKS }: { links?: DriveLink[
   return (
     <section className="rounded-xl border border-neutral-200 bg-white shadow-sm">
       <header className="border-b border-neutral-100 px-5 py-4">
-        <h3 className="text-sm font-semibold text-neutral-900">Drive Archive</h3>
-        <p className="text-xs text-neutral-500">Source documents and Gmail-archived attachments.</p>
+        <h3 className="text-sm font-semibold text-neutral-900">Document Folders</h3>
+        <p className="text-xs text-neutral-500">Warehouse Documents drive — source documents and Gmail-archived attachments.</p>
       </header>
       <ul className="divide-y divide-neutral-100">
         {links.map((link) => (
