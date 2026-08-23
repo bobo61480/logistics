@@ -2297,8 +2297,89 @@ function ScheduleCard({
   );
 }
 
+function ParcelCard({
+  direction,
+  item,
+  savingId,
+  onStatus,
+  tracking,
+}: {
+  direction: Direction;
+  item: ScheduleItem;
+  savingId: string;
+  onStatus: (item: ScheduleItem, status: string) => void;
+  tracking?: Record<string, TrackingResult>;
+}) {
+  const trackingNumber = item.trackingNumber || item.pro || "";
+  const carrierCode = trackableCarrier(item.carrier || item.shippingMethod);
+  const liveStatus = carrierCode && trackingNumber ? tracking?.[`${carrierCode}:${trackingNumber}`] : undefined;
+  return (
+    <details
+      className={`parcel-card ${sourceClass(item.sourceType ?? "")} ${
+        direction === "outbound" ? departmentClass(item.department) : ""
+      }`}
+    >
+      <summary className="parcel-summary">
+        <span className="parcel-badges">
+          {direction === "outbound" ? (
+            <span className="department-badge">{item.department ?? "B2B/E-Com"}</span>
+          ) : null}
+          <span className="source-badge">{item.sourceType || item.carrier || "Parcel"}</span>
+        </span>
+        <strong className="parcel-tracking">{item.customer || item.title || "Customer pending"}</strong>
+        {trackingNumber ? (
+          <span className="parcel-tracking-number">
+            Tracking# {trackingNumber}
+            {liveStatus?.ok && liveStatus.status ? ` · ${liveStatus.status}` : ""}
+          </span>
+        ) : null}
+        <span className="parcel-invoice">{item.invoice ? `Invoice # ${item.invoice}` : "Invoice # —"}</span>
+        <span className="expand-mark" aria-hidden="true">＋</span>
+      </summary>
+      <div className="parcel-detail">
+        <div className="parcel-topline">
+          <span className={statusClass(item.status)}>{item.status}</span>
+          <span>{item.customer || item.shipmentNo || ""}</span>
+        </div>
+        <div className="parcel-footer">
+          <span><b>ETA</b> {item.dateText || "—"}</span>
+          {trackingNumber && item.containerUrl ? (
+            <a href={item.containerUrl} target="_blank" rel="noreferrer">
+              Track ↗
+            </a>
+          ) : (
+            <a href={sourceRowUrl(item)} target="_blank" rel="noreferrer">
+              Source ↗
+            </a>
+          )}
+        </div>
+        {item.editable ? (
+          <label className="status-field parcel-status-field">
+            <span>Status</span>
+            <select
+              aria-label={`Update ${item.title} status`}
+              disabled={savingId === item.id}
+              value={
+                (direction === "inbound" ? INBOUND_STATUS_OPTIONS : STATUS_OPTIONS).includes(item.status)
+                  ? item.status
+                  : "Scheduled"
+              }
+              onChange={(event) => onStatus(item, event.target.value)}
+            >
+              {(direction === "inbound" ? INBOUND_STATUS_OPTIONS : STATUS_OPTIONS).map((option) => (
+                <option key={option}>{option}</option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+      </div>
+    </details>
+  );
+}
+
 function SmallParcelSchedule({
   direction,
+  days,
   items,
   loading,
   savingId,
@@ -2306,13 +2387,13 @@ function SmallParcelSchedule({
   tracking,
 }: {
   direction: Direction;
+  days: Date[];
   items: ScheduleItem[];
   loading: boolean;
   savingId: string;
   onStatus: (item: ScheduleItem, status: string) => void;
   tracking?: Record<string, TrackingResult>;
 }) {
-  const sortedItems = [...items].sort((a, b) => a.date.getTime() - b.date.getTime());
   const isInbound = direction === "inbound";
   const headingId = `${direction}-small-parcel-heading`;
 
@@ -2331,85 +2412,52 @@ function SmallParcelSchedule({
           </h2>
         </div>
         <div className="parcel-total">
-          <strong>{sortedItems.length}</strong>
+          <strong>{items.length}</strong>
           <span>active</span>
         </div>
       </div>
-      <div className="parcel-grid">
-        {sortedItems.map((item) => {
-          const trackingNumber = item.trackingNumber || item.pro || "";
-          const carrierCode = trackableCarrier(item.carrier || item.shippingMethod);
-          const liveStatus = carrierCode && trackingNumber ? tracking?.[`${carrierCode}:${trackingNumber}`] : undefined;
-          return (
-            <details
-              className={`parcel-card ${sourceClass(item.sourceType ?? "")} ${
-                direction === "outbound" ? departmentClass(item.department) : ""
-              }`}
-              key={`parcel-${item.id}`}
-            >
-              <summary className="parcel-summary">
-                <span className="parcel-badges">
-                  {direction === "outbound" ? (
-                    <span className="department-badge">{item.department ?? "B2B/E-Com"}</span>
-                  ) : null}
-                  <span className="source-badge">{item.sourceType || item.carrier || "Parcel"}</span>
-                </span>
-                <strong className="parcel-tracking">{item.customer || item.title || "Customer pending"}</strong>
-                {trackingNumber ? (
-                  <span className="parcel-tracking-number">
-                    Tracking# {trackingNumber}
-                    {liveStatus?.ok && liveStatus.status ? ` · ${liveStatus.status}` : ""}
+      <div className="board-wrap">
+        <div className="board">
+          {days.map((day, index) => {
+            const dayItems = items.filter((item) => dayKey(item.date) === dayKey(day));
+            return (
+              <section
+                className={index === 0 ? "day-column today" : "day-column"}
+                key={`${direction}-parcel-${dayKey(day)}`}
+              >
+                <header>
+                  <span>
+                    {day.toLocaleDateString("en-US", { weekday: "short" }).toUpperCase()}
                   </span>
-                ) : null}
-                <span className="parcel-invoice">{item.invoice ? `Invoice # ${item.invoice}` : "Invoice # —"}</span>
-                <span className="expand-mark" aria-hidden="true">＋</span>
-              </summary>
-              <div className="parcel-detail">
-                <div className="parcel-topline">
-                  <span className={statusClass(item.status)}>{item.status}</span>
-                  <span>{item.customer || item.shipmentNo || ""}</span>
-                </div>
-                <div className="parcel-footer">
-                  <span><b>ETA</b> {item.dateText || "—"}</span>
-                  {trackingNumber && item.containerUrl ? (
-                    <a href={item.containerUrl} target="_blank" rel="noreferrer">
-                      Track ↗
-                    </a>
-                  ) : (
-                    <a href={sourceRowUrl(item)} target="_blank" rel="noreferrer">
-                      Source ↗
-                    </a>
+                  <strong>{day.getDate()}</strong>
+                  <small>
+                    {day.toLocaleDateString("en-US", { month: "short" }).toUpperCase()}
+                  </small>
+                  <b>{dayItems.length}</b>
+                </header>
+                <div className="day-items">
+                  {dayItems.map((item) => (
+                    <ParcelCard
+                      key={`parcel-${item.id}`}
+                      direction={direction}
+                      item={item}
+                      savingId={savingId}
+                      onStatus={onStatus}
+                      tracking={tracking}
+                    />
+                  ))}
+                  {!loading && dayItems.length === 0 && (
+                    <div className="empty-day">
+                      <span>—</span>
+                      No {direction} parcels
+                    </div>
                   )}
+                  {loading && <div className="loading-card" />}
                 </div>
-                {item.editable ? (
-                  <label className="status-field parcel-status-field">
-                    <span>Status</span>
-                    <select
-                      aria-label={`Update ${item.title} status`}
-                      disabled={savingId === item.id}
-                      value={
-                        (direction === "inbound" ? INBOUND_STATUS_OPTIONS : STATUS_OPTIONS).includes(item.status)
-                          ? item.status
-                          : "Scheduled"
-                      }
-                      onChange={(event) => onStatus(item, event.target.value)}
-                    >
-                      {(direction === "inbound" ? INBOUND_STATUS_OPTIONS : STATUS_OPTIONS).map((option) => (
-                        <option key={option}>{option}</option>
-                      ))}
-                    </select>
-                  </label>
-                ) : null}
-              </div>
-            </details>
-          );
-        })}
-        {!loading && sortedItems.length === 0 && (
-          <div className="parcel-empty">
-            No {direction} small-parcel shipments in the active 14-day window.
-          </div>
-        )}
-        {loading && <div className="loading-card" />}
+              </section>
+            );
+          })}
+        </div>
       </div>
     </section>
   );
@@ -3298,6 +3346,7 @@ export default function Home() {
         />
         <SmallParcelSchedule
           direction="inbound"
+          days={days}
           items={inboundParcelVisibleItems}
           loading={loading}
           savingId={savingId}
@@ -3315,6 +3364,7 @@ export default function Home() {
         <FulfillmentTkOrders />
         <SmallParcelSchedule
           direction="outbound"
+          days={days}
           items={outboundParcelVisibleItems}
           loading={loading}
           savingId={savingId}
