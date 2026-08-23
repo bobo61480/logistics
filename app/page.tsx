@@ -2644,6 +2644,7 @@ export default function Home() {
   const [nextRefreshAt, setNextRefreshAt] = useState<Date | null>(null);
   const [query, setQuery] = useState("");
   const [includeFinished, setIncludeFinished] = useState(false);
+  const [period, setPeriod] = useState<"mtd" | "ytd">("mtd");
   const [savingId, setSavingId] = useState("");
   const [reviewingKey, setReviewingKey] = useState("");
   const [notice, setNotice] = useState("");
@@ -3037,6 +3038,30 @@ export default function Home() {
         </div>
       </header>
 
+      <div className="badge-row">
+        <div className={error ? "sys-badge logi degraded" : "sys-badge logi"}>
+          <span className="sys-dot" aria-hidden="true" />
+          <div>
+            <div className="sys-badge-name">Logistics Control Tower</div>
+            <div className="sys-badge-host">stylekorean.dpdns.org</div>
+          </div>
+          <span className="sys-badge-status">{error ? "Degraded" : loading ? "Syncing" : "Operational"}</span>
+        </div>
+        <a
+          className="sys-badge wh placeholder"
+          href="https://skwarehouse.dpdns.org"
+          target="_blank"
+          rel="noreferrer"
+        >
+          <span className="sys-dot" aria-hidden="true" />
+          <div>
+            <div className="sys-badge-name">Warehouse Control Tower</div>
+            <div className="sys-badge-host">skwarehouse.dpdns.org</div>
+          </div>
+          <span className="sys-badge-status placeholder-status">External system · no live data here</span>
+        </a>
+      </div>
+
       {!error && connection && connection.mode !== "worker" && (
         <div className="alert warning" role="status">
           <strong>{connection.mode === "stale" ? "Continuity mode." : "Fallback mode."}</strong>{" "}
@@ -3083,36 +3108,45 @@ export default function Home() {
             <p className="eyebrow">2026 ACTUALS · INVOICE FIRST / RATE FALLBACK</p>
             <h2 id="kpi-heading">KPI Control Tower</h2>
           </div>
-          <span>MTD / YTD</span>
+          <div className="period-toggle" role="group" aria-label="KPI period">
+            <button type="button" className={period === "mtd" ? "active" : ""} onClick={() => setPeriod("mtd")}>
+              MTD
+            </button>
+            <button type="button" className={period === "ytd" ? "active" : ""} onClick={() => setPeriod("ytd")}>
+              YTD
+            </button>
+          </div>
         </div>
         <div className="kpi-grid">
           <article className="kpi-card">
             <span>SHIPPING COSTS</span>
-            <div><small>MTD</small><strong>{money(kpis.shippingMtd)}</strong></div>
-            <div><small>YTD</small><strong>{money(kpis.shippingYtd)}</strong></div>
+            <div><small>{period.toUpperCase()}</small><strong>{money(period === "mtd" ? kpis.shippingMtd : kpis.shippingYtd)}</strong></div>
           </article>
           <article className="kpi-card">
             <span>TRANSFER SHIPPING</span>
-            <div><small>MTD</small><strong>{money(kpis.transfersMtd)}</strong></div>
-            <div><small>YTD</small><strong>{money(kpis.transfersYtd)}</strong></div>
+            <div><small>{period.toUpperCase()}</small><strong>{money(period === "mtd" ? kpis.transfersMtd : kpis.transfersYtd)}</strong></div>
           </article>
           <article className="kpi-card">
             <span>TRUCKING TRANSFERS TO NJ</span>
-            <div><small>MTD</small><strong>{money(kpis.njTransferMtd)}</strong></div>
-            <div><small>YTD</small><strong>{money(kpis.njTransferYtd)}</strong></div>
+            <div><small>{period.toUpperCase()}</small><strong>{money(period === "mtd" ? kpis.njTransferMtd : kpis.njTransferYtd)}</strong></div>
           </article>
           <article className="kpi-card">
             <span>SALES · NATIONALS</span>
-            <div><small>MTD</small><strong>{moneyWithCents(kpis.nationalsSalesMtd)}</strong></div>
-            <div><small>YTD</small><strong>{moneyWithCents(kpis.nationalsSalesYtd)}</strong></div>
+            <div><small>{period.toUpperCase()}</small><strong>{moneyWithCents(period === "mtd" ? kpis.nationalsSalesMtd : kpis.nationalsSalesYtd)}</strong></div>
           </article>
           <article className="kpi-card">
             <span>SALES · WMS WHOLESALE</span>
-            <div><small>MTD</small><strong>{moneyWithCents(kpis.wmsSalesMtd)}</strong></div>
-            <div><small>YTD</small><strong>{moneyWithCents(kpis.wmsSalesYtd)}</strong></div>
+            <div><small>{period.toUpperCase()}</small><strong>{moneyWithCents(period === "mtd" ? kpis.wmsSalesMtd : kpis.wmsSalesYtd)}</strong></div>
+          </article>
+          <article className="kpi-card kpi-placeholder-card">
+            <span>NET MARGIN</span>
+            <div className="kpi-placeholder">
+              <strong>—</strong>
+              <small>No cost/margin data source yet</small>
+            </div>
           </article>
           <article className="kpi-card kpi-carrier">
-            <span>TOP 3 CARRIERS · YTD</span>
+            <span>TOP 3 CARRIERS · YTD (always YTD)</span>
             <div className="carrier-table-head" aria-hidden="true">
               <small>Carrier</small><small>Freight Spend</small><small>Shipments</small>
             </div>
@@ -3128,7 +3162,7 @@ export default function Home() {
             </ol>
           </article>
           <article className="kpi-card kpi-split">
-            <span>TRUCKLOAD MIX · YTD</span>
+            <span>TRUCKLOAD MIX · YTD (always YTD)</span>
             <div><small>LTL</small><strong>{kpis.ltlPercent}%</strong></div>
             <div><small>FTL</small><strong>{kpis.ftlPercent}%</strong></div>
           </article>
