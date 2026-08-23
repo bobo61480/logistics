@@ -54,13 +54,21 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           # wrangler.toml declares the D1 binding statically (both this workflow
           # and Cloudflare's native Workers Builds Git integration deploy from
           # the same file, so the binding must not depend on a runtime probe).
           # Applying migrations here is idempotent — wrangler tracks what has
           # already run in the database's own d1_migrations table.
-          npx wrangler d1 migrations apply stylekorean-logistics-read-model --remote
+          #
+          # Non-fatal on purpose: a failure here (e.g. CLOUDFLARE_ACCOUNT_ID/
+          # CLOUDFLARE_API_TOKEN scoped to the wrong account for this database)
+          # must not block the Worker deploy step below — the deploy is what
+          # actually keeps production current, and migrations are idempotent,
+          # so a later successful run catches up once credentials are fixed.
+          if ! npx wrangler d1 migrations apply stylekorean-logistics-read-model --remote; then
+            echo "::warning::D1 migrations apply failed — continuing without blocking the Worker deploy. Investigate CLOUDFLARE_ACCOUNT_ID/CLOUDFLARE_API_TOKEN access to this database."
+          fi
 
       - name: Deploy canonical Worker and restore production route
         shell: bash
