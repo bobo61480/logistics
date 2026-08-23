@@ -16,7 +16,8 @@ var TRIGGER_PLAN = [
   { handler: "processApprovedPending", minutes: 30 },
   { handler: "trackSmallParcelsStatusUpdates", hours: 1 },
   { handler: "syncInventoryModule", hours: 1 },
-  { handler: "enrichImportsFromContainerLog", daily: 6 }
+  { handler: "enrichImportsFromContainerLog", daily: 6 },
+  { handler: "reconcileCustomerBackfill", daily: 5 }
 ];
 
 var TRIGGER_CLEANUP_HANDLERS = [
@@ -27,6 +28,7 @@ var TRIGGER_CLEANUP_HANDLERS = [
   "trackSmallParcelsStatusUpdates",
   "syncInventoryModule",
   "enrichImportsFromContainerLog",
+  "reconcileCustomerBackfill",
   "requestSiteRedeploy"
 ];
 
