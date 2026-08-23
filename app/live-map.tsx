@@ -7,11 +7,29 @@ const LEAFLET_CSS = "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css
 const LEAFLET_JS = "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js";
 const TRACKING_ENDPOINT =
   process.env.NEXT_PUBLIC_LOGISTICS_TRACKING_URL ?? "/api/logistics/tracking";
+// Must match tracking-command.ts's MAX_REQUESTS — the Worker silently drops anything past
+// that many entries in a single call, so a board with more trackable parcels than this needs
+// to split across multiple requests or the extras vanish from the map with no error.
+const TRACKING_BATCH_SIZE = 25;
 const CONTINENTAL_US_CENTER: LatLng = [39.5, -98.35];
 const PORT_LOOKUP: Record<string, { label: string; coords: LatLng }> = {
   LAX: { label: "Port of Los Angeles", coords: [33.7395, -118.2601] },
   LGB: { label: "Port of Long Beach", coords: [33.754, -118.2165] },
 };
+// Air imports share the same "LAX" pod code as ocean imports, but that code means the
+// seaport for ocean and the airport for air — route air milestones here instead.
+const AIRPORT_LOOKUP: Record<string, { label: string; coords: LatLng }> = {
+  LAX: { label: "Los Angeles International Airport", coords: [33.9416, -118.4085] },
+};
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
 
 type Carrier = "ups" | "fedex" | "usps";
 
@@ -126,22 +144,39 @@ export function LiveMapPanel({
     }
     let cancelled = false;
     setTrackingLoading(true);
-    fetch(TRACKING_ENDPOINT, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        requests: trackable.map((item) => ({ carrier: item.carrier, number: item.trackingNumber })),
-      }),
-    })
-      .then((response) => response.json() as Promise<{ ok?: boolean; results?: TrackingResult[]; configured?: Record<Carrier, boolean> }>)
-      .then((data) => {
-        if (cancelled || !data?.ok) return;
+
+    const unique = Array.from(
+      new Map(trackable.map((item) => [`${item.carrier}:${item.trackingNumber}`, item])).values(),
+    );
+    const batches: TrackableShipment[][] = [];
+    for (let i = 0; i < unique.length; i += TRACKING_BATCH_SIZE) {
+      batches.push(unique.slice(i, i + TRACKING_BATCH_SIZE));
+    }
+
+    Promise.all(
+      batches.map((batch) =>
+        fetch(TRACKING_ENDPOINT, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            requests: batch.map((item) => ({ carrier: item.carrier, number: item.trackingNumber })),
+          }),
+        }).then((response) => response.json() as Promise<{ ok?: boolean; results?: TrackingResult[]; configured?: Record<Carrier, boolean> }>),
+      ),
+    )
+      .then((batchResponses) => {
+        if (cancelled) return;
         const byNumber: Record<string, TrackingResult> = {};
-        (data.results ?? []).forEach((result) => {
-          byNumber[`${result.carrier}:${result.number}`] = result;
+        let configuredResult: Record<Carrier, boolean> | null = null;
+        batchResponses.forEach((data) => {
+          if (!data?.ok) return;
+          (data.results ?? []).forEach((result) => {
+            byNumber[`${result.carrier}:${result.number}`] = result;
+          });
+          if (data.configured) configuredResult = data.configured;
         });
         setTracking(byNumber);
-        setConfigured(data.configured ?? null);
+        setConfigured(configuredResult);
       })
       .catch(() => {
         /* Tracking is best-effort — the map still shows inbound milestones without it. */
@@ -164,8 +199,10 @@ export function LiveMapPanel({
 
     milestones.forEach((shipment) => {
       const origin = originForMode(shipment.mode);
-      const destination = PORT_LOOKUP[shipment.pod ?? ""] ?? PORT_LOOKUP.LAX;
       const isAir = /air/i.test(shipment.mode ?? "");
+      const destination = (isAir ? AIRPORT_LOOKUP[shipment.pod ?? ""] : undefined)
+        ?? PORT_LOOKUP[shipment.pod ?? ""]
+        ?? PORT_LOOKUP.LAX;
       const icon = L.divIcon({
         className: "",
         html: `<span class="live-map-pin ${isAir ? "live-map-pin-air" : "live-map-pin-ocean"}">${isAir ? "✈️" : "🚢"}</span>`,
@@ -173,10 +210,10 @@ export function LiveMapPanel({
       });
       L.marker(destination.coords, { icon })
         .bindPopup(
-          `<strong>${shipment.title}</strong><br/>${shipment.mode ?? "Inbound"} · ${destination.label}` +
-            `${shipment.vessel ? `<br/>Vessel: ${shipment.vessel}` : ""}` +
-            `${shipment.eta ? `<br/>ETA: ${shipment.eta}` : ""}` +
-            `${shipment.status ? `<br/>Status: ${shipment.status}` : ""}`,
+          `<strong>${escapeHtml(shipment.title)}</strong><br/>${escapeHtml(shipment.mode ?? "Inbound")} · ${escapeHtml(destination.label)}` +
+            `${shipment.vessel ? `<br/>Vessel: ${escapeHtml(shipment.vessel)}` : ""}` +
+            `${shipment.eta ? `<br/>ETA: ${escapeHtml(shipment.eta)}` : ""}` +
+            `${shipment.status ? `<br/>Status: ${escapeHtml(shipment.status)}` : ""}`,
         )
         .addTo(layerRef.current);
       L.polyline([origin.coords, destination.coords], { color: isAir ? "#2563eb" : "#0e7490", weight: 2, dashArray: "4 6", opacity: 0.7 })
@@ -196,10 +233,10 @@ export function LiveMapPanel({
       });
       L.marker(coords, { icon })
         .bindPopup(
-          `<strong>${item.title}</strong><br/>${item.carrier.toUpperCase()} ${item.trackingNumber}` +
-            `<br/>${[result.city, result.state].filter(Boolean).join(", ") || "Location unavailable"}` +
-            `${result.status ? `<br/>${result.status}` : ""}` +
-            `${result.timestamp ? `<br/><small>${new Date(result.timestamp).toLocaleString()}</small>` : ""}`,
+          `<strong>${escapeHtml(item.title)}</strong><br/>${escapeHtml(item.carrier.toUpperCase())} ${escapeHtml(item.trackingNumber)}` +
+            `<br/>${escapeHtml([result.city, result.state].filter(Boolean).join(", ")) || "Location unavailable"}` +
+            `${result.status ? `<br/>${escapeHtml(result.status)}` : ""}` +
+            `${result.timestamp ? `<br/><small>${escapeHtml(new Date(result.timestamp).toLocaleString())}</small>` : ""}`,
         )
         .addTo(layerRef.current);
       bounds.push(coords);

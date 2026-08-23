@@ -27,10 +27,6 @@ export async function handleTrackingCommand(request: Request, env: Env) {
     return json({ ok: false, error: "Content-Type must be application/json" }, 415);
   }
   const clientIp = request.headers.get("cf-connecting-ip")?.trim() || "unknown";
-  const rateLimit = await env.STATUS_WRITE_RATE_LIMITER.limit({ key: `tracking:${clientIp}` });
-  if (!rateLimit.success) {
-    return json({ ok: false, error: "Tracking rate limit exceeded. Try again in a minute." }, 429, { "retry-after": "60" });
-  }
 
   const body = await request.text();
   if (new TextEncoder().encode(body).byteLength > MAX_BODY_BYTES) {
@@ -59,6 +55,14 @@ export async function handleTrackingCommand(request: Request, env: Env) {
       const cacheKey = cacheKeyFor(request, carrier, number);
       const cached = await cache.match(cacheKey);
       if (cached) return (await cached.json()) as TrackingResult;
+
+      // Rate-limit per external carrier call, not per HTTP request — a batch of up to
+      // MAX_REQUESTS numbers must not let a caller buy MAX_REQUESTS carrier lookups for
+      // the price of one rate-limit unit.
+      const rateLimit = await env.STATUS_WRITE_RATE_LIMITER.limit({ key: `tracking:${clientIp}` });
+      if (!rateLimit.success) {
+        return { carrier, number, ok: false, configured: true, error: "Tracking rate limit exceeded. Try again in a minute." };
+      }
 
       const result = await trackParcel(env, carrier, number);
       if (result.ok) {
