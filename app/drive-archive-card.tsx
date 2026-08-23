@@ -99,7 +99,7 @@ export function DriveArchiveCard({ links = DEFAULT_LINKS }: { links?: DriveLink[
   return (
     <section className="rounded-xl border border-neutral-200 bg-white shadow-sm">
       <header className="border-b border-neutral-100 px-5 py-4">
-        <h3 className="text-sm font-semibold text-neutral-900">Document Folders</h3>
+        <h3 className="text-lg font-extrabold text-neutral-900">Document Folders</h3>
         <p className="text-xs text-neutral-500">Warehouse Documents drive — source documents and Gmail-archived attachments.</p>
       </header>
       <ul className="divide-y divide-neutral-100">

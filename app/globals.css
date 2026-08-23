@@ -241,7 +241,7 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
 
 .inventory-panel:first-child { box-shadow: inset 0 4px 0 var(--blue); }
 .inventory-heading { padding-top: 14px; }
-.inventory-heading h2 { margin: 0; font: 800 27px/.95 "Saira Condensed", sans-serif; text-transform: uppercase; }
+.inventory-heading h2 { margin: 0; font: 800 30px/.95 "Saira Condensed", sans-serif; text-transform: uppercase; }
 .inventory-total { display: grid; justify-items: end; }
 .inventory-total strong { font: 800 28px/.9 "Saira Condensed", sans-serif; }
 .inventory-total span { color: var(--muted); font: 600 8px "IBM Plex Mono", monospace; text-transform: uppercase; }
@@ -255,6 +255,28 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
 .inventory-table td { padding: 8px; border-bottom: 1px solid #e2ddd4; vertical-align: top; }
 .inventory-table td:nth-last-child(-n+2) { font-family: "IBM Plex Mono", monospace; }
 .inventory-table td.inventory-pallet { color: var(--orange-dark); font-family: "IBM Plex Mono", monospace; font-weight: 750; white-space: nowrap; }
+
+/* Expiration-age emphasis: under 1 year (or already expired), 1-2 years out, 2+ years out. */
+.inventory-table td.exp-urgent { background: #fde2de; color: #a12f24; font-weight: 700; }
+.inventory-table td.exp-soon { background: #fff3d6; color: #845d05; font-weight: 700; }
+.inventory-table td.exp-ok { background: #e5f4ea; color: #1f6b3c; }
+
+/* Warehouse-location color coding — best-guess against SK/BP/FT/HOLD/DAMAGED, not a verified enum. */
+.inventory-table td.loc-sk { background: #e4eff8; color: #2a648d; font-weight: 700; }
+.inventory-table td.loc-bp { background: #eee8f8; color: #65468f; font-weight: 700; }
+.inventory-table td.loc-ft { background: #fff0cc; color: #845d05; font-weight: 700; }
+.inventory-table td.loc-hold { background: #ffe1dc; color: #a12f24; font-weight: 700; }
+.inventory-table td.loc-damaged { background: #2a2320; color: #ffb199; font-weight: 700; }
+.inventory-table td.loc-other { color: var(--muted); }
+
+/* SKU-revision family color coding — best-guess suffix heuristic, only applied when a base SKU
+   actually has more than one distinct SKU sharing it. */
+.inventory-table td.sku-group-0 { box-shadow: inset 3px 0 var(--blue); }
+.inventory-table td.sku-group-1 { box-shadow: inset 3px 0 var(--green); }
+.inventory-table td.sku-group-2 { box-shadow: inset 3px 0 var(--orange); }
+.inventory-table td.sku-group-3 { box-shadow: inset 3px 0 var(--yellow); }
+.inventory-table td.sku-group-4 { box-shadow: inset 3px 0 var(--teal); }
+.inventory-table td.sku-group-5 { box-shadow: inset 3px 0 var(--source-fedex-parcel); }
 .inventory-table small { display: block; margin-top: 3px; color: var(--muted); font: 600 8px "IBM Plex Mono", monospace; }
 .inventory-shipment-links { display: flex !important; flex-wrap: wrap; gap: 3px 8px; }
 .inventory-shipment-links a { color: var(--blue); font-weight: 700; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
@@ -381,10 +403,28 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
 
 .kpi-method {
   margin: 0;
-  padding: 7px 12px;
   border-top: 1px solid var(--line);
   color: var(--muted);
   background: #f3f0e9;
+}
+
+.kpi-method summary {
+  padding: 7px 12px;
+  color: var(--ink);
+  font: 700 8px/1.4 "IBM Plex Mono", monospace;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  list-style: none;
+}
+
+.kpi-method summary::-webkit-details-marker { display: none; }
+.kpi-method summary::before { content: "▸ "; }
+.kpi-method[open] summary::before { content: "▾ "; }
+
+.kpi-method p {
+  margin: 0;
+  padding: 0 12px 8px;
   font: 500 8px/1.4 "IBM Plex Mono", monospace;
 }
 
@@ -1040,6 +1080,16 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
   white-space: nowrap;
 }
 
+.parcel-tracking-number {
+  display: block;
+  overflow: hidden;
+  color: var(--muted);
+  font: 600 10px "IBM Plex Mono", monospace;
+  letter-spacing: .01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .parcel-card p {
   min-height: 31px;
   margin: 7px 0 11px;
@@ -1359,8 +1409,8 @@ body {
 .import-heading h2,
 .panel-heading h2,
 .parcel-heading h2 {
-  font-size: 26px;
-  font-weight: 700;
+  font-size: 30px;
+  font-weight: 800;
   letter-spacing: .02em;
 }
 
@@ -1428,25 +1478,59 @@ body {
 .ct-panel h2 {
   margin: 0;
   color: var(--ct-ink);
-  font: 800 22px/.95 "Saira Condensed", sans-serif;
+  font: 800 26px/.95 "Saira Condensed", sans-serif;
   text-transform: uppercase;
 }
 
-.ct-bar-list { display: flex; flex-direction: column; gap: 12px; }
+.ct-carrier-categories {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
 
-.ct-bar-row-label {
+.ct-carrier-category {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--ct-hairline);
+  border-radius: 8px;
+  background: var(--ct-bg-inset);
+}
+
+.ct-carrier-category-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px 10px;
+  margin-bottom: 8px;
+}
+
+.ct-carrier-category-name {
+  color: var(--ct-ink);
+  font: 800 12px "IBM Plex Mono", monospace;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+}
+
+.ct-carrier-category-counts {
+  color: var(--ct-ink-soft);
+  font: 600 10px "IBM Plex Mono", monospace;
+}
+
+.ct-carrier-category-counts b { color: var(--ct-ink); font-weight: 800; }
+
+.ct-carrier-category-list { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+
+.ct-carrier-category-list li {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 5px;
-  font-size: 12px;
+  font-size: 11.5px;
 }
 
-.ct-bar-name { font-weight: 700; }
-.ct-bar-stat { color: var(--ct-ink-soft); font: 600 10px "IBM Plex Mono", monospace; }
-.ct-bar-track { height: 7px; border-radius: 4px; background: var(--ct-bg-inset); overflow: hidden; }
-.ct-bar-fill { height: 100%; border-radius: 4px; background: var(--ct-air); }
+.ct-carrier-category-carrier { min-width: 0; overflow: hidden; color: var(--ct-ink); font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.ct-carrier-category-carrier-count { flex: 0 0 auto; color: var(--ct-ink-soft); font-family: "IBM Plex Mono", monospace; }
 
 .ct-split-bar {
   display: flex;
@@ -1688,4 +1772,5 @@ footer strong {
   .metrics { gap: 9px; }
   .metrics article { min-height: 86px; }
   .inventory-toolbar { align-items: stretch; flex-direction: column; }
+  .ct-carrier-categories { grid-template-columns: 1fr; }
 }

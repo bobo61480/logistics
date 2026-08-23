@@ -9,7 +9,7 @@ import FulfillmentTkOrders from "./FulfillmentTkOrders";
 import { GmailIngestionCard, type GmailIngestionEvent } from "./gmail-ingestion-card";
 import { DriveArchiveCard, driveLinkGlyph } from "./drive-archive-card";
 import ShipmentEventTrackerCard from "./ShipmentEventTrackerCard";
-import { LiveMapPanel, type MilestoneShipment, type TrackableShipment } from "./live-map";
+import { LiveMapPanel, useParcelTracking, type MilestoneShipment, type TrackableShipment, type TrackingResult } from "./live-map";
 
 const SHEET_ID =
   process.env.NEXT_PUBLIC_LOGISTICS_MASTER_SHEET_ID ??
@@ -562,6 +562,62 @@ function inventoryProductsMatch(left: InventoryItem, right: InventoryItem) {
   );
 }
 
+function parseFullDate(value: string): Date | null {
+  const text = clean(value);
+  if (!text) return null;
+  const mdy = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (mdy) {
+    let year = Number(mdy[3]);
+    if (year < 100) year += 2000;
+    return new Date(year, Number(mdy[1]) - 1, Number(mdy[2]));
+  }
+  const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (iso) return new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
+  return null;
+}
+
+// Buckets relative to today: already-expired or expiring within a year is urgent, 1-2 years out
+// is a warning, anything further away (or unparseable) needs no emphasis.
+function expirationBucketClass(expirationDate: string): string {
+  const date = parseFullDate(expirationDate);
+  if (!date) return "";
+  const today = new Date();
+  const oneYearOut = new Date(today.getFullYear() + 1, today.getMonth(), today.getDate());
+  const twoYearsOut = new Date(today.getFullYear() + 2, today.getMonth(), today.getDate());
+  if (date.getTime() < oneYearOut.getTime()) return "exp-urgent";
+  if (date.getTime() < twoYearsOut.getTime()) return "exp-soon";
+  return "exp-ok";
+}
+
+// No fixed warehouse-zone vocabulary exists in the data — this is a best-guess prefix/substring
+// match against common zone codes (SK/BP/FT) and exception states (HOLD/DAMAGED), not a verified
+// enum. Needs checking against real location values.
+function inventoryLocationClass(location: string): string {
+  const text = clean(location).toUpperCase();
+  if (!text) return "";
+  if (text.includes("DAMAG")) return "loc-damaged";
+  if (text.includes("HOLD")) return "loc-hold";
+  if (text.startsWith("SK")) return "loc-sk";
+  if (text.startsWith("BP")) return "loc-bp";
+  if (text.startsWith("FT")) return "loc-ft";
+  return "loc-other";
+}
+
+// No confirmed SKU-revision naming convention exists — this is a best-guess heuristic (a
+// -R/-REV/-V# suffix with a separator, or a single trailing letter glued onto a numeric SKU body)
+// grouping a SKU with its likely revised/renewed sibling. Needs checking against real SKUs.
+function skuBaseGroup(sku: string): string {
+  const text = clean(sku).toUpperCase();
+  if (!text) return "";
+  const withSeparator = text.match(/^(.+)[-_ ](?:REV\d*|R\d*|V\d+|RENEW(?:ED)?)$/);
+  if (withSeparator) return withSeparator[1];
+  const trailingLetter = text.match(/^([A-Z]*\d+)[A-Z]$/);
+  if (trailingLetter) return trailingLetter[1];
+  return text;
+}
+
+const SKU_GROUP_PALETTE = ["sku-group-0", "sku-group-1", "sku-group-2", "sku-group-3", "sku-group-4", "sku-group-5"];
+
 function inventoryShipmentCodes(item: InventoryItem) {
   return new Set(
     inventoryShipmentReferences(item.shipmentNo)
@@ -816,7 +872,7 @@ function InventoryPanel({
   const filteredItems = useMemo(() => {
     const needle = inventoryQuery.trim().toLowerCase();
     if (!needle) return items;
-    return items.filter((item) => [item.productName, item.sku, item.upc, item.expirationDate, item.location, item.shipmentNo]
+    return items.filter((item) => [item.productName, item.sku, item.upc, item.expirationDate, item.location, item.shipmentNo, item.palletNumber]
       .join(" ")
       .toLowerCase()
       .includes(needle));
@@ -834,6 +890,27 @@ function InventoryPanel({
       )
       .slice(0, 250);
   }, [filteredItems, items, selectedItem, showLocation]);
+  // Only color a SKU family when it actually has more than one distinct SKU sharing a base —
+  // otherwise every row would get tinted for no reason.
+  const skuGroupColors = useMemo(() => {
+    const bases = new Map<string, Set<string>>();
+    displayedItems.forEach((item) => {
+      const sku = clean(item.sku);
+      if (!sku) return;
+      const base = skuBaseGroup(sku);
+      const set = bases.get(base) ?? new Set<string>();
+      set.add(sku);
+      bases.set(base, set);
+    });
+    const colors = new Map<string, string>();
+    let paletteIndex = 0;
+    bases.forEach((skus, base) => {
+      if (skus.size < 2) return;
+      colors.set(base, SKU_GROUP_PALETTE[paletteIndex % SKU_GROUP_PALETTE.length]);
+      paletteIndex += 1;
+    });
+    return colors;
+  }, [displayedItems]);
   useEffect(() => {
     if (!selectedItem || !showLocation) return;
     const frame = window.requestAnimationFrame(() => {
@@ -856,7 +933,7 @@ function InventoryPanel({
         <input
           aria-label={`Search ${title}`}
           onChange={(event) => setInventoryQuery(event.target.value)}
-          placeholder="Search product, SKU, UPC, shipment, location…"
+          placeholder="Search product, SKU, UPC, shipment, pallet #, location…"
           type="search"
           value={inventoryQuery}
         />
@@ -910,10 +987,12 @@ function InventoryPanel({
                   </small>
                 )}
               </td>
-              <td>{item.sku || "—"}</td><td>{item.upc || "—"}</td><td>{item.expirationDate || "—"}</td>
+              <td className={skuGroupColors.get(skuBaseGroup(item.sku)) ?? ""}>{item.sku || "—"}</td>
+              <td>{item.upc || "—"}</td>
+              <td className={expirationBucketClass(item.expirationDate)}>{item.expirationDate || "—"}</td>
               {!showLocation && <td className="inventory-pallet">{item.palletNumber || "—"}</td>}
               <td>{item.quantity.toLocaleString()}</td>
-              {showLocation && <td>{item.location || "Unassigned"}</td>}
+              {showLocation && <td className={inventoryLocationClass(item.location)}>{item.location || "Unassigned"}</td>}
             </tr>})}
             {!loading && filteredItems.length === 0 && <tr><td className="import-empty" colSpan={6}>No matching inventory records are currently available.</td></tr>}
             {loading && <tr><td className="import-empty" colSpan={6}>Syncing inventory…</td></tr>}
@@ -943,6 +1022,25 @@ function LowStockPanel({
         .filter((inbound) => inventoryProductsMatch(inbound, item))
         .flatMap((inbound) => inventoryShipmentReferences(inbound.shipmentNo)),
     ));
+  const skuGroupColors = useMemo(() => {
+    const bases = new Map<string, Set<string>>();
+    lowStockItems.forEach((item) => {
+      const sku = clean(item.sku);
+      if (!sku) return;
+      const base = skuBaseGroup(sku);
+      const set = bases.get(base) ?? new Set<string>();
+      set.add(sku);
+      bases.set(base, set);
+    });
+    const colors = new Map<string, string>();
+    let paletteIndex = 0;
+    bases.forEach((skus, base) => {
+      if (skus.size < 2) return;
+      colors.set(base, SKU_GROUP_PALETTE[paletteIndex % SKU_GROUP_PALETTE.length]);
+      paletteIndex += 1;
+    });
+    return colors;
+  }, [lowStockItems]);
   return (
     <section className="inventory-panel low-stock-panel" aria-label="Low Stock">
       <div className="panel-heading inventory-heading">
@@ -958,11 +1056,11 @@ function LowStockPanel({
               return (
                 <tr key={item.id}>
                   <td><strong>{item.productName || "—"}</strong></td>
-                  <td>{item.sku || "—"}</td>
+                  <td className={skuGroupColors.get(skuBaseGroup(item.sku)) ?? ""}>{item.sku || "—"}</td>
                   <td>{item.upc || "—"}</td>
-                  <td>{item.expirationDate || "—"}</td>
+                  <td className={expirationBucketClass(item.expirationDate)}>{item.expirationDate || "—"}</td>
                   <td>{item.quantity.toLocaleString()}</td>
-                  <td>{item.location || "Unassigned"}</td>
+                  <td className={inventoryLocationClass(item.location)}>{item.location || "Unassigned"}</td>
                   <td>
                     {shipments.length ? (
                       <span className="inventory-shipment-links">
@@ -1272,6 +1370,11 @@ function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
       eta,
       deliveryExpected: record.deliveryExpected,
       isSmallParcel: false,
+      // No dedicated carrier column exists in IMPORTS for Air/Ocean freight —
+      // vessel is the closest available proxy (ocean vessel names are usually
+      // carrier-branded, e.g. "MAERSK EDMONTON") and is already surfaced in
+      // `secondary` above, so reuse it rather than leaving Top Carriers blank.
+      carrier: record.vessel,
       shippingMethod: mode,
       sourceType: mode,
     }];
@@ -1496,7 +1599,9 @@ function inboundItems(table: any, importsRows: string[][]): ScheduleItem[] {
         vessel,
         pod: /^OSL/i.test(shipmentNo) ? "LGB" : "LAX",
         eta: expectedDelivery || eta,
-        carrier: "",
+        // See pendingImportItems: no dedicated carrier column exists for Air/Ocean
+        // freight, so vessel (already computed above) is the best available proxy.
+        carrier: vessel,
         trackingNumber: "",
         pro: "",
         isSmallParcel: false,
@@ -2197,12 +2302,14 @@ function SmallParcelSchedule({
   loading,
   savingId,
   onStatus,
+  tracking,
 }: {
   direction: Direction;
   items: ScheduleItem[];
   loading: boolean;
   savingId: string;
   onStatus: (item: ScheduleItem, status: string) => void;
+  tracking?: Record<string, TrackingResult>;
 }) {
   const sortedItems = [...items].sort((a, b) => a.date.getTime() - b.date.getTime());
   const isInbound = direction === "inbound";
@@ -2229,7 +2336,9 @@ function SmallParcelSchedule({
       </div>
       <div className="parcel-grid">
         {sortedItems.map((item) => {
-          const tracking = item.trackingNumber || item.pro || "";
+          const trackingNumber = item.trackingNumber || item.pro || "";
+          const carrierCode = trackableCarrier(item.carrier || item.shippingMethod);
+          const liveStatus = carrierCode && trackingNumber ? tracking?.[`${carrierCode}:${trackingNumber}`] : undefined;
           return (
             <details
               className={`parcel-card ${sourceClass(item.sourceType ?? "")} ${
@@ -2244,7 +2353,13 @@ function SmallParcelSchedule({
                   ) : null}
                   <span className="source-badge">{item.sourceType || item.carrier || "Parcel"}</span>
                 </span>
-                <strong className="parcel-tracking">{tracking || item.customer || item.title || "Customer pending"}</strong>
+                <strong className="parcel-tracking">{item.customer || item.title || "Customer pending"}</strong>
+                {trackingNumber ? (
+                  <span className="parcel-tracking-number">
+                    Tracking# {trackingNumber}
+                    {liveStatus?.ok && liveStatus.status ? ` · ${liveStatus.status}` : ""}
+                  </span>
+                ) : null}
                 <span className="parcel-invoice">{item.invoice ? `Invoice # ${item.invoice}` : "Invoice # —"}</span>
                 <span className="expand-mark" aria-hidden="true">＋</span>
               </summary>
@@ -2255,7 +2370,7 @@ function SmallParcelSchedule({
                 </div>
                 <div className="parcel-footer">
                   <span><b>ETA</b> {item.dateText || "—"}</span>
-                  {tracking && item.containerUrl ? (
+                  {trackingNumber && item.containerUrl ? (
                     <a href={item.containerUrl} target="_blank" rel="noreferrer">
                       Track ↗
                     </a>
@@ -2387,14 +2502,50 @@ function scheduleCarrierName(item: ScheduleItem): string {
   return /^trucking$/i.test(name) ? "" : name;
 }
 
-function carrierCounts(source: ScheduleItem[], limit = 6): CountEntry[] {
-  const counts = new Map<string, number>();
-  for (const item of source) {
-    const name = scheduleCarrierName(item);
-    if (!name) continue;
-    counts.set(name, (counts.get(name) ?? 0) + 1);
-  }
-  return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit);
+const CARRIER_CATEGORIES = ["Air", "Ocean", "Domestic Transportation", "Small Parcels"] as const;
+type CarrierCategory = (typeof CARRIER_CATEGORIES)[number];
+
+// Same bucketing as scheduleFreightMode, renamed for display and restricted to the four
+// named categories the Top Carriers card reports on (unclassified "Other" freight is only
+// surfaced in the Freight Mix card, not here).
+function scheduleCarrierCategory(item: ScheduleItem): CarrierCategory | null {
+  if (item.isSmallParcel) return "Small Parcels";
+  if (item.mode === "Air") return "Air";
+  if (item.mode === "Ocean") return "Ocean";
+  if (/^trucking$/i.test(item.shippingMethod ?? "")) return "Domestic Transportation";
+  return null;
+}
+
+type CategoryCarrierStats = {
+  category: CarrierCategory;
+  mtdCount: number;
+  ytdCount: number;
+  topCarriers: CountEntry[];
+};
+
+// All rows count here, including finished/completed ones — these are shipment-volume totals,
+// not the "active" alerts the rest of the Control Tower row reports, matching how the KPI
+// panel's own topCarriers/MTD/YTD figures are computed (see lib/sales-kpis.ts).
+function categoryCarrierStats(source: ScheduleItem[], today: Date): CategoryCarrierStats[] {
+  const yearStart = new Date(today.getFullYear(), 0, 1);
+  return CARRIER_CATEGORIES.map((category) => {
+    const ytdItems = source.filter((item) => {
+      if (scheduleCarrierCategory(item) !== category) return false;
+      const time = item.date.getTime();
+      return time >= yearStart.getTime() && time <= today.getTime();
+    });
+    const mtdCount = ytdItems.filter(
+      (item) => item.date.getFullYear() === today.getFullYear() && item.date.getMonth() === today.getMonth(),
+    ).length;
+    const carrierCounts = new Map<string, number>();
+    ytdItems.forEach((item) => {
+      const name = scheduleCarrierName(item);
+      if (!name) return;
+      carrierCounts.set(name, (carrierCounts.get(name) ?? 0) + 1);
+    });
+    const topCarriers = [...carrierCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+    return { category, mtdCount, ytdCount: ytdItems.length, topCarriers };
+  });
 }
 
 function scheduleFreightMode(item: ScheduleItem): string {
@@ -2422,27 +2573,33 @@ function freightModeCounts(source: ScheduleItem[]): CountEntry[] {
   return [...counts.entries()].sort((a, b) => b[1] - a[1]);
 }
 
-function ControlTowerCarriers({ carriers }: { carriers: CountEntry[] }) {
-  const max = carriers[0]?.[1] || 1;
+function ControlTowerCarriers({ categories }: { categories: CategoryCarrierStats[] }) {
   return (
-    <article className="ct-panel">
+    <article className="ct-panel ct-panel-carriers">
       <div className="ct-panel-head">
-        <span className="ct-eyebrow">By shipment count · active</span>
+        <span className="ct-eyebrow">By shipment count · MTD / YTD</span>
         <h2>Top Carriers</h2>
       </div>
-      <div className="ct-bar-list">
-        {carriers.map(([name, count]) => (
-          <div key={name}>
-            <div className="ct-bar-row-label">
-              <span className="ct-bar-name">{name}</span>
-              <span className="ct-bar-stat">{count} {count === 1 ? "shipment" : "shipments"}</span>
+      <div className="ct-carrier-categories">
+        {categories.map(({ category, mtdCount, ytdCount, topCarriers }) => (
+          <div className="ct-carrier-category" key={category}>
+            <div className="ct-carrier-category-head">
+              <span className="ct-carrier-category-name">{category}</span>
+              <span className="ct-carrier-category-counts">
+                <b>{mtdCount}</b> MTD · <b>{ytdCount}</b> YTD
+              </span>
             </div>
-            <div className="ct-bar-track">
-              <div className="ct-bar-fill" style={{ width: `${Math.max(8, (count / max) * 100)}%` }} />
-            </div>
+            <ol className="ct-carrier-category-list">
+              {topCarriers.map(([name, count]) => (
+                <li key={name}>
+                  <span className="ct-carrier-category-carrier">{name}</span>
+                  <span className="ct-carrier-category-carrier-count">{count}</span>
+                </li>
+              ))}
+              {!topCarriers.length && <li className="ct-empty">No named carriers</li>}
+            </ol>
           </div>
         ))}
-        {!carriers.length && <p className="ct-empty">No named carriers in the active schedule.</p>}
       </div>
     </article>
   );
@@ -2728,7 +2885,7 @@ export default function Home() {
     [visibleItems],
   );
 
-  const activeCarrierCounts = useMemo(() => carrierCounts(activeItems), [activeItems]);
+  const carrierCategoryStats = useMemo(() => categoryCarrierStats(items, startOfToday()), [items]);
   const activeFreightModeCounts = useMemo(() => freightModeCounts(activeItems), [activeItems]);
 
   const mapMilestones = useMemo<MilestoneShipment[]>(
@@ -2764,6 +2921,9 @@ export default function Home() {
       }),
     [activeItems],
   );
+
+  const { tracking: parcelTracking, configured: parcelTrackingConfigured, loading: parcelTrackingLoading } =
+    useParcelTracking(mapTrackable);
 
   const handleStatus = async (item: ScheduleItem, status: string) => {
     setSavingId(item.id);
@@ -2978,34 +3138,43 @@ export default function Home() {
             <div><small>OUT OF STATE</small><strong>{money(kpis.avgOutOfStateMtd)}</strong><strong>{money(kpis.avgOutOfState)}</strong></div>
           </article>
         </div>
-        <p className="kpi-method">
-          All rows, including hidden/completed entries. Shipping costs use freight Invoice first,
-          then Rate when Invoice is blank—never shipment Invoice Amount. Nationals sales use
-          Order Date (column G) and Amount (column E), expand K values, and exclude cancelled
-          orders. WMS wholesale sales use Date (column A) and numeric INVOICE AMOUNT (column G);
-          text entries such as “FREE SAMPLE,” “FOC,” “Sample,” and operational notes are excluded.
-          MTD is the current month through today; YTD begins January 1, 2026. Trucking averages
-          exclude transfers and unclassified destinations; local / regional uses a destination city/ZIP heuristic for the Southern California operating area and is not a measured mileage radius.
-          The NJ transfer card includes only TRANSFERS rows whose TO field is NJ or New Jersey.
-          Carrier freight spend uses the same freight Invoice-first, Rate-fallback cost, and shipment share
-          is each carrier’s moves divided by all YTD moves with a named carrier.{" "}
-          <a href={NATIONAL_SHEET_URL} target="_blank" rel="noreferrer">
-            Open Nationals source
-          </a>
-          {" · "}
-          <a href={SALES_SHEET_URL} target="_blank" rel="noreferrer">
-            Open WMS source
-          </a>
-          .
-        </p>
+        <details className="kpi-method">
+          <summary>Methodology notes</summary>
+          <p>
+            All rows, including hidden/completed entries. Shipping costs use freight Invoice first,
+            then Rate when Invoice is blank—never shipment Invoice Amount. Nationals sales use
+            Order Date (column G) and Amount (column E), expand K values, and exclude cancelled
+            orders. WMS wholesale sales use Date (column A) and numeric INVOICE AMOUNT (column G);
+            text entries such as “FREE SAMPLE,” “FOC,” “Sample,” and operational notes are excluded.
+            MTD is the current month through today; YTD begins January 1, 2026. Trucking averages
+            exclude transfers and unclassified destinations; local / regional uses a destination city/ZIP heuristic for the Southern California operating area and is not a measured mileage radius.
+            The NJ transfer card includes only TRANSFERS rows whose TO field is NJ or New Jersey.
+            Carrier freight spend uses the same freight Invoice-first, Rate-fallback cost, and shipment share
+            is each carrier’s moves divided by all YTD moves with a named carrier.{" "}
+            <a href={NATIONAL_SHEET_URL} target="_blank" rel="noreferrer">
+              Open Nationals source
+            </a>
+            {" · "}
+            <a href={SALES_SHEET_URL} target="_blank" rel="noreferrer">
+              Open WMS source
+            </a>
+            .
+          </p>
+        </details>
       </section>
 
       <section className="ct-row" aria-label="Active carrier and freight mode rollups">
-        <ControlTowerCarriers carriers={activeCarrierCounts} />
+        <ControlTowerCarriers categories={carrierCategoryStats} />
         <ControlTowerFreightMix modes={activeFreightModeCounts} />
       </section>
 
-      <LiveMapPanel milestones={mapMilestones} trackable={mapTrackable} />
+      <LiveMapPanel
+        milestones={mapMilestones}
+        trackable={mapTrackable}
+        tracking={parcelTracking}
+        configured={parcelTrackingConfigured}
+        trackingLoading={parcelTrackingLoading}
+      />
 
       <section className="control-panel" aria-label="Schedule filters">
         <label className="search">
@@ -3097,6 +3266,7 @@ export default function Home() {
           loading={loading}
           savingId={savingId}
           onStatus={handleStatus}
+          tracking={parcelTracking}
         />
         <ScheduleBoard
           direction="outbound"
@@ -3113,13 +3283,14 @@ export default function Home() {
           loading={loading}
           savingId={savingId}
           onStatus={handleStatus}
+          tracking={parcelTracking}
         />
       </div>
 
       {/* .ingestion-archive-row keeps this row ordered above the footer on the
           flex-reordered /light, /light-full, and /fulfillment-style variants. */}
       <div className="ingestion-archive-row mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2" aria-label="Email ingestion and document archive">
-        <GmailIngestionCard events={gmailIngestion} loading={loading} onReview={handleReview} reviewingKey={reviewingKey} />
+        <GmailIngestionCard events={gmailIngestion} loading={loading} onReview={handleReview} reviewingKey={reviewingKey} sheetUrl={SHEET_URL} />
         <DriveArchiveCard />
       </div>
 

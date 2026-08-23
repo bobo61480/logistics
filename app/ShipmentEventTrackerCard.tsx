@@ -215,7 +215,7 @@ export default function ShipmentEventTrackerCard() {
       <style>{`
         .shipment-event-card { margin-top: 18px; overflow: hidden; border: 1px solid #d9c9aa; border-top: 5px solid #d66735; border-radius: 14px; background: #fffdf8; }
         .shipment-event-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 18px 22px 15px; }
-        .shipment-event-head h2 { margin: 3px 0 5px; color: #13272d; font: 800 26px/.95 "Saira Condensed", sans-serif; text-transform: uppercase; }
+        .shipment-event-head h2 { margin: 3px 0 5px; color: #13272d; font: 800 30px/.95 "Saira Condensed", sans-serif; text-transform: uppercase; }
         .shipment-event-head p { margin: 0; color: #6c7a7d; font-size: 11px; }
         .shipment-event-eyebrow { color: #a74720; font: 700 9px "IBM Plex Mono", monospace; letter-spacing: .14em; text-transform: uppercase; }
         .shipment-event-counts { display: flex; gap: 7px; flex-wrap: wrap; justify-content: flex-end; }
