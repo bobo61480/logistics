@@ -243,6 +243,20 @@ export default function ShipmentEventTrackerCard() {
           .shipment-event-counts { justify-content: flex-start; }
           .shipment-event-list { grid-template-columns: 1fr; }
         }
+
+        [data-theme="dark"] .shipment-event-card { border-color: var(--hairline-strong); background: var(--surface); }
+        [data-theme="dark"] .shipment-event-head h2 { color: var(--text); }
+        [data-theme="dark"] .shipment-event-head p { color: var(--text-faint); }
+        [data-theme="dark"] .shipment-event-counts span { background: var(--surface-inset); color: var(--text-soft); }
+        [data-theme="dark"] .shipment-event-expired { border-color: var(--hairline-strong); background: rgba(217, 89, 38, .12); color: #ffcf7d; }
+        [data-theme="dark"] .shipment-event-expired a { color: var(--accent-outbound); }
+        [data-theme="dark"] .shipment-event-list { background: var(--hairline); }
+        [data-theme="dark"] .shipment-event-item { background: var(--surface); }
+        [data-theme="dark"] .shipment-event-id { color: var(--text); }
+        [data-theme="dark"] .shipment-event-detail { color: var(--text-soft); }
+        [data-theme="dark"] .shipment-event-note { color: var(--text-faint); }
+        [data-theme="dark"] .shipment-event-state { color: #ff9a95; }
+        [data-theme="dark"] .shipment-event-link { color: #8fb4ff; }
       `}</style>
 
       <header className="shipment-event-head">

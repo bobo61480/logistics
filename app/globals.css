@@ -2233,3 +2233,57 @@ footer strong {
 [data-theme="dark"] .status.hold { background: rgba(236, 131, 90, .18); color: #ff9d80; }
 [data-theme="dark"] .status.stop { background: rgba(208, 59, 59, .18); color: #ff9a95; }
 [data-theme="dark"] .status.neutral { background: rgba(57, 135, 229, .16); color: #8fb4ff; }
+
+/* ============================================================
+   Dark theme: full coverage pass (PR-8)
+   Everything left over from PR-2 through PR-7: the metrics strip,
+   search/filter control panel, mode/department legends, Import
+   Schedules, and the three remaining inventory panels (Inbound
+   Inventory, Products in Stock, Low Stock). These .inventory-heading/
+   .inventory-total/.inventory-panel selectors were deliberately left
+   OUT of PR-3's and PR-5's overrides (scoped to .schedule-panel/
+   .live-map-panel instead) specifically so this pass could cover them
+   on purpose, in one place, without fighting an earlier premature leak
+   fix. FulfillmentTkOrders keeps its own already-dark, always-dark
+   CSS-module palette as-is — it doesn't participate in the toggle
+   either way, so it never looks broken in light mode.
+   ============================================================ */
+[data-theme="dark"] .metrics article { background: var(--surface-2) !important; border-color: var(--hairline-strong) !important; }
+[data-theme="dark"] .metrics strong { color: var(--text); }
+[data-theme="dark"] .metrics span,
+[data-theme="dark"] .metrics small { color: var(--text-faint); }
+
+[data-theme="dark"] .control-panel { border-color: var(--hairline-strong); background: var(--surface); }
+[data-theme="dark"] .search { border-color: var(--hairline-strong); background: var(--surface-inset); }
+[data-theme="dark"] .search input { color: var(--text); }
+[data-theme="dark"] .search span { color: var(--text-faint); }
+[data-theme="dark"] .finished-toggle { color: var(--text-soft); }
+
+[data-theme="dark"] .source-legend { border-color: var(--hairline-strong); background: var(--surface); }
+[data-theme="dark"] .source-legend > strong { color: var(--text); }
+[data-theme="dark"] .source-legend span { color: var(--text-soft); }
+
+[data-theme="dark"] .inventory-panel { border-color: var(--hairline-strong); background: var(--surface); }
+[data-theme="dark"] .inventory-heading h2 { color: var(--text); }
+[data-theme="dark"] .inventory-total strong { color: var(--text); }
+[data-theme="dark"] .inventory-total span { color: var(--text-faint); }
+[data-theme="dark"] .inventory-toolbar input { border-color: var(--hairline-strong); background: var(--surface-inset); color: var(--text); }
+[data-theme="dark"] .inventory-toolbar span { color: var(--text-faint); }
+[data-theme="dark"] .inventory-table-wrap { border-top-color: var(--hairline); }
+[data-theme="dark"] .inventory-table th { background: var(--surface-inset); color: var(--text); }
+[data-theme="dark"] .inventory-table td { border-bottom-color: var(--hairline); color: var(--text-soft); }
+[data-theme="dark"] .inventory-table small { color: var(--text-faint); }
+[data-theme="dark"] .inventory-shipment-links a { color: var(--accent-imports); }
+
+[data-theme="dark"] .import-schedules { border-color: var(--hairline-strong); background: var(--surface); }
+[data-theme="dark"] .import-heading h2 { color: var(--text); }
+[data-theme="dark"] .import-totals span { border-color: var(--hairline-strong); background: var(--surface-inset); color: var(--text-soft); }
+[data-theme="dark"] .import-totals span b { color: var(--accent-imports); }
+[data-theme="dark"] .import-totals strong { background: var(--surface-inset); color: var(--text); }
+[data-theme="dark"] .import-table-wrap { scrollbar-color: #465066 var(--surface-2); }
+[data-theme="dark"] .import-table th { border-right-color: var(--hairline-strong); }
+[data-theme="dark"] .import-table td { border-top-color: var(--hairline); border-right-color: var(--hairline); color: var(--text-soft); }
+[data-theme="dark"] .import-table tbody tr:nth-child(even) { background: rgba(147, 160, 188, .06); }
+[data-theme="dark"] .import-table tbody tr:hover { background: var(--surface-inset); }
+[data-theme="dark"] .import-table a { color: var(--text); }
+[data-theme="dark"] .import-table a:hover { color: var(--accent-outbound); }

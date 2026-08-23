@@ -53,6 +53,23 @@
   box-shadow: inset 0 -2px 0 #138a55;
 }
 
+:global([data-theme="dark"]) .variantNav {
+  border-color: var(--hairline-strong);
+  background: rgba(20, 24, 34, .94);
+  box-shadow: 0 7px 24px rgba(0, 0, 0, .35);
+}
+:global([data-theme="dark"]) .variantNavLabel { color: var(--text-faint); }
+:global([data-theme="dark"]) .variantNav a {
+  border-color: var(--hairline-strong);
+  background: var(--surface-inset);
+  color: var(--text-soft);
+}
+:global([data-theme="dark"]) .variantNavCurrent {
+  border-color: rgba(19, 138, 85, .5);
+  background: rgba(19, 138, 85, .16);
+  color: #4ee39a;
+}
+
 .variantActive {
   border-color: rgba(19, 138, 85, .4) !important;
   background: #eef9f3 !important;
