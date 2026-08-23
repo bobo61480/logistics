@@ -1,0 +1,193 @@
+"use client";
+
+import { useState } from "react";
+
+type IngestionStatus = "committed" | "needsReview" | "approved" | "rejected";
+
+export interface GmailIngestionEvent {
+  status: IngestionStatus;
+  kind: "inbound" | "outbound" | "";
+  shipmentId: string;
+  customer: string;
+  invoice: string;
+  blOrPro: string;
+  container: string;
+  shipDateOrEta: string;
+  carrierOrVessel: string;
+  note: string;
+  issues: string;
+  sourceEmailUrl: string;
+  driveFileUrl: string;
+  timestamp: string;
+  // Present only while status === "needsReview" and the row has a usable
+  // identifier. Sent back verbatim on approve/reject; the backend refuses to
+  // act on it if the identifier no longer resolves to exactly one open row.
+  reviewKey?: string;
+}
+
+const STATUS_STYLE: Record<IngestionStatus, string> = {
+  committed: "bg-blue-50 text-blue-700 ring-blue-200",
+  needsReview: "bg-amber-50 text-amber-700 ring-amber-200",
+  approved: "bg-green-50 text-green-700 ring-green-200",
+  rejected: "bg-red-50 text-red-700 ring-red-200",
+};
+
+const STATUS_LABEL: Record<IngestionStatus, string> = {
+  // Neutral wording: COMMITTED rows in PENDING VERIFICATION include manually
+  // approved commits (processApprovedPending flips APPROVED → COMMITTED), so
+  // "Auto-committed" would misstate who authorized the write.
+  committed: "Committed",
+  needsReview: "Needs review",
+  approved: "Approved",
+  rejected: "Rejected",
+};
+
+/**
+ * Renders the `sources.gmailIngestion` feed from the dashboard's own
+ * /api/logistics/snapshot load. The page passes the feed down on every
+ * 30-minute refresh, so this card issues no fetches of its own — no duplicate
+ * snapshot requests, and it can never disagree with the rest of the page.
+ * `events` is null while loading or when the Worker snapshot is unavailable
+ * (e.g. the dashboard fell back to direct Sheets, which carries no feed).
+ */
+export function GmailIngestionCard({
+  events,
+  loading = false,
+  onReview,
+  reviewingKey = "",
+}: {
+  events: GmailIngestionEvent[] | null;
+  loading?: boolean;
+  /** Omit to render the feed read-only (no Approve/Reject buttons). */
+  onReview?: (event: GmailIngestionEvent, decision: "approve" | "reject") => void;
+  /** reviewKey of the row currently mid-request, so only that row disables. */
+  reviewingKey?: string;
+}) {
+  const [filter, setFilter] = useState<"all" | IngestionStatus>("all");
+
+  const unavailable = !loading && events === null;
+  const filtered = (events ?? []).filter((e) => filter === "all" || e.status === filter);
+  const counts = (events ?? []).reduce<Record<string, number>>((acc, e) => {
+    acc[e.status] = (acc[e.status] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  return (
+    <section className="rounded-xl border border-neutral-200 bg-white shadow-sm">
+      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-100 px-5 py-4">
+        <div>
+          <h3 className="text-sm font-semibold text-neutral-900">Gmail Ingestion</h3>
+          <p className="text-xs text-neutral-500">
+            What the email pipeline extracted, and which shipment it landed on.
+          </p>
+        </div>
+        <div className="flex gap-1 text-xs">
+          {(["all", "needsReview", "committed", "approved", "rejected"] as const).map((key) => (
+            <button
+              key={key}
+              onClick={() => setFilter(key)}
+              className={`rounded-full px-2.5 py-1 ring-1 transition ${
+                filter === key
+                  ? "bg-neutral-900 text-white ring-neutral-900"
+                  : "bg-neutral-50 text-neutral-600 ring-neutral-200 hover:bg-neutral-100"
+              }`}
+            >
+              {key === "all" ? "All" : STATUS_LABEL[key]}
+              {key !== "all" && counts[key] ? ` (${counts[key]})` : ""}
+            </button>
+          ))}
+        </div>
+      </header>
+
+      <div className="max-h-96 overflow-y-auto">
+        {unavailable && (
+          <p className="px-5 py-4 text-sm text-red-600">
+            {/* null covers several causes (PENDING VERIFICATION read failed, the
+                dashboard is on its direct-Sheets fallback, or the deployed Worker
+                predates the feed) — stay generic so operators aren't pointed at
+                the wrong subsystem. */}
+            Ingestion feed unavailable right now — the rest of the dashboard is unaffected. Check
+            the sync strip and source health for the degraded source.
+          </p>
+        )}
+        {loading && events === null && <p className="px-5 py-4 text-sm text-neutral-500">Loading…</p>}
+        {!unavailable && events !== null && filtered.length === 0 && (
+          <p className="px-5 py-6 text-sm text-neutral-500">Nothing in this category right now.</p>
+        )}
+        <ul className="divide-y divide-neutral-100">
+          {filtered.map((event, i) => (
+            <li key={i} className="px-5 py-3 text-sm">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ring-1 ${STATUS_STYLE[event.status]}`}>
+                    {STATUS_LABEL[event.status]}
+                  </span>
+                  {event.kind && (
+                    <span className="text-xs uppercase tracking-wide text-neutral-400">{event.kind}</span>
+                  )}
+                  <span className="font-medium text-neutral-900">
+                    {event.shipmentId || event.customer || "Unidentified shipment"}
+                  </span>
+                </div>
+                {event.timestamp && <span className="text-xs text-neutral-400">{event.timestamp}</span>}
+              </div>
+
+              <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-neutral-500">
+                {event.customer && <span>Customer: {event.customer}</span>}
+                {event.blOrPro && <span>BL/PRO: {event.blOrPro}</span>}
+                {event.container && <span>Container: {event.container}</span>}
+                {event.shipDateOrEta && <span>ETA/Ship date: {event.shipDateOrEta}</span>}
+                {event.carrierOrVessel && <span>Carrier/Vessel: {event.carrierOrVessel}</span>}
+              </div>
+
+              {event.issues && <p className="mt-1 text-xs text-amber-700">{event.issues}</p>}
+              {event.note && <p className="mt-1 text-xs text-neutral-400">{event.note}</p>}
+
+              <div className="mt-1 flex gap-3 text-xs">
+                {event.sourceEmailUrl && (
+                  <a href={event.sourceEmailUrl} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">
+                    Source email
+                  </a>
+                )}
+                {event.driveFileUrl && (
+                  <a href={event.driveFileUrl} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">
+                    Archived file
+                  </a>
+                )}
+              </div>
+
+              {onReview && event.status === "needsReview" && (
+                <div className="mt-2 flex items-center gap-2">
+                  {event.reviewKey ? (
+                    <>
+                      <button
+                        type="button"
+                        disabled={reviewingKey === event.reviewKey}
+                        onClick={() => onReview(event, "approve")}
+                        className="rounded-md bg-green-600 px-2.5 py-1 text-xs font-medium text-white transition hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {reviewingKey === event.reviewKey ? "Working…" : "Approve"}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={reviewingKey === event.reviewKey}
+                        onClick={() => onReview(event, "reject")}
+                        className="rounded-md bg-white px-2.5 py-1 text-xs font-medium text-red-700 ring-1 ring-red-200 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Reject
+                      </button>
+                    </>
+                  ) : (
+                    <span className="text-xs text-neutral-400">
+                      No unique identifier — resolve directly in the PENDING VERIFICATION sheet.
+                    </span>
+                  )}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      </div>
+    </section>
+  );
+}

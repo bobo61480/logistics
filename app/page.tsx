@@ -5,25 +5,38 @@ import { INBOUND_DOCUMENT_LINKS, INBOUND_PACKING_LIST_LINKS } from "./inbound-li
 import { INBOUND_INVOICE_LINKS } from "./inbound-invoice-links";
 import { packingListPallets } from "./inbound-pallets";
 import { computeLiveKpis } from "../lib/sales-kpis";
+import FulfillmentTkOrders from "./FulfillmentTkOrders";
+import { GmailIngestionCard, type GmailIngestionEvent } from "./gmail-ingestion-card";
+import { DriveArchiveCard, driveLinkGlyph } from "./drive-archive-card";
 import ShipmentEventTrackerCard from "./ShipmentEventTrackerCard";
 
-const SHEET_ID = "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc";
+const SHEET_ID =
+  process.env.NEXT_PUBLIC_LOGISTICS_MASTER_SHEET_ID ??
+  "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc";
 const SHEET_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit`;
-const NATIONAL_SHEET_ID = "12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8";
-const NATIONAL_SHEET_URL = `https://docs.google.com/spreadsheets/d/${NATIONAL_SHEET_ID}/edit?gid=99300389#gid=99300389`;
-const SALES_SHEET_ID = "14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I";
-const SALES_SHEET_URL = `https://docs.google.com/spreadsheets/d/${SALES_SHEET_ID}/edit?gid=0#gid=0`;
-const SALES_SNAPSHOT = {
-  nationalsMtd: 2_209_375.46,
-  nationalsYtd: 6_244_884.52,
-  wmsMtd: 3_601_652.95,
-  wmsYtd: 15_591_074.08,
-};
-// Deployed from google-apps-script/Code.gs (doPost), bound to LOGISTICS MASTER 2026.
-// VERIFY: confirm this /exec URL is the CURRENT deployment of google-apps-script/Code.gs --
-// if you redeploy that script, Apps Script gives you a new URL and this must be updated too.
-const WRITE_ENDPOINT =
-  "https://script.google.com/a/macros/stylekoreanus.com/s/AKfycbwyVnU2jvOtMFXuY7KtX_8-hHXYVLrc6R2Dr_6akdDaTGQPc8duSo7tpguIuk00MjDl/exec";
+const NATIONAL_SHEET_ID =
+  process.env.NEXT_PUBLIC_NATIONAL_SHEET_ID ??
+  "12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8";
+const SALES_SHEET_ID =
+  process.env.NEXT_PUBLIC_WMS_SHEET_ID ??
+  "14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I";
+const IMPORTS_GID = Number(process.env.NEXT_PUBLIC_IMPORTS_GID ?? 1497250700);
+const OUTBOUND_GID = Number(process.env.NEXT_PUBLIC_OUTBOUND_GID ?? 20260708);
+const TRUCKING_GID = Number(process.env.NEXT_PUBLIC_TRUCKING_GID ?? 1418033635);
+const NATIONAL_GID = Number(process.env.NEXT_PUBLIC_NATIONAL_GID ?? 99300389);
+const SALES_GID = Number(process.env.NEXT_PUBLIC_WMS_GID ?? 0);
+const NATIONAL_SHEET_URL = `https://docs.google.com/spreadsheets/d/${NATIONAL_SHEET_ID}/edit?gid=${NATIONAL_GID}#gid=${NATIONAL_GID}`;
+const SALES_SHEET_URL = `https://docs.google.com/spreadsheets/d/${SALES_SHEET_ID}/edit?gid=${SALES_GID}#gid=${SALES_GID}`;
+// The browser talks to same-origin server routes. Secrets stay server-side.
+// A direct Apps Script URL can be supplied only as a temporary static-host fallback.
+const DATA_ENDPOINT =
+  process.env.NEXT_PUBLIC_LOGISTICS_SNAPSHOT_URL ?? "/api/logistics/snapshot";
+const STATUS_ENDPOINT =
+  process.env.NEXT_PUBLIC_LOGISTICS_STATUS_URL ?? "/api/logistics/status";
+const PENDING_REVIEW_ENDPOINT =
+  process.env.NEXT_PUBLIC_LOGISTICS_PENDING_REVIEW_URL ?? "/api/logistics/pending-review";
+const LEGACY_WRITE_ENDPOINT =
+  process.env.NEXT_PUBLIC_APPS_SCRIPT_WRITE_URL ?? "";
 const AUTO_REFRESH_MS = 30 * 60 * 1000;
 
 type Direction = "inbound" | "outbound";
@@ -62,6 +75,7 @@ type ScheduleItem = {
   vessel?: string;
   pod?: string;
   eta?: string;
+  deliveryExpected?: string;
   isSmallParcel?: boolean;
   shippingMethod?: string;
   sourceType?: string;
@@ -120,10 +134,10 @@ const EMPTY_KPIS: KpiSnapshot = {
   transfersYtd: 0,
   njTransferMtd: 0,
   njTransferYtd: 0,
-  nationalsSalesMtd: SALES_SNAPSHOT.nationalsMtd,
-  nationalsSalesYtd: SALES_SNAPSHOT.nationalsYtd,
-  wmsSalesMtd: SALES_SNAPSHOT.wmsMtd,
-  wmsSalesYtd: SALES_SNAPSHOT.wmsYtd,
+  nationalsSalesMtd: 0,
+  nationalsSalesYtd: 0,
+  wmsSalesMtd: 0,
+  wmsSalesYtd: 0,
   topCarriers: [],
   ltlPercent: 0,
   ftlPercent: 0,
@@ -171,6 +185,7 @@ const STATUS_OPTIONS = [
 
 const INBOUND_STATUS_OPTIONS = [
   ...STATUS_OPTIONS,
+  "N/A",
   "Customs Clearance",
   "FDA Review/Hold",
   "FWS Review/Hold",
@@ -181,9 +196,19 @@ const finished = new Set(["shipped", "delivered", "received", "cancelled", "comp
 const finishedImports = new Set(["delivered", "received", "cancelled", "completed"]);
 
 // Any import whose ETA is before this date is treated as effectively received/delivered/completed
-// and hidden from the "unfinished" Import Schedules table, even if the sheet's Status cell is blank
-// or stale. This does not overwrite the Status column in the source spreadsheet.
-const IMPORT_STALE_CUTOFF = new Date(2026, 6, 1).getTime(); // July 1, 2026
+// and hidden from the "current + upcoming" Import Schedules table, even if the sheet's Status
+// cell is blank or stale. This does not overwrite the Status column in the source spreadsheet.
+//
+// This used to be a fixed literal date, which meant it silently stopped working once "today"
+// caught up to it -- every row eventually aged past the cutoff and the whole table (and the
+// Inbound Schedule calendar it feeds) went empty. It's now a rolling window measured back from
+// today, computed at module load, so it keeps working without needing a manual date bump.
+const IMPORT_STALE_WINDOW_DAYS = 30;
+const IMPORT_STALE_CUTOFF = (() => {
+  const cutoff = startOfToday();
+  cutoff.setDate(cutoff.getDate() - IMPORT_STALE_WINDOW_DAYS);
+  return cutoff.getTime();
+})();
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -319,7 +344,7 @@ function statusClass(status: string) {
 }
 
 function importsCellUrl(row: number, column: string) {
-  return `${SHEET_URL}?gid=1497250700&range=${column}${row}#gid=1497250700&range=${column}${row}`;
+  return `${SHEET_URL}?gid=${IMPORTS_GID}&range=${column}${row}#gid=${IMPORTS_GID}&range=${column}${row}`;
 }
 
 function sourceRowUrl(item: ScheduleItem) {
@@ -330,13 +355,16 @@ function sourceRowUrl(item: ScheduleItem) {
     return importsCellUrl(item.sourceRow, "A");
   }
   if (item.sourceSheet === "Outbound Shipping Schedule") {
-    return `${SHEET_URL}?gid=20260708&range=A${item.sourceRow}#gid=20260708&range=A${item.sourceRow}`;
+    return `${SHEET_URL}?gid=${OUTBOUND_GID}&range=A${item.sourceRow}#gid=${OUTBOUND_GID}&range=A${item.sourceRow}`;
+  }
+  if (item.sourceSheet === "WH Trucking Request") {
+    return `${SHEET_URL}?gid=${TRUCKING_GID}&range=A${item.sourceRow}#gid=${TRUCKING_GID}&range=A${item.sourceRow}`;
   }
   if (item.sourceSheet === "NATIONAL ORDER PROGRESS") {
-    return `https://docs.google.com/spreadsheets/d/${NATIONAL_SHEET_ID}/edit?gid=99300389&range=A${item.sourceRow}#gid=99300389&range=A${item.sourceRow}`;
+    return `https://docs.google.com/spreadsheets/d/${NATIONAL_SHEET_ID}/edit?gid=${NATIONAL_GID}&range=A${item.sourceRow}#gid=${NATIONAL_GID}&range=A${item.sourceRow}`;
   }
   if (item.sourceSheet === "Stylekorean") {
-    return `https://docs.google.com/spreadsheets/d/${SALES_SHEET_ID}/edit?gid=0&range=A${item.sourceRow}#gid=0&range=A${item.sourceRow}`;
+    return `https://docs.google.com/spreadsheets/d/${SALES_SHEET_ID}/edit?gid=${SALES_GID}&range=A${item.sourceRow}#gid=${SALES_GID}&range=A${item.sourceRow}`;
   }
   return item.sourceUrl ?? SHEET_URL;
 }
@@ -360,7 +388,10 @@ function officialTrackingUrl(container: string, carrierKey: string, fallback: st
   }
   if (/AMAZON/.test(carrier) || /^TBA/.test(value)) return "https://track.amazon.com/";
   if (/^(SMCU)|SMLM|SM LINES?/.test(`${value} ${carrier}`)) {
-    return `https://esvc.smlines.com/smline/CUP_HOM_3301GS.do?_search=false&f_cmd=121&page=1&rows=10000&search_name=${encodeURIComponent(value)}&search_type=C&sidx=&sord=asc`;
+    // CUP_HOM_3301GS.do is SM Line's internal JSON data endpoint. Linking to it
+    // exposes implementation fields such as hashColumns instead of a readable
+    // tracking view. Send users to the carrier's human-facing Cargo Tracking UI.
+    return "https://esvc.smlines.com/smline/CUP_HOM_3301.do?sessLocale=en";
   }
   if (/^(HDMU)|(^| )HMM( |$)/.test(`${value} ${carrier}`)) {
     return "https://www.hmm21.com/e-service/general/trackNTrace/TrackNTrace.do";
@@ -388,6 +419,19 @@ function correctedInboundInvoice(shipmentNo: string, value: string) {
 function parcelCarrier(value: string) {
   const match = clean(value).match(/\b(UPS|FEDEX|DHL|USPS|AMAZON)\b/i);
   return match ? match[1].toUpperCase().replace("FEDEX", "FedEx") : "";
+}
+
+function carrierFromTrackingNumber(value: string) {
+  const tracking = clean(value).replace(/[\s-]+/g, "").toUpperCase();
+  if (!tracking) return "";
+  if (/^1Z[A-Z0-9]{10,}$/.test(tracking)) return "UPS";
+  if (/^TBA[A-Z0-9]{8,}$/.test(tracking)) return "AMAZON";
+  if (/^JJD[A-Z0-9]{8,}$/.test(tracking)) return "DHL";
+  if (/^[A-Z]{2}\d{9}US$/.test(tracking)) return "USPS";
+  if (/^9\d{19,21}$/.test(tracking)) return "USPS";
+  if (/^\d{12}$/.test(tracking) || /^\d{15}$/.test(tracking)) return "FedEx";
+  if (/^\d{20,22}$/.test(tracking) && !tracking.startsWith("9")) return "FedEx";
+  return "";
 }
 
 function sourceClass(value: string) {
@@ -466,7 +510,7 @@ function firstDatedValue(...values: string[]) {
   return null;
 }
 
-function sanitizeSecondary(value: string) {
+function lastDateToken(value: string) { const matches = clean(value).match(/\d{1,2}\/\d{1,2}(?:\/\d{2,4})?/g); return matches ? matches[matches.length - 1] : clean(value); } function sanitizeSecondary(value: string) {
   return clean(value)
     .split(/\s*·\s*/)
     .filter((part) => part && !/^imported from\b/i.test(part))
@@ -642,7 +686,7 @@ function dashboardInventoryItems(table: any): InventoryCollections {
       location: value(indexes.location),
       status: value(indexes.status),
     };
-    inbound.push({ ...base, id: `inventory-inbound-${rowIndex}`, quantity: incoming });
+    if (!/^(DELIVERED|RECEIVED|COMPLETED|CANCELLED)$/.test(value(indexes.status).toUpperCase())) inbound.push({ ...base, id: `inventory-inbound-${rowIndex}`, quantity: incoming });
     const onHand = inventoryNumber(value(indexes.onHand));
     if (onHand > 0) inStock.push({ ...base, id: `inventory-stock-${rowIndex}`, quantity: onHand });
   });
@@ -848,6 +892,7 @@ function InventoryPanel({
                         target="_blank"
                         title={`Open packing-list documents for ${shipment}`}
                       >
+                        <span aria-hidden="true">{driveLinkGlyph(shipment, packingListUrl(shipment))}</span>{" "}
                         {shipment} <span aria-hidden="true">↗</span>
                       </a>
                     ))}
@@ -868,6 +913,69 @@ function InventoryPanel({
   );
 }
 
+function LowStockPanel({
+  items,
+  inboundItems,
+  loading,
+}: {
+  items: InventoryItem[];
+  inboundItems: InventoryItem[];
+  loading: boolean;
+}) {
+  const lowStockItems = useMemo(
+    () => items.filter((item) => item.quantity < 200).sort((a, b) => a.quantity - b.quantity),
+    [items],
+  );
+  const incomingShipmentsFor = (item: InventoryItem) =>
+    Array.from(new Set(
+      inboundItems
+        .filter((inbound) => inventoryProductsMatch(inbound, item))
+        .flatMap((inbound) => inventoryShipmentReferences(inbound.shipmentNo)),
+    ));
+  return (
+    <section className="inventory-panel low-stock-panel" aria-label="Low Stock">
+      <div className="panel-heading inventory-heading">
+        <div><p className="eyebrow">QTY UNDER 200 · CURRENT WAREHOUSE ON HAND</p><h2>Low Stock</h2></div>
+        <div className="inventory-total"><strong>{lowStockItems.length}</strong><span>products</span></div>
+      </div>
+      <div className="inventory-table-wrap">
+        <table className="inventory-table">
+          <thead><tr><th>Product name</th><th>SKU #</th><th>UPC #</th><th>Expiration</th><th>Qty</th><th>Location</th><th>Incoming shipment #</th></tr></thead>
+          <tbody>
+            {lowStockItems.map((item) => {
+              const shipments = incomingShipmentsFor(item);
+              return (
+                <tr key={item.id}>
+                  <td><strong>{item.productName || "—"}</strong></td>
+                  <td>{item.sku || "—"}</td>
+                  <td>{item.upc || "—"}</td>
+                  <td>{item.expirationDate || "—"}</td>
+                  <td>{item.quantity.toLocaleString()}</td>
+                  <td>{item.location || "Unassigned"}</td>
+                  <td>
+                    {shipments.length ? (
+                      <span className="inventory-shipment-links">
+                        {shipments.map((shipment) => (
+                          <a href={packingListUrl(shipment)} key={shipment} rel="noreferrer" target="_blank">
+                            <span aria-hidden="true">{driveLinkGlyph(shipment, packingListUrl(shipment))}</span>{" "}
+                            {shipment} <span aria-hidden="true">↗</span>
+                          </a>
+                        ))}
+                      </span>
+                    ) : "—"}
+                  </td>
+                </tr>
+              );
+            })}
+            {!loading && lowStockItems.length === 0 && <tr><td className="import-empty" colSpan={7}>No low-stock products currently on hand.</td></tr>}
+            {loading && <tr><td className="import-empty" colSpan={7}>Syncing inventory…</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 async function fetchCsvRows(spreadsheetId: string, gid: number) {
   const url = new URL(`https://docs.google.com/spreadsheets/d/${spreadsheetId}/export`);
   url.searchParams.set("format", "csv");
@@ -879,10 +987,156 @@ async function fetchCsvRows(spreadsheetId: string, gid: number) {
 }
 
 async function fetchLiveKpis() {
-  // GitHub Pages build: KPIs are computed in the browser from the same
-  // link-readable workbook CSVs the old /api/sales-kpis route used.
+  // During migration this remains a Sheets-derived fallback. Once the database
+  // is fully authoritative, the snapshot API can provide the same KPI payload.
   return (await computeLiveKpis()) as unknown as KpiSnapshot;
 }
+
+type WorkerSnapshot = {
+  ok: true;
+  generatedAt?: string;
+  version?: string;
+  storage?: "d1" | "sheets";
+  stale?: boolean;
+  staleReason?: string;
+  sourceHealth?: Array<{ name: string; ok: boolean; error?: string }>;
+  sources: {
+    imports?: string[][];
+    outbound?: string[][];
+    outboundMeta?: OutboundSourceMeta;
+    nationalOutbound?: any;
+    salesOutbound?: any;
+    inventoryDashboardTable?: any;
+    skwInboundTable?: any;
+    skwStockTable?: any;
+    gmailIngestion?: GmailIngestionEvent[] | null;
+  };
+  kpis?: KpiSnapshot | null;
+};
+
+type OutboundSourceMeta = {
+  sheetName: "Outbound Shipping Schedule" | "WH Trucking Request";
+  headerRow: number;
+  rowCount: number;
+  fallback: boolean;
+  reason?: string;
+};
+
+const OUTBOUND_SCHEDULE_META: OutboundSourceMeta = {
+  sheetName: "Outbound Shipping Schedule",
+  headerRow: 1,
+  rowCount: 0,
+  fallback: false,
+};
+
+function populatedOutboundRows(rows: string[][], headerRow: number) {
+  return rows.slice(headerRow).some((row) => Boolean(cell(row, 0) && cell(row, 3)));
+}
+
+async function fetchWorkerSnapshot(): Promise<WorkerSnapshot> {
+  const response = await fetch(DATA_ENDPOINT, { cache: "no-store" });
+  const payload = (await response.json().catch(() => null)) as
+    | (Partial<WorkerSnapshot> & { error?: string })
+    | null;
+  if (!response.ok || payload?.ok !== true || !payload?.sources) {
+    throw new Error(payload?.error || `Worker snapshot unavailable (${response.status}).`);
+  }
+  if (!Array.isArray(payload.sources.imports) || !Array.isArray(payload.sources.outbound)) {
+    throw new Error("Worker snapshot is missing required imports/outbound sources.");
+  }
+  return payload as WorkerSnapshot;
+}
+
+async function fetchSheetSnapshot() {
+  const [
+    imports,
+    outbound,
+    trucking,
+    nationalOutbound,
+    salesOutbound,
+    liveKpis,
+    inventoryDashboardTable,
+    skwInboundTable,
+    skwStockTable,
+  ] = await Promise.all([
+    fetchCsvRows(SHEET_ID, IMPORTS_GID),
+    fetchCsvRows(SHEET_ID, OUTBOUND_GID),
+    fetchCsvRows(SHEET_ID, TRUCKING_GID),
+    fetchTable(NATIONAL_SHEET_ID, NATIONAL_GID, "A1:U3500", 1),
+    fetchTable(SALES_SHEET_ID, SALES_GID, "A2:AF4200", 1),
+    fetchLiveKpis(),
+    fetchOptionalSheet("INVENTORY", "A1:O6500"),
+    fetchOptionalSheet("SKW_Inbound", "A1:R2500"),
+    fetchOptionalSheet("SKW_Stock", "A1:J2500"),
+  ]);
+  const useSchedule = populatedOutboundRows(outbound, OUTBOUND_SCHEDULE_META.headerRow);
+  const outboundMeta: OutboundSourceMeta = useSchedule
+    ? { ...OUTBOUND_SCHEDULE_META, rowCount: outbound.slice(OUTBOUND_SCHEDULE_META.headerRow).filter((row) => Boolean(cell(row, 0) && cell(row, 3))).length }
+    : {
+        sheetName: "WH Trucking Request",
+        headerRow: 2,
+        rowCount: trucking.slice(2).filter((row) => Boolean(cell(row, 0) && cell(row, 3))).length,
+        fallback: true,
+        reason: "Outbound Shipping Schedule has no shipment rows",
+      };
+  return {
+    imports,
+    outbound: useSchedule ? outbound : trucking,
+    outboundMeta,
+    nationalOutbound,
+    salesOutbound,
+    liveKpis,
+    inventoryDashboardTable,
+    skwInboundTable,
+    skwStockTable,
+  };
+}
+
+async function fetchOperationalSnapshot() {
+  try {
+    const snapshot = await fetchWorkerSnapshot();
+    const sources = snapshot.sources;
+    return {
+      imports: sources.imports!,
+      outbound: sources.outbound!,
+      outboundMeta: sources.outboundMeta ?? OUTBOUND_SCHEDULE_META,
+      nationalOutbound: sources.nationalOutbound ?? { cols: [], rows: [] },
+      salesOutbound: sources.salesOutbound ?? { cols: [], rows: [] },
+      liveKpis: snapshot.kpis ?? (await fetchLiveKpis()),
+      inventoryDashboardTable: sources.inventoryDashboardTable ?? null,
+      skwInboundTable: sources.skwInboundTable ?? null,
+      skwStockTable: sources.skwStockTable ?? null,
+      // null (not []) when the deployed Worker predates the feed, so the card
+      // reports "unavailable" instead of claiming the inbox is empty.
+      gmailIngestion: sources.gmailIngestion ?? null,
+      connection: {
+        mode: snapshot.stale ? "stale" as const : "worker" as const,
+        storage: snapshot.storage,
+        version: snapshot.version,
+        detail: snapshot.staleReason,
+        degradedSources: (snapshot.sourceHealth ?? []).filter((source) => !source.ok).length,
+      },
+    };
+  } catch (workerError) {
+    // Keep a read-only direct-Sheets fallback so the schedule remains visible
+    // during a Worker routing incident. Status writes still require the Worker.
+    console.warn("Worker snapshot unavailable; falling back to Google Sheets.", workerError);
+    return {
+      ...(await fetchSheetSnapshot()),
+      // The direct-Sheets fallback carries no ingestion feed.
+      gmailIngestion: null,
+      connection: {
+        mode: "sheets" as const,
+        storage: "sheets" as const,
+        version: undefined,
+        detail: workerError instanceof Error ? workerError.message : "Worker snapshot unavailable",
+        degradedSources: 0,
+      },
+    };
+  }
+}
+
+type ConnectionState = Awaited<ReturnType<typeof fetchOperationalSnapshot>>["connection"];
 
 function normalizeStatus(value: string) {
   const normalized = clean(value).toLowerCase();
@@ -908,7 +1162,18 @@ type ImportSourceRecord = {
   deliveryExpected: string;
 };
 
+function importSectionMarkerIndex(rows: string[][], marker: string) {
+  const wanted = clean(marker).toUpperCase();
+  return rows.findIndex((row) => clean(cell(row, 0)).toUpperCase() === wanted);
+}
+
+function importsBoundaryRow(rows: string[][]) {
+  const index = importSectionMarkerIndex(rows, "SCHEDULING");
+  return index === -1 ? rows.length : index;
+}
+
 function importSourceRecords(rows: string[][]): ImportSourceRecord[] {
+  rows = rows.slice(0, importsBoundaryRow(rows));
   return rows.flatMap((row, index) => {
     const sourceRow = index + 1;
     if (sourceRow <= 2) return [];
@@ -925,40 +1190,34 @@ function importSourceRecords(rows: string[][]): ImportSourceRecord[] {
         mbl,
         hbl,
         container: cell(row, 7),
-        vessel: cell(row, 14),
-        // Column AB is "WEBSITE STATUS"; AD is "CONTAINER RAW (SYSTEM)", not status.
+        vessel: cell(row, 12),
         status: cell(row, 27),
-        etd: cell(row, 15),
-        eta: cell(row, 16),
-        deliveryExpected: cell(row, 18),
+        etd: cell(row, 13),
+        eta: cell(row, 14),
+        deliveryExpected: cell(row, 16),
       },
     ];
   });
 }
 
-function pendingImportItems(
-  importsRows: string[][],
-  generatedItems: ScheduleItem[],
-): ScheduleItem[] {
-  const generatedByRow = new Map(generatedItems.map((item) => [item.sourceRow, item]));
+function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
   const today = startOfToday();
 
   return importSourceRecords(importsRows).flatMap((record) => {
     const status = normalizeStatus(record.status);
-    const hasShipmentDocuments = Boolean(
-      record.shipmentNo && (record.invoice || record.mbl || record.hbl || record.container),
-    );
-    if (!hasShipmentDocuments || parcelCarrier(record.shipmentNo)) return [];
+    const hasShipmentIdentity = Boolean(record.shipmentNo);
+    const shipmentLabel = clean(record.shipmentNo).toUpperCase();
+    const planningRow = /^(?:AS OF\b|SCHEDULING\b|SCHEDULED\b|NEED SCHEDULING\b|MONTH OF\b|URGENT\b|COMPLETED\b|ESTIMATED\b)/.test(shipmentLabel);
+    // Newly scheduled imports remain visible before invoice/MBL/container documents arrive,
+    // while planning-grid labels are never promoted into shipment rows.
+    if (!hasShipmentIdentity || planningRow || parcelCarrier(record.shipmentNo)) return [];
 
-    const generated = generatedByRow.get(record.sourceRow);
-    if (generated) return [{ ...generated, status }];
-
-    const dated = firstDatedValue(record.deliveryExpected, record.eta, record.etd);
-    const date = dated?.date ?? today;
+    // Import Schedule is authoritative from IMPORTS column O (ETA) only.
+    const dated = firstDatedValue(record.eta);
+    if (!dated) return [];
+    const date = dated.date;
     const overdue = date.getTime() < today.getTime();
-    const eta = dated
-      ? `${dated.text}${overdue ? " · OVERDUE" : ""}`
-      : "ETA pending";
+    const eta = `${dated.text}${overdue ? " · OVERDUE" : ""}`;
     const mode = resolvedInboundMode(
       "",
       record.shipmentNo,
@@ -1000,6 +1259,7 @@ function pendingImportItems(
       vessel: record.vessel,
       pod: /^OSL/i.test(record.shipmentNo) ? "LGB" : "LAX",
       eta,
+      deliveryExpected: record.deliveryExpected,
       isSmallParcel: false,
       shippingMethod: mode,
       sourceType: mode,
@@ -1019,23 +1279,23 @@ function inboundParcelItems(rows: string[][]): ScheduleItem[] {
     } else if (firstColumn) {
       currentCarrier = "";
     }
-    if (!currentCarrier) return [];
-
     const trackingNumber = trackingCandidate(cell(row, 1), cell(row, 10));
+    const trackingCarrier = carrierFromTrackingNumber(trackingNumber);
+    const resolvedCarrier = trackingCarrier || currentCarrier;
+    if (!resolvedCarrier) return [];
+
     const invoice = cell(row, 2);
     const department = cell(row, 3);
-    const description = cell(row, 4);
-    const etaSource = cell(row, 7) || cell(row, 8);
+    const etaSource = lastDateToken(cell(row, 4));
+    
     const isSectionHeader =
       /TRACKING\s*#?/i.test(cell(row, 1)) ||
-      (!trackingNumber && !invoice && !department && !description && !etaSource);
+      (!trackingNumber && !invoice && !department && !etaSource);
     if (isSectionHeader) return [];
 
     const sourceRow = index + 1;
-    // Column AB holds the small-parcel status ("Delivered", "FDA Review / Hold", etc.);
-    // column AD is "BRAND", not status.
-    const status = normalizeStatus(cell(row, 27));
-    const datedValue = firstDatedValue(etaSource, description);
+    const status = normalizeStatus(cell(row, 27)); // Column AB holds the small-parcel status ("Delivered", "FDA Review / Hold", etc.); column AD is "BRAND", not status.
+    const datedValue = firstDatedValue(etaSource);
     const sourceDate = datedValue?.date ?? today;
     const unfinished = !finished.has(status.toLowerCase());
     const isStale = sourceDate.getTime() < IMPORT_STALE_CUTOFF;
@@ -1048,7 +1308,7 @@ function inboundParcelItems(rows: string[][]): ScheduleItem[] {
     const etaText = datedValue?.text
       ? `${datedValue.text}${overdue ? " · OVERDUE" : ""}`
       : "ETA pending";
-    const shipmentNo = trackingNumber || `${currentCarrier}-${sourceRow}`;
+    const shipmentNo = trackingNumber || `${resolvedCarrier}-${sourceRow}`;
 
     return [
       {
@@ -1057,8 +1317,8 @@ function inboundParcelItems(rows: string[][]): ScheduleItem[] {
         date,
         dateText: etaText,
         title: trackingNumber || "Tracking pending",
-        reference: trackingNumber || invoice || `${currentCarrier} parcel`,
-        secondary: [department, description].filter(Boolean).join(" · "),
+        reference: trackingNumber || invoice || `${resolvedCarrier} parcel`,
+        secondary: department,
         status,
         sourceSheet: "IMPORTS",
         sourceRow,
@@ -1070,16 +1330,16 @@ function inboundParcelItems(rows: string[][]): ScheduleItem[] {
         invoiceUrl: invoice ? invoiceFileUrl(splitValues(invoice)[0] ?? "") : "",
         containerUrl: officialTrackingUrl(
           trackingNumber,
-          currentCarrier,
+          resolvedCarrier,
           importsCellUrl(sourceRow, "B"),
         ),
         eta: etaText,
-        carrier: currentCarrier,
+        carrier: resolvedCarrier,
         trackingNumber,
         pro: trackingNumber,
         isSmallParcel: true,
-        shippingMethod: currentCarrier,
-        sourceType: outboundSourceType(currentCarrier, true),
+        shippingMethod: resolvedCarrier,
+        sourceType: outboundSourceType(resolvedCarrier, true),
       },
     ];
   });
@@ -1294,7 +1554,7 @@ function ImportSchedules({
       <div className="panel-heading import-heading">
         <div>
           <p className="eyebrow">
-            {selectedInventory ? "ALL UNFINISHED + SELECTED SHIPMENT" : "ALL UNFINISHED · OCEAN / AIR"}
+            {selectedInventory ? "CURRENT + UPCOMING + SELECTED SHIPMENT" : "CURRENT + UPCOMING · OCEAN / AIR"}
           </p>
           <h2 id="import-schedules-heading">Import Schedules</h2>
         </div>
@@ -1444,10 +1704,13 @@ function resolveOutboundSource(records: OutboundSourceRecord[], item: ScheduleIt
   );
 }
 
-function outboundItems(rows: string[][]): ScheduleItem[] {
+function outboundItems(
+  rows: string[][],
+  meta: OutboundSourceMeta = OUTBOUND_SCHEDULE_META,
+): ScheduleItem[] {
   return rows.flatMap((row, index) => {
     const sourceRow = index + 1;
-    if (sourceRow < 4) return [];
+    if (sourceRow <= meta.headerRow) return [];
     const customer = cell(row, 0);
     const invoice = cell(row, 1);
     const shipDate = cell(row, 3);
@@ -1467,7 +1730,7 @@ function outboundItems(rows: string[][]): ScheduleItem[] {
         reference: invoice || cell(row, 18) || "Outbound shipment",
         secondary: [cell(row, 16), cell(row, 18)].filter(Boolean).join(" · "),
         status,
-        sourceSheet: "Outbound Shipping Schedule",
+        sourceSheet: meta.sheetName,
         sourceRow,
         sourceUrl: SHEET_URL,
         editable: true,
@@ -1544,8 +1807,10 @@ function salesOutboundItems(table: any): ScheduleItem[] {
     if (!date || !customer || (!isSmallParcel && !isTrucking)) return [];
     const sourceRow = index + 3;
     const issue = cell(row, 7);
-    const status = /yes|issue|hold|pending/i.test(issue) ? "Pending" : "Scheduled";
-    const invoice = cell(row, 1);
+    const autoTrackedStatus = issue.match(/\[AUTO TRACK[^\]]*·\s*(Delivered|Received|Shipping|Shipped|Delayed|Customs Clearance|FDA Review\/Hold|Scheduled)\b/i)?.[1];
+    const status = autoTrackedStatus
+      ? normalizeStatus(autoTrackedStatus)
+      : /yes|issue|hold|pending/i.test(issue) ? "Pending" : "Scheduled";
     const trackingNumber = isSmallParcel
       ? trackingCandidate(...Array.from({ length: 24 }, (_, offset) => cell(row, offset + 8)))
       : "";
@@ -1556,7 +1821,7 @@ function salesOutboundItems(table: any): ScheduleItem[] {
         date,
         dateText: shipDate,
         title: customer,
-        reference: trackingNumber || invoice || "Sales shipment",
+        reference: trackingNumber || cell(row, 1) || "Sales shipment",
         secondary: [cell(row, 3), cell(row, 5), issue && `Issue: ${issue}`]
           .filter(Boolean)
           .join(" · "),
@@ -1567,7 +1832,7 @@ function salesOutboundItems(table: any): ScheduleItem[] {
         editable: false,
         customer,
         customerNo: customer,
-        invoice,
+        invoice: cell(row, 1),
         carrier: carrier || shippingMethod,
         trackingNumber,
         pro: trackingNumber,
@@ -1677,40 +1942,10 @@ function consolidateTruckingItems(records: ScheduleItem[]) {
 }
 
 async function postStatus(item: ScheduleItem, status: string) {
-  let sourceRow = item.sourceRow;
-  if (item.sourceSheet === "IMPORTS") {
-    const importsRows = await fetchCsvRows(SHEET_ID, 1497250700);
-    const source = item.isSmallParcel
-      ? inboundParcelItems(importsRows).find(
-          (record) =>
-            record.sourceRow === item.sourceRow &&
-            normalizedIdentifier(record.trackingNumber || record.invoice || "") ===
-              normalizedIdentifier(item.trackingNumber || item.invoice || ""),
-        )
-      : resolveImportSource(
-          importSourceRecords(importsRows),
-          item.shipmentNo ?? "",
-          item.invoice ?? "",
-          item.mbl ?? "",
-          item.hbl ?? "",
-        );
-    if (!source) {
-      throw new Error("The IMPORTS sheet did not contain one unique matching shipment row.");
-    }
-    sourceRow = source.sourceRow;
-  } else if (item.sourceSheet === "Outbound Shipping Schedule") {
-    const outbound = outboundSourceRecords(await fetchCsvRows(SHEET_ID, 20260708));
-    const source = resolveOutboundSource(outbound, item);
-    if (!source) {
-      throw new Error("The outbound sheet did not contain one unique matching shipment row.");
-    }
-    sourceRow = source.sourceRow;
-  }
-
   const payload = {
     kind: item.direction,
     sourceSheet: item.sourceSheet,
-    sourceRow,
+    sourceRow: item.sourceRow,
     shipmentNo: item.shipmentNo ?? "",
     container: item.container ?? "",
     mbl: item.mbl ?? "",
@@ -1720,62 +1955,80 @@ async function postStatus(item: ScheduleItem, status: string) {
     customer: item.customer ?? "",
     shipDate: item.shipDate ?? "",
     currentStatus: item.status,
+    // findInboundTarget_ (Code.gs) needs isSmallParcel to route the write into the
+    // IMPORTS sheet's PARCELS section instead of validating it as a regular import row.
+    isSmallParcel: item.isSmallParcel ?? false,
+    trackingNumber: item.trackingNumber ?? "",
     status,
   };
-  const body = JSON.stringify(payload);
-  const response = await fetch(WRITE_ENDPOINT, {
-    method: "POST",
-    headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body,
-  });
-  const result = await response.json().catch(() => null);
-  if (!response.ok || result?.ok === false) {
-    throw new Error(result?.error || "The source sheet rejected this status change.");
-  }
-  if (!result || result.ok !== true) {
-    throw new Error("The source sheet returned an invalid confirmation.");
-  }
-  if (result.row && Number(result.row) !== sourceRow) {
-    throw new Error("The update was rejected because the confirmed source row changed.");
-  }
 
-  const expectedStatus = normalizeStatus(status);
-  for (const delay of [350, 900, 1800]) {
-    await new Promise((resolve) => window.setTimeout(resolve, delay));
-    try {
-      let persisted = "";
-      if (item.sourceSheet === "IMPORTS") {
-        // Apps Script writes status to whichever column is headed "WEBSITE STATUS" in rows
-        // 1-3 (see findInboundTarget_ in google-apps-script/Code.gs) — that's column AB, not AD.
-        const table = await fetchTable(
-          SHEET_ID,
-          1497250700,
-          `AB${sourceRow}:AB${sourceRow}`,
-          0,
-        );
-        persisted = cell(table.rows?.[0], 0);
-      } else if (item.sourceSheet === "Outbound Shipping Schedule") {
-        const table = await fetchTable(
-          SHEET_ID,
-          20260708,
-          `U${sourceRow}:X${sourceRow}`,
-          0,
-        );
-        persisted = cell(table.rows?.[0], 3) || cell(table.rows?.[0], 0);
-      }
-      if (
-        persisted &&
-        normalizeStatus(persisted) === expectedStatus
-      ) {
-        return;
-      }
-    } catch {
-      // Retry while the workbook recalculates and publishes its latest values.
+  const parseConfirmation = async (response: Response) => {
+    const result = (await response.json().catch(() => null)) as
+      | { ok?: boolean; error?: string; status?: string }
+      | null;
+    if (!response.ok || result?.ok === false) {
+      const error = new Error(result?.error || `Status update failed (${response.status}).`);
+      (error as Error & { status?: number }).status = response.status;
+      throw error;
     }
+    if (!result || result.ok !== true) {
+      throw new Error("The status service returned an invalid confirmation.");
+    }
+    if (normalizeStatus(String(result.status ?? "")) !== normalizeStatus(status)) {
+      throw new Error("The persisted status did not match the requested status.");
+    }
+    return result;
+  };
+
+  try {
+    const response = await fetch(STATUS_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return await parseConfirmation(response);
+  } catch (error) {
+    const statusCode = (error as Error & { status?: number })?.status;
+    const mayUseLegacy =
+      Boolean(LEGACY_WRITE_ENDPOINT) &&
+      (statusCode === 404 || statusCode === 405 || statusCode === undefined);
+
+    // Static-host migration fallback only. Do not fall back on validation or
+    // concurrency errors, because doing so could overwrite a newer status.
+    if (!mayUseLegacy) throw error;
+
+    const response = await fetch(LEGACY_WRITE_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(payload),
+    });
+    return await parseConfirmation(response);
   }
-  throw new Error(
-    "The source sheet did not confirm this status change. The card was left unchanged.",
-  );
+}
+
+/**
+ * Approve or reject one Gmail-ingestion review row. No legacy-endpoint
+ * fallback (unlike postStatus) — this is a brand-new action with no prior
+ * static-host caller to stay compatible with.
+ */
+async function postPendingReview(event: GmailIngestionEvent, decision: "approve" | "reject") {
+  if (!event.reviewKey) {
+    throw new Error(
+      "This row has no unique customer, invoice, BL/PRO, or container identifier. Review actions are disabled to prevent resolving the wrong shipment — edit it directly in the PENDING VERIFICATION sheet.",
+    );
+  }
+  const response = await fetch(PENDING_REVIEW_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reviewKey: event.reviewKey, decision, shipmentId: event.shipmentId || undefined }),
+  });
+  const result = (await response.json().catch(() => null)) as
+    | { ok?: boolean; error?: string; action?: string; status?: string }
+    | null;
+  if (!response.ok || result?.ok !== true) {
+    throw new Error(result?.error || `Review action failed (${response.status}).`);
+  }
+  return result;
 }
 
 function ScheduleCard({
@@ -1980,7 +2233,7 @@ function SmallParcelSchedule({
                   ) : null}
                   <span className="source-badge">{item.sourceType || item.carrier || "Parcel"}</span>
                 </span>
-                <strong className="parcel-tracking">{tracking || "Tracking pending"}</strong>
+                <strong className="parcel-tracking">{tracking || item.customer || item.title || "Customer pending"}</strong>
                 <span className="parcel-invoice">{item.invoice ? `Invoice # ${item.invoice}` : "Invoice # —"}</span>
                 <span className="expand-mark" aria-hidden="true">＋</span>
               </summary>
@@ -2223,11 +2476,14 @@ export default function Home() {
   const [query, setQuery] = useState("");
   const [includeFinished, setIncludeFinished] = useState(false);
   const [savingId, setSavingId] = useState("");
+  const [reviewingKey, setReviewingKey] = useState("");
   const [notice, setNotice] = useState("");
   const [kpis, setKpis] = useState<KpiSnapshot>(EMPTY_KPIS);
   const [inboundInventory, setInboundInventory] = useState<InventoryItem[]>([]);
   const [warehouseStock, setWarehouseStock] = useState<InventoryItem[]>([]);
   const [selectedInventory, setSelectedInventory] = useState<InventoryItem | null>(null);
+  const [connection, setConnection] = useState<ConnectionState | null>(null);
+  const [gmailIngestion, setGmailIngestion] = useState<GmailIngestionEvent[] | null>(null);
   const loadInFlight = useRef(false);
   const lastRefreshAt = useRef(0);
 
@@ -2246,32 +2502,25 @@ export default function Home() {
     setLoading(true);
     setError("");
     try {
-      const [
-        inbound,
+      const {
         imports,
         outbound,
+        outboundMeta,
         nationalOutbound,
         salesOutbound,
         liveKpis,
         inventoryDashboardTable,
         skwInboundTable,
         skwStockTable,
-      ] = await Promise.all([
-        fetchTable(SHEET_ID, 2026070701, "A3:S1200", 1),
-        fetchCsvRows(SHEET_ID, 1497250700),
-        fetchCsvRows(SHEET_ID, 20260708),
-        fetchTable(NATIONAL_SHEET_ID, 99300389, "A1:U3500", 1),
-        fetchTable(SALES_SHEET_ID, 0, "A2:AF4200", 1),
-        fetchLiveKpis(),
-        fetchOptionalSheet("INVENTORY", "A1:O6500"),
-        fetchOptionalSheet("SKW_Inbound", "A1:R2500"),
-        fetchOptionalSheet("SKW_Stock", "A1:J2500"),
-      ]);
-      const generatedInbound = inboundItems(inbound, imports);
+        gmailIngestion: nextGmailIngestion,
+        connection: nextConnection,
+      } = await fetchOperationalSnapshot();
+      // Each source row remains its own operational move except same-customer,
+      // same-date trucking rows, which consolidateTruckingItems merges into one card.
       setItems(consolidateTruckingItems([
-        ...pendingImportItems(imports, generatedInbound),
+        ...pendingImportItems(imports),
         ...inboundParcelItems(imports),
-        ...outboundItems(outbound),
+        ...outboundItems(outbound, outboundMeta),
         ...nationalOutboundItems(nationalOutbound),
         ...salesOutboundItems(salesOutbound),
       ]));
@@ -2285,6 +2534,8 @@ export default function Home() {
         ...dashboardInventory.inStock,
         ...skwStockItems(skwStockTable),
       ], false));
+      setGmailIngestion(nextGmailIngestion);
+      setConnection(nextConnection);
       const refreshedAt = new Date();
       lastRefreshAt.current = refreshedAt.getTime();
       setUpdatedAt(refreshedAt);
@@ -2367,10 +2618,37 @@ export default function Home() {
     [visibleItems],
   );
 
-  const inboundScheduleVisibleItems = useMemo(
-    () => inboundVisibleItems.filter((item) => !item.isSmallParcel),
-    [inboundVisibleItems],
-  );
+  const inboundScheduleVisibleItems = useMemo(() => {
+    const first = days[0].getTime();
+    const last = days[days.length - 1].getTime();
+    const needle = query.trim().toLowerCase();
+    return items.flatMap((item) => {
+      if (item.direction !== "inbound" || item.isSmallParcel) return [];
+      // Warehouse receiving appointments use IMPORTS column Q (Delivery Expected);
+      // the Import Schedule table independently uses column O (ETA).
+      const scheduled = firstDatedValue(item.deliveryExpected ?? "");
+      if (!scheduled) return [];
+      const stamp = new Date(
+        scheduled.date.getFullYear(),
+        scheduled.date.getMonth(),
+        scheduled.date.getDate(),
+      ).getTime();
+      if (stamp < first || stamp > last) return [];
+      if (!includeFinished && finished.has(item.status.toLowerCase())) return [];
+      if (needle && ![
+        item.title,
+        item.reference,
+        item.invoice,
+        item.shipmentNo,
+        item.container,
+        item.mbl,
+        item.hbl,
+        item.vessel,
+        item.status,
+      ].join(" ").toLowerCase().includes(needle)) return [];
+      return [{ ...item, date: scheduled.date, dateText: scheduled.text }];
+    });
+  }, [days, includeFinished, items, query]);
 
   const inboundParcelVisibleItems = useMemo(
     () => inboundVisibleItems.filter((item) => item.isSmallParcel),
@@ -2463,6 +2741,32 @@ export default function Home() {
     }
   };
 
+  const handleReview = async (event: GmailIngestionEvent, decision: "approve" | "reject") => {
+    const key = event.reviewKey ?? "";
+    setReviewingKey(key);
+    setNotice(decision === "approve" ? `Approving ${event.shipmentId || "review row"}…` : `Rejecting ${event.shipmentId || "review row"}…`);
+    try {
+      await postPendingReview(event, decision);
+      setGmailIngestion((current) =>
+        (current ?? []).map((row) =>
+          row.reviewKey && row.reviewKey === key
+            ? { ...row, status: decision === "approve" ? "committed" : "rejected", reviewKey: undefined }
+            : row,
+        ),
+      );
+      setNotice(
+        decision === "approve"
+          ? `${event.shipmentId || "Row"} approved and committed to the live schedule.`
+          : `${event.shipmentId || "Row"} rejected.`,
+      );
+      window.setTimeout(() => setNotice(""), 4500);
+    } catch (reviewError) {
+      setNotice(reviewError instanceof Error ? reviewError.message : "Review action failed. Try again.");
+    } finally {
+      setReviewingKey("");
+    }
+  };
+
   return (
     <main className="site-shell">
       <header className="manifest">
@@ -2503,15 +2807,38 @@ export default function Home() {
         </div>
         <div className="sync-strip" role="status" aria-live="polite">
           <span>
-            <b className={error ? "sync-dot error" : loading ? "sync-dot loading" : "sync-dot"} />
-            {error ? "Workbook connection needs attention" : loading ? "Syncing live records…" : "3 live workbooks connected"}
+            <b className={error ? "sync-dot error" : loading ? "sync-dot loading" : connection?.mode !== "worker" || connection?.degradedSources ? "sync-dot warning" : "sync-dot"} />
+            {error
+              ? "Workbook connection needs attention"
+              : loading
+                ? "Syncing live records…"
+                : connection?.mode === "sheets"
+                  ? "Direct Sheets fallback · Worker reconnecting"
+                  : connection?.mode === "stale"
+                    ? "Last good snapshot · live sources reconnecting"
+                    : connection?.degradedSources
+                      ? `${connection.degradedSources} optional source${connection.degradedSources === 1 ? "" : "s"} unavailable`
+                      : connection?.storage === "d1"
+                        ? "D1 snapshot · Sheets fallback ready"
+                        : "Worker snapshot · 3 live workbooks connected"}
           </span>
           <span className="mono">
             AUTO SYNC 30 MIN · LAST SYNC {updatedAt ? updatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "America/Los_Angeles" }) : "—"}
             {" · "}NEXT CHECK {nextRefreshAt ? nextRefreshAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "America/Los_Angeles" }) : "—"}
+            {connection?.version ? ` · ${connection.version}` : ""}
           </span>
         </div>
       </header>
+
+      {!error && connection && connection.mode !== "worker" && (
+        <div className="alert warning" role="status">
+          <strong>{connection.mode === "stale" ? "Continuity mode." : "Fallback mode."}</strong>{" "}
+          {connection.mode === "stale"
+            ? "The last verified snapshot is still available while live workbook sources recover."
+            : "The dashboard is reading Google Sheets directly; status writes still require the Worker."}
+          {connection.detail ? ` ${connection.detail}` : ""}
+        </div>
+      )}
 
       {error && (
         <div className="alert" role="alert">
@@ -2534,7 +2861,7 @@ export default function Home() {
         <article>
           <span>DUE TODAY</span>
           <strong>{counts.dueToday}</strong>
-          <small>combined moves</small>
+          <small>tracked moves</small>
         </article>
         <article className={counts.exceptions ? "metric-alert" : ""}>
           <span>EXCEPTIONS</span>
@@ -2580,7 +2907,7 @@ export default function Home() {
           <article className="kpi-card kpi-carrier">
             <span>TOP 3 CARRIERS · YTD</span>
             <div className="carrier-table-head" aria-hidden="true">
-              <small>Carrier</small><small>Earnings</small><small>Shipments</small>
+              <small>Carrier</small><small>Freight Spend</small><small>Shipments</small>
             </div>
             <ol className="carrier-ranking">
               {kpis.topCarriers.map((carrier) => (
@@ -2601,7 +2928,7 @@ export default function Home() {
           <article className="kpi-card kpi-average">
             <span>AVG TRUCKING COST · MTD / YTD</span>
             <div className="average-head" aria-hidden="true"><small>Lane</small><small>MTD</small><small>YTD</small></div>
-            <div><small>LOCAL ≤50 MI</small><strong>{money(kpis.avgLocalMtd)}</strong><strong>{money(kpis.avgLocal)}</strong></div>
+            <div><small>LOCAL / REGIONAL HEURISTIC</small><strong>{money(kpis.avgLocalMtd)}</strong><strong>{money(kpis.avgLocal)}</strong></div>
             <div><small>CALIFORNIA</small><strong>{money(kpis.avgCaliforniaMtd)}</strong><strong>{money(kpis.avgCalifornia)}</strong></div>
             <div><small>OUT OF STATE</small><strong>{money(kpis.avgOutOfStateMtd)}</strong><strong>{money(kpis.avgOutOfState)}</strong></div>
           </article>
@@ -2613,9 +2940,9 @@ export default function Home() {
           orders. WMS wholesale sales use Date (column A) and numeric INVOICE AMOUNT (column G);
           text entries such as “FREE SAMPLE,” “FOC,” “Sample,” and operational notes are excluded.
           MTD is the current month through today; YTD begins January 1, 2026. Trucking averages
-          exclude transfers and unclassified destinations; local is within 50 miles of Buena Park.
+          exclude transfers and unclassified destinations; local / regional uses a destination city/ZIP heuristic for the Southern California operating area and is not a measured mileage radius.
           The NJ transfer card includes only TRANSFERS rows whose TO field is NJ or New Jersey.
-          Carrier earnings use the same freight Invoice-first, Rate-fallback cost, and shipment share
+          Carrier freight spend uses the same freight Invoice-first, Rate-fallback cost, and shipment share
           is each carrier’s moves divided by all YTD moves with a named carrier.{" "}
           <a href={NATIONAL_SHEET_URL} target="_blank" rel="noreferrer">
             Open Nationals source
@@ -2697,7 +3024,7 @@ export default function Home() {
           showLocation={false}
         />
         <InventoryPanel
-          title="Inbound Products in Stock"
+          title="Products in Stock"
           eyebrow="MATCHING PRODUCTS · CURRENT WAREHOUSE ON HAND"
           items={warehouseStock}
           loading={loading}
@@ -2705,6 +3032,8 @@ export default function Home() {
           showLocation
         />
       </div>
+
+      <LowStockPanel items={warehouseStock} inboundItems={inboundInventory} loading={loading} />
 
       <div className="schedule-stack" aria-label="Separate inbound and outbound schedules">
         <ScheduleBoard
@@ -2730,6 +3059,7 @@ export default function Home() {
           savingId={savingId}
           onStatus={handleStatus}
         />
+        <FulfillmentTkOrders />
         <SmallParcelSchedule
           direction="outbound"
           items={outboundParcelVisibleItems}
@@ -2737,6 +3067,13 @@ export default function Home() {
           savingId={savingId}
           onStatus={handleStatus}
         />
+      </div>
+
+      {/* .ingestion-archive-row keeps this row ordered above the footer on the
+          flex-reordered /light, /light-full, and /fulfillment-style variants. */}
+      <div className="ingestion-archive-row mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2" aria-label="Email ingestion and document archive">
+        <GmailIngestionCard events={gmailIngestion} loading={loading} onReview={handleReview} reviewingKey={reviewingKey} />
+        <DriveArchiveCard />
       </div>
 
       <ShipmentEventTrackerCard />

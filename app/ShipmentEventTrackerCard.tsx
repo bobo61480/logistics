@@ -16,6 +16,11 @@ type TrackedShipmentEvent = {
 const MASTER_SHEET =
   "https://docs.google.com/spreadsheets/d/1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc/edit";
 
+// This card is a manually-curated snapshot, not a live read of the Worker snapshot — it does not
+// reconcile itself on the 30-minute auto-refresh. Past REVIEWED_THROUGH, treat every fact below as
+// unverified rather than silently keep reporting Aug 21-22 exceptions as still current.
+const REVIEWED_THROUGH = new Date("2026-08-22T23:59:59-07:00");
+
 const TRACKED_EVENTS: TrackedShipmentEvent[] = [
   {
     priority: "urgent",
@@ -203,6 +208,7 @@ function sheetUrl(event: TrackedShipmentEvent) {
 export default function ShipmentEventTrackerCard() {
   const urgent = TRACKED_EVENTS.filter((event) => event.priority === "urgent").length;
   const missing = TRACKED_EVENTS.filter((event) => event.syncState === "missing").length;
+  const expired = Date.now() > REVIEWED_THROUGH.getTime();
 
   return (
     <section className="shipment-event-card" aria-labelledby="shipment-event-title">
@@ -215,6 +221,8 @@ export default function ShipmentEventTrackerCard() {
         .shipment-event-counts { display: flex; gap: 7px; flex-wrap: wrap; justify-content: flex-end; }
         .shipment-event-counts span { padding: 7px 9px; border-radius: 999px; background: #f4eee4; color: #5f5140; font: 700 9px "IBM Plex Mono", monospace; white-space: nowrap; }
         .shipment-event-counts .urgent { background: #ffe4df; color: #9a3427; }
+        .shipment-event-expired { margin: 0 22px 18px; padding: 12px 14px; border: 1px solid #e6b98f; border-radius: 8px; background: #fff4e8; color: #7a4a17; font-size: 11px; line-height: 1.5; }
+        .shipment-event-expired a { color: #a74720; font-weight: 700; }
         .shipment-event-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; margin: 0; padding: 1px 0 0; list-style: none; background: #e6ddd0; }
         .shipment-event-item { min-width: 0; padding: 13px 16px 14px; background: #fffdf9; }
         .shipment-event-top { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
@@ -250,6 +258,14 @@ export default function ShipmentEventTrackerCard() {
         </div>
       </header>
 
+      {expired && (
+        <p className="shipment-event-expired">
+          This list was hand-reviewed through 08/22/26 and hasn&rsquo;t reconciled against the live
+          workbook since — some of these may already be resolved. Re-check each row against the{" "}
+          <a href={MASTER_SHEET} target="_blank" rel="noreferrer">source sheet</a> before acting on it.
+        </p>
+      )}
+
       <ul className="shipment-event-list">
         {TRACKED_EVENTS.map((event) => (
           <li className="shipment-event-item" key={event.shipment}>
@@ -262,7 +278,7 @@ export default function ShipmentEventTrackerCard() {
             <p className="shipment-event-detail">{event.event}</p>
             <p className="shipment-event-note">{event.updateNote}</p>
             <div className="shipment-event-foot">
-              <span className="shipment-event-state">{STATE_LABEL[event.syncState]}</span>
+              <span className="shipment-event-state">{expired ? "Needs re-verification" : STATE_LABEL[event.syncState]}</span>
               <a className="shipment-event-link" href={sheetUrl(event)} target="_blank" rel="noreferrer">
                 {event.sheet}{event.row ? ` · row ${event.row}` : ""} ↗
               </a>
