@@ -1272,6 +1272,11 @@ function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
       eta,
       deliveryExpected: record.deliveryExpected,
       isSmallParcel: false,
+      // No dedicated carrier column exists in IMPORTS for Air/Ocean freight —
+      // vessel is the closest available proxy (ocean vessel names are usually
+      // carrier-branded, e.g. "MAERSK EDMONTON") and is already surfaced in
+      // `secondary` above, so reuse it rather than leaving Top Carriers blank.
+      carrier: record.vessel,
       shippingMethod: mode,
       sourceType: mode,
     }];
@@ -1496,7 +1501,9 @@ function inboundItems(table: any, importsRows: string[][]): ScheduleItem[] {
         vessel,
         pod: /^OSL/i.test(shipmentNo) ? "LGB" : "LAX",
         eta: expectedDelivery || eta,
-        carrier: "",
+        // See pendingImportItems: no dedicated carrier column exists for Air/Ocean
+        // freight, so vessel (already computed above) is the best available proxy.
+        carrier: vessel,
         trackingNumber: "",
         pro: "",
         isSmallParcel: false,
@@ -2770,7 +2777,7 @@ export default function Home() {
     [visibleItems],
   );
 
-  const carrierCategoryStats = useMemo(() => categoryCarrierStats(items, new Date()), [items]);
+  const carrierCategoryStats = useMemo(() => categoryCarrierStats(items, startOfToday()), [items]);
   const activeFreightModeCounts = useMemo(() => freightModeCounts(activeItems), [activeItems]);
 
   const mapMilestones = useMemo<MilestoneShipment[]>(
