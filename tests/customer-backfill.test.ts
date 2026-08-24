@@ -682,7 +682,14 @@ describe("customer backfill: live writes (2026-08-24 rollout)", () => {
       expect(records[0].name).toBe("Solo Co");
     });
 
-    it("renames the primary row to '- 1' before appending the remaining locations", () => {
+    // Round 7 (2026-08-24, Codex review on PR #92): the FIRST sibling must
+    // be appended BEFORE the primary is renamed to "- 1", not after — a
+    // prior revision of this helper renamed first, so a transient failure
+    // appending the very first sibling left an orphaned "- 1" row with no
+    // sibling at all, neither an exact match nor an ambiguous family on the
+    // next run. Reusing flagBackfillSecondLocation_ (already fixed for this
+    // exact ordering in an earlier round) makes this correct by construction.
+    it("appends the first sibling before renaming the primary row to '- 1'", () => {
       const sheet = makeFakeSheet();
       const records: CustomerRecord[] = [];
 
@@ -693,13 +700,43 @@ describe("customer backfill: live writes (2026-08-24 rollout)", () => {
       expect(nextRow).toBe(53);
       expect(sheet.writes).toEqual([
         { row: 50, col: 1, numRows: 1, numCols: 2, values: [["Multi Co", "1 First Loc"]] },
-        { row: 50, col: 1, numRows: 1, numCols: 1, value: "Multi Co - 1" },
         { row: 51, col: 1, numRows: 1, numCols: 2, values: [["Multi Co - 2", "2 Second Loc"]] },
+        { row: 50, col: 1, numRows: 1, numCols: 1, value: "Multi Co - 1" },
         { row: 52, col: 1, numRows: 1, numCols: 2, values: [["Multi Co - 3", "3 Third Loc"]] },
       ]);
       // No unsuffixed record left behind — a bare-name lookup can no longer
       // exact-match a single "obviously the only location" record.
       expect(records.map((r) => r.name)).toEqual(["Multi Co - 1", "Multi Co - 2", "Multi Co - 3"]);
+    });
+  });
+
+  // Round 7: the would-fill-missing-address branch previously discarded
+  // every observed address beyond the first outright (not even deferred to
+  // a later run) when an exact-matched record's address was blank.
+  describe("filling a missing address when 2+ distinct addresses are already known", () => {
+    it("surfaces every address beyond the first as pending on the would-fill-missing-address classification", () => {
+      const rows = makeTruckingRows([{ name: "Blank Address Co" }]);
+      const header = helpers.findBackfillCustomerDbHeader_(rows);
+      const records = helpers.buildBackfillCustomerRecords_(rows, header);
+      const aggregate = makeFamilyAggregate_("Blank Address Co", {
+        "B2B/E-COM TRUCKING": ["1 First Loc", "2 Second Loc"],
+      });
+
+      const result = helpers.classifyCustomerCandidate_("Blank Address Co", aggregate, records);
+      expect(result.classification).toBe("would-fill-missing-address");
+      expect(result.proposedAddress).toBe("1 First Loc");
+      expect(result.pendingAddresses).toEqual(["2 Second Loc"]);
+    });
+
+    it("leaves pendingAddresses empty when only one address is observed", () => {
+      const rows = makeTruckingRows([{ name: "Blank Address Co" }]);
+      const header = helpers.findBackfillCustomerDbHeader_(rows);
+      const records = helpers.buildBackfillCustomerRecords_(rows, header);
+      const aggregate = makeFamilyAggregate_("Blank Address Co", { "B2B/E-COM TRUCKING": ["1 Only Loc"] });
+
+      const result = helpers.classifyCustomerCandidate_("Blank Address Co", aggregate, records);
+      expect(result.classification).toBe("would-fill-missing-address");
+      expect(result.pendingAddresses).toEqual([]);
     });
   });
 });

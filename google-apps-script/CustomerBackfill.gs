@@ -192,6 +192,19 @@ function reconcileCustomerBackfill() {
           try {
             fillBackfillCustomerAddress_(truckingSheet, truckingHeader, classification.matchedRecord, classification.proposedAddress);
             classification.matchedRecord.address = classification.proposedAddress;
+            // The exact-matched record can already have 2+ distinct
+            // addresses observed on this very first pass — the extras
+            // become additional numbered locations now, reusing the same
+            // append-before-rename helper the conflicting-address case
+            // already uses (Codex review, round 7), instead of being
+            // silently discarded.
+            classification.pendingAddresses.forEach(function (address) {
+              var newName = flagBackfillSecondLocation_(
+                truckingSheet, truckingHeader, truckingRecords, classification.matchedRecord, address, nextTruckingRow
+              );
+              truckingRecords.push(makeBackfillRecord_(nextTruckingRow, newName, address));
+              nextTruckingRow++;
+            });
             logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
           } catch (writeError) {
             logCustomerBackfillCandidate_(aggregate.name, aggregate, classification, writeError);
@@ -651,7 +664,14 @@ function classifyCustomerCandidate_(name, aggregate, truckingRecords) {
       classification: "would-fill-missing-address",
       matchedRecord: matchedRecord,
       proposedAddress: allAddresses[0],
-      pendingAddresses: [],
+      // Codex review on PR #92, round 7: an exact-matched record with no
+      // address on file can ALSO already have 2+ distinct addresses
+      // observed on this very first pass — the extras were previously
+      // discarded outright (only visible in addressVariants for logging),
+      // not even deferred to a later run. Surfaced here the same way
+      // would-create's pendingAddresses already are, so the write loop can
+      // create every known location now instead of silently dropping them.
+      pendingAddresses: allAddresses.slice(1),
       existingAddress: "",
       addressVariants: allAddresses,
       sourcesUsed: sourcesUsed
@@ -819,17 +839,22 @@ function appendNewFamilyLocation_(truckingSheet, header, baseName, truckingRecor
 /**
  * Creates a brand-new customer with one or more known locations in a single
  * pass. The primary row uses addresses[0]; when there are more addresses,
- * the primary row is immediately renamed to "- 1" (same as
- * flagBackfillSecondLocation_'s own discipline) BEFORE the remaining
- * addresses are appended as "- 2", "- 3", etc. — never left unsuffixed
- * while siblings exist. Without this, a live bare-name lookup
- * (CustomerLookup.gs) would exact-match the still-unsuffixed primary row as
- * the sole, unambiguous location and apply ITS address/contact/services to
- * a request that might be intended for a different known location (Codex
- * review on PR #92, round 6). When there's only one address, the primary
- * row is created unsuffixed and left alone — nothing to disambiguate.
- * Returns the row number just past the last one written, for the caller to
- * resume its own row cursor from.
+ * each remaining one is created via flagBackfillSecondLocation_ — which
+ * already appends the new sibling BEFORE renaming the primary to "- 1"
+ * (fixed for exactly this reason in an earlier round). Reusing it here
+ * instead of duplicating the ordering was itself a fix (Codex review on
+ * PR #92, round 7): a prior revision of this helper renamed the primary
+ * FIRST, so a transient failure appending the very first sibling left an
+ * orphaned "<name> - 1" with no sibling at all — neither an exact match nor
+ * an ambiguous family on the next run, so a fresh unsuffixed duplicate got
+ * created on top of it. Appending first means ANY partial failure here
+ * self-heals: either via the would-repair-split-rename path (if the rename
+ * itself failed, the primary is still exact-matchable) or via the
+ * ambiguous-location-family path (if a later sibling append failed, the
+ * primary + first sibling already read as an established suffix family).
+ * When there's only one address, the primary row is created unsuffixed and
+ * left alone — nothing to disambiguate. Returns the row number just past
+ * the last one written, for the caller to resume its own row cursor from.
  */
 function createBackfillCustomerWithLocations_(truckingSheet, header, truckingRecords, name, addresses, targetRow) {
   appendBackfillCustomer_(truckingSheet, header, name, addresses[0], targetRow);
@@ -837,13 +862,10 @@ function createBackfillCustomerWithLocations_(truckingSheet, header, truckingRec
   truckingRecords.push(primaryRecord);
   var nextRow = targetRow + 1;
 
-  if (addresses.length > 1) {
-    renameToFirstLocation_(truckingSheet, header, primaryRecord);
-    for (var i = 1; i < addresses.length; i++) {
-      var newName = appendNewFamilyLocation_(truckingSheet, header, name, truckingRecords, addresses[i], nextRow);
-      truckingRecords.push(makeBackfillRecord_(nextRow, newName, addresses[i]));
-      nextRow++;
-    }
+  for (var i = 1; i < addresses.length; i++) {
+    var newName = flagBackfillSecondLocation_(truckingSheet, header, truckingRecords, primaryRecord, addresses[i], nextRow);
+    truckingRecords.push(makeBackfillRecord_(nextRow, newName, addresses[i]));
+    nextRow++;
   }
 
   return nextRow;

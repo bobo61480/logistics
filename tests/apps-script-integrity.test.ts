@@ -200,6 +200,16 @@ describe("Apps Script production integrity", () => {
     // must have its primary row renamed to "- 1" immediately, not left
     // unsuffixed until a later repair run catches it.
     expect(backfill).toContain("function createBackfillCustomerWithLocations_(");
+    // Round 7 of the same review: createBackfillCustomerWithLocations_ must
+    // reuse flagBackfillSecondLocation_ (which already appends a sibling
+    // BEFORE renaming the primary) rather than renaming first — renaming
+    // first orphans an unmatchable "- 1" row if the first sibling append
+    // then fails. And the would-fill-missing-address branch must surface
+    // every address beyond the first as pendingAddresses too, not just
+    // would-create/would-flag-second-location/ambiguous-location-family.
+    expect(backfill).toMatch(
+      /function createBackfillCustomerWithLocations_[\s\S]*?flagBackfillSecondLocation_\(truckingSheet, header, truckingRecords, primaryRecord/,
+    );
   });
 
   it("does not provision an installable onEdit trigger for customer lookup (deploy-apps-script.yml never runs setupAllTriggers)", () => {
