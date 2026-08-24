@@ -9,7 +9,7 @@
 
 /* eslint-disable no-unused-vars */
 
-var GMAIL_XPO_V2_VERSION = "2026-08-24-v2-source-validation";
+var GMAIL_XPO_V2_VERSION = "2026-08-24-v3-interim-delay-precision";
 var GMAIL_XPO_V2_LOOKBACK_DAYS = 4;
 var GMAIL_XPO_V2_SEEN_PREFIX = "GMAIL_XPO_V2_SEEN_";
 var GMAIL_XPO_V2_MAX_MESSAGES = 100;
@@ -144,7 +144,7 @@ function xpoCanonicalStatusV2_(rawStatus, body) {
   if (/\bDELIVERED\b/i.test(rawStatus)) return "Delivered";
   if (/\bCOMPLETED\b/i.test(rawStatus)) return "Completed";
   if (/\b(?:POTENTIAL DELAY|DELAYED|EXCEPTION OCCURRED|EXCEPTION OCCURED|DELIVERY ATTEMPTED|ATTEMPTED DELIVERY|ATTEMPTED)\b/i.test(signal)) return "Delayed";
-  if (/\bARRIVED AT INTERIM\b/i.test(rawStatus) && /\b(?:POSSIBLE DELAY|MAY BE DELAYED|POTENTIAL LATE)\b/i.test(signal)) return "Delayed";
+  if (/\bARRIVED AT INTERIM\b/i.test(rawStatus) && /\b(?:POSSIBLE DELAY NOTIFICATION|THIS SHIPMENT MAY BE DELAYED|CURRENT ESTIMATED DELIVERY DATE OF THE SHIPMENT IS NOW)\b/i.test(signal)) return "Delayed";
   if (/\b(?:OUT FOR DELIVERY|PICKED UP|ARRIVED AT INTERIM|IN TRANSIT|SHIPPED)\b/i.test(rawStatus)) return "Shipping";
   return "";
 }
