@@ -187,7 +187,8 @@ export async function apiHealth(): Promise<{ sources: D1SyncSource[] } | null> {
  * source omitted = full sync.
  */
 export async function apiSync(source?: string): Promise<unknown | null> {
-  const params = source ? { source } : {};
+  const params: Record<string, string> = {};
+  if (source) params.source = source;
   return get("/sync", params);
 }
 
