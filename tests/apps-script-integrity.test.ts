@@ -157,6 +157,21 @@ describe("Apps Script production integrity", () => {
     // substring of the whole cell.
     expect(lookup).toContain("function existingCustomerNoteParts_(");
     expect(lookup).toMatch(/existingParts\.indexOf\(part\) === -1/);
+    // Round 11 (2026-08-24, live production verification): TRUCKING has 14
+    // real columns (Customer Name, Accessories, Address, Contact,
+    // References, No. of Stores, Sales Rep, and the 7 service flags), but
+    // buildCustomerRecords_ only ever read 3 named fields plus the flags —
+    // Accessories/References/No. of Stores/Sales Rep were silently dropped
+    // from every auto-generated note, confirmed by inspecting real notes in
+    // the live workbook. customerNoteParts_ must surface all four.
+    expect(lookup).toContain('"ACCESSORIES"');
+    expect(lookup).toContain('"REFERENCES"');
+    expect(lookup).toContain('"NO. OF STORES"');
+    expect(lookup).toContain('"SALES REP"');
+    expect(lookup).toMatch(/if \(record\.accessories\) parts\.push\(/);
+    expect(lookup).toMatch(/if \(record\.references\) parts\.push\(/);
+    expect(lookup).toMatch(/if \(record\.storeCount\) parts\.push\(/);
+    expect(lookup).toMatch(/if \(record\.salesRep\) parts\.push\(/);
   });
 
   it("runs the customer backfill batch job live, with the '- 1'/'- 2' second-location write path implemented", () => {

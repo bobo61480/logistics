@@ -9,6 +9,10 @@ type CustomerRecord = {
   canonicalKey: string;
   address: string;
   contact: string;
+  accessories: string;
+  references: string;
+  storeCount: string;
+  salesRep: string;
   services: string[];
 };
 
@@ -42,6 +46,8 @@ type CustomerLookupHelpers = {
     whTruckingRow: number,
     record: CustomerRecord,
   ) => void;
+  findCustomerDbHeader_: (rows: string[][]) => DbHeader;
+  buildCustomerRecords_: (rows: string[][], header: DbHeader) => CustomerRecord[];
 };
 
 type FakeSheet = {
@@ -130,7 +136,8 @@ function loadCustomerLookupHelpers(): CustomerLookupHelpers {
       "stripCustomerLocationSuffix_,isAmbiguousLocationFamily_,customerAddressConflicts_," +
       "customerAddressFillable_,matchedByExactName_,fillCustomerAddress_," +
       "shouldProcessCustomerLookupEdit_,logPipelineFromBoundSpreadsheet_," +
-      "logCanonicalMatchNeedsReview_,appendCustomerNote_};",
+      "logCanonicalMatchNeedsReview_,appendCustomerNote_," +
+      "findCustomerDbHeader_,buildCustomerRecords_};",
     context,
   );
   return context.__cust as CustomerLookupHelpers;
@@ -146,6 +153,10 @@ function makeRecord(overrides: Partial<CustomerRecord> & { name: string }): Cust
     canonicalKey: helpers.normalizeWmsCustomerKey_(helpers.canonicalWmsCustomer_(name)),
     address: "",
     contact: "",
+    accessories: "",
+    references: "",
+    storeCount: "",
+    salesRep: "",
     services: [] as string[],
   };
   return { ...defaults, ...overrides };
@@ -199,6 +210,58 @@ describe("WH Trucking Request customer lookup", () => {
     expect(helpers.buildCustomerNoteText_(record)).toBe(
       "Address: 14246 Manchester Rd., MANCHESTER, MO 63011 | Contact: Me Ra Yang · mira1206@gmail.com · T: 636-288-9515 | Services: Liftgate, Inside delivery, Notify before delivery",
     );
+  });
+
+  // Round 11 (2026-08-24, live verification): TRUCKING has 14 real columns,
+  // but the note only ever surfaced Address/Contact/service flags —
+  // Accessories, References, No. of Stores, and Sales Rep were silently
+  // dropped even though they're real, staff-maintained data on the row.
+  it("includes accessories, references, store count, and sales rep when present", () => {
+    const record = makeRecord({
+      name: "Fanloli Beauty",
+      address: "depends on the order location",
+      contact: "Fanny Deng\n4153350541",
+      accessories: "LIFT GATE - FOR NON WAREHOUSE ORDERS\nAPPOINTMENT REQUIRED",
+      references: "Customer Name: Yixi Trading",
+      storeCount: "12",
+      salesRep: "Christine",
+      services: ["Liftgate"],
+    });
+    expect(helpers.buildCustomerNoteText_(record)).toBe(
+      "Address: depends on the order location | Contact: Fanny Deng · 4153350541 | " +
+        "Accessories: LIFT GATE - FOR NON WAREHOUSE ORDERS · APPOINTMENT REQUIRED | " +
+        "References: Customer Name: Yixi Trading | No. of Stores: 12 | Sales Rep: Christine | Services: Liftgate",
+    );
+  });
+
+  // Round 11: prove the header-to-record read actually works end-to-end
+  // against TRUCKING's real column layout, not just that buildCustomerNoteText_
+  // formats these fields correctly once they're on a record object.
+  it("buildCustomerRecords_ reads accessories/references/store count/sales rep from the real TRUCKING header layout", () => {
+    const rows = [
+      ["Customer Name", "Accessories", "Address", "Contact", "References", "No. of Stores", "Sales Rep", "LIFTGATE"],
+      [
+        "Fanloli Beauty",
+        "LIFT GATE - FOR NON WAREHOUSE ORDERS",
+        "depends on the order location",
+        "Fanny Deng",
+        "Customer Name: Yixi Trading",
+        "12",
+        "Christine",
+        "YES",
+      ],
+    ];
+    const header = helpers.findCustomerDbHeader_(rows);
+    const records = helpers.buildCustomerRecords_(rows, header);
+
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      name: "Fanloli Beauty",
+      accessories: "LIFT GATE - FOR NON WAREHOUSE ORDERS",
+      references: "Customer Name: Yixi Trading",
+      storeCount: "12",
+      salesRep: "Christine",
+    });
   });
 
   it("omits empty sections instead of leaving stray separators", () => {

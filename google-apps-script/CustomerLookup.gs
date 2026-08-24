@@ -3,10 +3,12 @@
  *
  * When a Customer name is typed into WH Trucking Request's Column A, looks
  * it up in the TRUCKING tab (the real customer master: Address, Contact,
- * and LIFTGATE/INSIDE/NOTIFY/RESIDENTIAL/MALL/PALLET JACK/APPOINTMENT
- * service flags) and appends what it finds into the row's NOTE column —
- * never overwriting existing manually-typed notes (e.g. "APPOINTMENT RQ +
- * RESIDENTIAL DELIVERY", which staff already write there by hand today).
+ * Accessories, References, No. of Stores, Sales Rep, and the LIFTGATE/
+ * INSIDE/NOTIFY/RESIDENTIAL/MALL/PALLET JACK/APPOINTMENT service flags —
+ * every column TRUCKING has, not just a subset) and appends what it finds
+ * into the row's NOTE column — never overwriting existing manually-typed
+ * notes (e.g. "APPOINTMENT RQ + RESIDENTIAL DELIVERY", which staff already
+ * write there by hand today).
  *
  * Matching: exact (case/whitespace-insensitive) first; falls back to the
  * same canonical-customer key WmsTruckingSyncV2 uses (Code.gs's
@@ -229,6 +231,16 @@ function findCustomerDbHeader_(rows) {
   throw new Error("Could not locate the TRUCKING customer database header row.");
 }
 
+/**
+ * Reads a named TRUCKING column as a trimmed string, or "" when the column
+ * doesn't exist on this sheet (older/partial header layouts) or the cell is
+ * blank.
+ */
+function customerDbField_(row, header, columnName) {
+  var col = header.map[columnName];
+  return col !== undefined ? String(row[col] || "").trim() : "";
+}
+
 function buildCustomerRecords_(rows, header) {
   var records = [];
   for (var r = header.rowIndex + 1; r < rows.length; r++) {
@@ -245,8 +257,17 @@ function buildCustomerRecords_(rows, header) {
       name: name,
       exactKey: name.toUpperCase().replace(/\s+/g, " "),
       canonicalKey: normalizeWmsCustomerKey_(canonicalWmsCustomer_(name)),
-      address: header.map["ADDRESS"] !== undefined ? String(row[header.map["ADDRESS"]] || "").trim() : "",
-      contact: header.map["CONTACT"] !== undefined ? String(row[header.map["CONTACT"]] || "").trim() : "",
+      address: customerDbField_(row, header, "ADDRESS"),
+      contact: customerDbField_(row, header, "CONTACT"),
+      // Codex review on PR #92 (round 11): TRUCKING has 14 columns, but this
+      // record only ever surfaced Address/Contact/the 7 service flags —
+      // Accessories, References, No. of Stores, and Sales Rep were silently
+      // dropped, so the auto-generated note never mentioned them even though
+      // they're real, staff-maintained data on the same row.
+      accessories: customerDbField_(row, header, "ACCESSORIES"),
+      references: customerDbField_(row, header, "REFERENCES"),
+      storeCount: customerDbField_(row, header, "NO. OF STORES"),
+      salesRep: customerDbField_(row, header, "SALES REP"),
       services: services
     });
   }
@@ -324,6 +345,10 @@ function makeCustomerRecord_(rowNumber, name, address) {
     canonicalKey: normalizeWmsCustomerKey_(canonicalWmsCustomer_(name)),
     address: address || "",
     contact: "",
+    accessories: "",
+    references: "",
+    storeCount: "",
+    salesRep: "",
     services: []
   };
 }
@@ -411,6 +436,10 @@ function customerNoteParts_(record) {
   var parts = [];
   if (record.address) parts.push("Address: " + record.address);
   if (record.contact) parts.push("Contact: " + record.contact.replace(/\n+/g, " · "));
+  if (record.accessories) parts.push("Accessories: " + record.accessories.replace(/\n+/g, " · "));
+  if (record.references) parts.push("References: " + record.references.replace(/\n+/g, " · "));
+  if (record.storeCount) parts.push("No. of Stores: " + record.storeCount);
+  if (record.salesRep) parts.push("Sales Rep: " + record.salesRep);
   if (record.services.length) parts.push("Services: " + record.services.join(", "));
   return parts;
 }
