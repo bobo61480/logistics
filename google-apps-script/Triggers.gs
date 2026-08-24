@@ -8,11 +8,12 @@
 
 /* eslint-disable no-unused-vars */
 
-var GMAIL_PIPELINE_TRIGGER_SYNC_VERSION = "2026-08-12-central-v1";
+var GMAIL_PIPELINE_TRIGGER_SYNC_VERSION = "2026-08-24-central-v2-xpo";
 var APPS_SCRIPT_DEPLOY_SYNC_VERSION = "2026-08-12-stabilization-v1";
 
 var TRIGGER_PLAN = [
   { handler: "processLogisticsEmailsV2", minutes: 15 },
+  { handler: "processXpoTrackingEmailsV2", minutes: 15 },
   { handler: "processApprovedPending", minutes: 30 },
   { handler: "scanAndImportWmsTruckingOrdersV2", minutes: 15 },
   { handler: "trackSmallParcelsStatusUpdates", hours: 1 },
@@ -33,6 +34,7 @@ var TRIGGER_PLAN = [
 var TRIGGER_CLEANUP_HANDLERS = [
   "processLogisticsEmails",
   "processLogisticsEmailsV2",
+  "processXpoTrackingEmailsV2",
   "scanAndImportWmsTruckingOrders",
   "scanAndImportWmsTruckingOrdersV2",
   "trackSmallParcelsStatusUpdates",
