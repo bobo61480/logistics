@@ -1,0 +1,109 @@
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
+import { describe, expect, it } from "vitest";
+
+type CustomerRecord = {
+  rowNumber: number;
+  name: string;
+  exactKey: string;
+  canonicalKey: string;
+  address: string;
+  contact: string;
+  services: string[];
+};
+
+type CustomerLookupHelpers = {
+  matchCustomerRecord_: (customerValue: string, records: CustomerRecord[]) => CustomerRecord | null;
+  buildCustomerNoteText_: (record: CustomerRecord) => string;
+  canonicalWmsCustomer_: (value: unknown) => string;
+  normalizeWmsCustomerKey_: (value: unknown) => string;
+};
+
+function loadCustomerLookupHelpers(): CustomerLookupHelpers {
+  // canonicalWmsCustomer_/normalizeWmsCustomerKey_ live in Code.gs;
+  // matchCustomerRecord_/buildCustomerNoteText_ live in CustomerLookup.gs and
+  // call the former directly (same global scope in Apps Script) — concatenate
+  // both sources into one vm context, mirroring loadWmsHelpers() in
+  // wms-trucking-sync.test.ts.
+  const code = readFileSync("google-apps-script/Code.gs", "utf8");
+  const customerLookup = readFileSync("google-apps-script/CustomerLookup.gs", "utf8");
+  const context = vm.createContext({ console });
+
+  vm.runInContext(
+    `${code}\n${customerLookup}\n;globalThis.__cust = {` +
+      "matchCustomerRecord_,buildCustomerNoteText_,canonicalWmsCustomer_,normalizeWmsCustomerKey_};",
+    context,
+  );
+  return context.__cust as CustomerLookupHelpers;
+}
+
+const helpers = loadCustomerLookupHelpers();
+
+function makeRecord(overrides: Partial<CustomerRecord> & { name: string }): CustomerRecord {
+  const name = overrides.name;
+  const defaults = {
+    rowNumber: 1,
+    exactKey: name.toUpperCase().replace(/\s+/g, " "),
+    canonicalKey: helpers.normalizeWmsCustomerKey_(helpers.canonicalWmsCustomer_(name)),
+    address: "",
+    contact: "",
+    services: [] as string[],
+  };
+  return { ...defaults, ...overrides };
+}
+
+describe("WH Trucking Request customer lookup", () => {
+  it("matches an exact (case/whitespace-insensitive) customer name", () => {
+    const records = [makeRecord({ name: "KORHEIM (CERRITOS)", address: "150 Los Cerritos Mall" })];
+    const match = helpers.matchCustomerRecord_("  korheim (cerritos)  ", records);
+    expect(match?.address).toBe("150 Los Cerritos Mall");
+  });
+
+  it("falls back to a canonical-key match only when it is unique", () => {
+    const records = [makeRecord({ name: "ROYAL IMEX INC", address: "123 Main St" })];
+    // "Royal Imex, Inc." doesn't exact-match "ROYAL IMEX INC" (punctuation
+    // differs), but canonicalWmsCustomer_'s alias handling resolves both to
+    // the same canonical key — exercise the real fallback path, not just
+    // the exact-match stage's whitespace/case normalization.
+    const match = helpers.matchCustomerRecord_("Royal Imex, Inc.", records);
+    expect(match?.address).toBe("123 Main St");
+  });
+
+  it("refuses to guess when the canonical key matches more than one distinct record", () => {
+    // Real data pattern: distinct per-location entries sharing a canonicalizable
+    // brand name (e.g. "OVER N OVER Over Beauty - 1" vs "- 2") must never let an
+    // ambiguous canonical match pick one address/contact over the other.
+    const records = [
+      makeRecord({ name: "MEGA MART (PALO ALTO)", address: "Palo Alto address" }),
+      makeRecord({ name: "MEGA MART (FREMONT)", address: "Fremont address" }),
+    ];
+    expect(helpers.matchCustomerRecord_("MEGA MART", records)).toBeNull();
+  });
+
+  it("never collapses an unrelated customer that merely shares a name prefix", () => {
+    const records = [makeRecord({ name: "MEGA MART (PALO ALTO)", address: "Palo Alto address" })];
+    expect(helpers.matchCustomerRecord_("MEGA MARTINEZ DISTRIBUTION", records)).toBeNull();
+  });
+
+  it("returns null when nothing matches at all", () => {
+    const records = [makeRecord({ name: "KORHEIM (CERRITOS)" })];
+    expect(helpers.matchCustomerRecord_("Some Brand New Customer", records)).toBeNull();
+  });
+
+  it("builds a readable note from address, contact, and only the flagged services", () => {
+    const record = makeRecord({
+      name: "Mira Beauty Inc",
+      address: "14246 Manchester Rd., MANCHESTER, MO 63011",
+      contact: "Me Ra Yang\nmira1206@gmail.com\nT: 636-288-9515",
+      services: ["Liftgate", "Inside delivery", "Notify before delivery"],
+    });
+    expect(helpers.buildCustomerNoteText_(record)).toBe(
+      "Address: 14246 Manchester Rd., MANCHESTER, MO 63011 | Contact: Me Ra Yang · mira1206@gmail.com · T: 636-288-9515 | Services: Liftgate, Inside delivery, Notify before delivery",
+    );
+  });
+
+  it("omits empty sections instead of leaving stray separators", () => {
+    const record = makeRecord({ name: "No Data Customer" });
+    expect(helpers.buildCustomerNoteText_(record)).toBe("");
+  });
+});

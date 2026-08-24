@@ -1,150 +1,70 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light">
-  <!--
-    Security: referrer meta is a client-side fallback.
-    Add `Referrer-Policy: strict-origin-when-cross-origin` as an HTTP response
-    header for authoritative enforcement.
-  -->
-  <meta name="referrer" content="strict-origin-when-cross-origin">
-  <title>StyleKorean Logistics Hub — Live Shipping Dashboard</title>
-  <meta name="description" content="Live StyleKorean inbound and outbound logistics dashboard, synced from Logistics Master 2026.">
-
-  <!-- Favicon: inline SVG avoids an extra network round-trip -->
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect x=%272%27 y=%278%27 width=%2728%27 height=%2716%27 rx=%272%27 fill=%27%23E4572E%27/%3E%3Cpath d=%27M7 10v12M12 10v12M17 10v12M22 10v12M27 10v12%27 stroke=%27%23B23A1C%27 stroke-width=%271.6%27/%3E%3C/svg%3E">
-
-  <!--
-    Performance: preconnect only to origins actually used in HTML/CSS.
-    docs.google.com is opened via JS at runtime, not needed here.
-  -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-
-  <!--
-    Performance: load fonts without render-blocking.
-    The media="print" + onload trick swaps to "all" after parsing,
-    preventing the stylesheet from blocking first paint.
-    The <noscript> fallback loads it normally for users without JS.
-  -->
-  <link rel="stylesheet"
-        href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@600;700;800&family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
-        media="print" onload="this.media='all'">
-  <noscript>
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@600;700;800&family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
-  </noscript>
-
-  <link rel="stylesheet" href="styles.css?v=20260806-1">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>StyleKorean Logistics Hub — Live Shipping Dashboard</title>
+<meta name="description" content="Live StyleKorean inbound and outbound logistics dashboard, synced from Logistics Master 2026.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect x=%272%27 y=%278%27 width=%2728%27 height=%2716%27 rx=%272%27 fill=%27%23E4572E%27/%3E%3Cpath d=%27M7 10v12M12 10v12M17 10v12M22 10v12M27 10v12%27 stroke=%27%23B23A1C%27 stroke-width=%271.6%27/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://docs.google.com">
+<link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@600;700;800&family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css?v=20260727-2">
 </head>
 <body>
 <main class="shell">
 
   <!-- ══════════ MANIFEST HEADER ══════════ -->
   <header class="manifest">
-
-    <!-- aria-hidden: purely decorative route ticker, not meaningful to AT -->
     <div class="manifest-route" aria-hidden="true">
-      <span>KRPUS ⚓ USLAX</span>
-      <span class="route-line"></span>
-      <span>ICN ✈ LAX</span>
-      <span class="route-line"></span>
-      <span>5609 RIVERWAY · BUENA PARK CA</span>
+      <span>KRPUS ⚓ USLAX</span><span class="route-line"></span><span>ICN ✈ LAX</span><span class="route-line"></span><span>5609 RIVERWAY · BUENA PARK CA</span>
     </div>
-
     <div class="manifest-main">
       <div>
         <p class="manifest-eyebrow">Logistics Master 2026 · Live workbook sync</p>
-        <!--
-          Readability/AT: avoid <br> inside headings for layout purposes.
-          Use CSS (e.g. display:block on a <span> or white-space handling) instead.
-        -->
-        <h1>StyleKorean Logistics Hub</h1>
-        <p class="manifest-sub">
-          Every outbound order, inbound container, and small-parcel delivery
-          across all eleven workbook sources — one board.
-        </p>
+        <h1>StyleKorean<br>Logistics Hub</h1>
+        <p class="manifest-sub">Every outbound order, inbound container, and small-parcel delivery across all eleven workbook sources — one board.</p>
       </div>
       <div class="manifest-actions">
-        <!--
-          Accessibility: the ↻ glyph is decorative; aria-hidden keeps it
-          out of the accessible name so the button reads "Refresh data".
-        -->
-        <button id="refresh" class="btn btn-solid">
-          <span aria-hidden="true">↻</span> Refresh data
-        </button>
-        <!--
-          Accessibility: hide the ↗ arrow glyph from AT so the link reads
-          "Open Google Sheet" rather than "Open Google Sheet northeast arrow".
-          rel="noreferrer" implies noopener; listing both is explicit intent.
-        -->
-        <a class="btn btn-line"
-           href="https://docs.google.com/spreadsheets/d/1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc"
-           target="_blank"
-           rel="noopener noreferrer"
-           aria-label="Open Google Sheet (opens in new tab)">
-          Open Google Sheet <span aria-hidden="true">↗</span>
-        </a>
+        <button id="refresh" class="btn btn-solid">↻ Refresh data</button>
+        <a class="btn btn-line" href="https://docs.google.com/spreadsheets/d/1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc" target="_blank" rel="noreferrer">Open Google Sheet ↗</a>
       </div>
     </div>
-
     <div class="sync-bar" role="status" aria-live="polite">
-      <span>
-        <span id="dot" class="sync-dot" aria-hidden="true"></span>
-        <span id="sync">Importing Logistics Master 2026…</span>
-      </span>
+      <span><span id="dot" class="sync-dot" aria-hidden="true"></span><span id="sync">Importing Logistics Master 2026…</span></span>
       <span>Last updated: <strong id="updated" class="mono">—</strong></span>
     </div>
-
   </header>
 
   <!-- ══════════ METRICS ══════════ -->
-  <!--
-    Accessibility: aria-busy="true" signals to AT that content is loading.
-    JS should remove this attribute (or set it to "false") once populated.
-  -->
-  <section id="metrics" class="metrics" aria-label="Key metrics" aria-busy="true"></section>
+  <section id="metrics" class="metrics" aria-label="Key metrics"></section>
 
   <!-- ══════════ SOURCE ACCESS HUB ══════════ -->
   <section class="panel integration-panel" aria-labelledby="sourceHubHead">
     <div class="panel-head">
-      <div>
-        <p class="eyebrow">Direct source access</p>
-        <h2 id="sourceHubHead">All source data links</h2>
-      </div>
+      <div><p class="eyebrow">Direct source access</p><h2 id="sourceHubHead">All source data links</h2></div>
       <div>
         <span class="badge-count" id="sourceOkCount">0/0 online</span>
-        <button id="exportIntegration" class="btn-mini" type="button"
-                title="Download source health JSON">
-          <span aria-hidden="true">⭳</span> Source JSON
-        </button>
+        <button id="exportIntegration" class="btn-mini" type="button" title="Download source health JSON">⭳ Source JSON</button>
       </div>
     </div>
-
     <div id="sourceStrip" class="source-strip" aria-live="polite"></div>
 
     <div class="database-bar">
-      <!--
-        Semantics: wrap the status text in <p> so the <strong> and <span>
-        are nested inside proper block prose, not floating siblings in a <div>.
-      -->
-      <p id="databaseStatus">
-        <strong>Sheets fallback active</strong>
-        <span>Database activation pending · dashboard remains fully operational</span>
-      </p>
+      <div id="databaseStatus"><strong>Sheets fallback active</strong><span>Database activation pending · dashboard remains fully operational</span></div>
       <form id="databaseSignIn" class="database-sign-in" hidden>
         <label class="visually-hidden" for="databaseEmail">StyleKorean member email</label>
-        <input id="databaseEmail" name="email" type="email"
-               autocomplete="email" placeholder="name@stylekoreanus.com" required>
+        <input id="databaseEmail" name="email" type="email" autocomplete="email" placeholder="name@stylekoreanus.com" required>
         <button class="btn-mini" type="submit">Sign in</button>
-        <span id="databaseResult" class="mono" aria-live="polite"></span>
+        <span id="databaseResult" class="mono"></span>
       </form>
       <button id="databaseSignOut" class="btn-mini" type="button" hidden>Sign out</button>
     </div>
 
     <div id="integrationSummary" class="integration-summary" aria-live="polite"></div>
-
     <div class="table-wrap integration-table-wrap">
       <table class="data-table integration-table" aria-label="Source integration health">
         <thead>
@@ -166,14 +86,7 @@
   <!-- ══════════ INBOUND 14-DAY ══════════ -->
   <section class="panel" aria-labelledby="inEtaHead">
     <div class="panel-head">
-      <div>
-        <p class="eyebrow">Next 14 days</p>
-        <!--
-          Readability/AT: uppercase heading text belongs in CSS (text-transform),
-          not in the HTML source. Changed to title-case here.
-        -->
-        <h2 id="inEtaHead">Scheduled Import Inbounds</h2>
-      </div>
+      <div><p class="eyebrow">Next 14 days</p><h2 id="inEtaHead">SCHEDULED IMPORT INBOUNDS</h2></div>
       <span class="side-badge">Inbound</span>
     </div>
     <div id="inboundBoard" class="board-host"></div>
@@ -182,10 +95,7 @@
   <!-- ══════════ OUTBOUND 14-DAY ══════════ -->
   <section class="panel" aria-labelledby="outEtaHead">
     <div class="panel-head">
-      <div>
-        <p class="eyebrow">Next 14 days</p>
-        <h2 id="outEtaHead">Upcoming outbound schedule</h2>
-      </div>
+      <div><p class="eyebrow">Next 14 days</p><h2 id="outEtaHead">Upcoming outbound schedule</h2></div>
       <span class="side-badge badge-out">Outbound</span>
     </div>
     <div id="outboundBoard" class="board-host"></div>
@@ -194,51 +104,19 @@
   <!-- ══════════ OUTBOUND TABLE ══════════ -->
   <section class="panel" aria-labelledby="outTableHead">
     <div class="panel-head">
-      <div>
-        <p class="eyebrow">All sources merged</p>
-        <h2 id="outTableHead">Outbound shipping schedule</h2>
-      </div>
+      <div><p class="eyebrow">All sources merged</p><h2 id="outTableHead">Outbound shipping schedule</h2></div>
       <span class="badge-count" id="outCount">0 rows</span>
     </div>
     <div class="filters">
-      <label class="search-field">
-        <span class="visually-hidden">Search outbound</span>
-        <span class="icon" aria-hidden="true">⌕</span>
-        <input id="outSearch" type="search"
-               placeholder="Search customer, invoice #, PRO / tracking #, carrier…">
-      </label>
-      <label>
-        <span class="visually-hidden">Filter by source</span>
-        <select id="srcFilter"><option value="">All sources</option></select>
-      </label>
-      <label>
-        <span class="visually-hidden">Filter by status</span>
-        <select id="outStatus"><option value="">All statuses</option></select>
-      </label>
-      <label class="toggle">
-        <input type="checkbox" id="showFinished"> Show finished
-      </label>
-      <button id="exportCsv" class="btn-mini" type="button"
-              title="Download the current filtered view as CSV">
-        <span aria-hidden="true">⭳</span> CSV
-      </button>
+      <label class="search-field"><span class="visually-hidden">Search outbound</span><span class="icon" aria-hidden="true">⌕</span><input id="outSearch" type="search" placeholder="Search customer, invoice #, PRO / tracking #, carrier…"></label>
+      <label><span class="visually-hidden">Filter by source</span><select id="srcFilter"><option value="">All sources</option></select></label>
+      <label><span class="visually-hidden">Filter by status</span><select id="outStatus"><option value="">All statuses</option></select></label>
+      <label class="toggle"><input type="checkbox" id="showFinished"> Show finished</label>
+      <button id="exportCsv" class="btn-mini" type="button" title="Download the current filtered view as CSV">⭳ CSV</button>
     </div>
     <div class="table-wrap">
       <table class="data-table" id="outTable">
-        <thead>
-          <tr>
-            <th data-sort="source"   aria-sort="none"      scope="col">Source</th>
-            <th data-sort="shipDate" aria-sort="ascending" scope="col" class="sorted">Ship date</th>
-            <th data-sort="customer" aria-sort="none"      scope="col">Customer / Invoice #</th>
-            <th scope="col">Carrier / PRO / Tracking #</th>
-            <th scope="col">Units</th>
-            <th scope="col">Dims (in) · lbs</th>
-            <th data-sort="destination" aria-sort="none"  scope="col">Destination</th>
-            <th data-sort="rate"        aria-sort="none"  scope="col">Rate</th>
-            <th data-sort="status"      aria-sort="none"  scope="col">Status</th>
-            <th scope="col">Action</th>
-          </tr>
-        </thead>
+        <thead><tr><th data-sort="source" aria-sort="none" scope="col">Source</th><th data-sort="shipDate" aria-sort="ascending" scope="col" class="sorted">Ship date</th><th data-sort="customer" aria-sort="none" scope="col">Customer / Invoice #</th><th scope="col">Carrier / PRO / Tracking #</th><th scope="col">Units</th><th scope="col">Dims (in) · lbs</th><th data-sort="destination" aria-sort="none" scope="col">Destination</th><th data-sort="rate" aria-sort="none" scope="col">Rate</th><th data-sort="status" aria-sort="none" scope="col">Status</th><th scope="col">Action</th></tr></thead>
         <tbody id="outRows"></tbody>
       </table>
     </div>
@@ -247,48 +125,17 @@
   <!-- ══════════ INBOUND TABLE ══════════ -->
   <section class="panel" aria-labelledby="inTableHead">
     <div class="panel-head">
-      <div>
-        <p class="eyebrow">Ocean · Air</p>
-        <h2 id="inTableHead">Inbound shipments</h2>
-      </div>
+      <div><p class="eyebrow">Ocean · Air</p><h2 id="inTableHead">Inbound shipments</h2></div>
       <span class="badge-count" id="inCount">0 rows</span>
     </div>
     <div class="filters">
-      <label class="search-field">
-        <span class="visually-hidden">Search inbound</span>
-        <span class="icon" aria-hidden="true">⌕</span>
-        <input id="inSearch" type="search"
-               placeholder="Search shipment #, invoice #, container, MBL, HBL…">
-      </label>
-      <label>
-        <span class="visually-hidden">Filter by mode</span>
-        <select id="modeFilter">
-          <option value="">All modes</option>
-          <option>Ocean</option>
-          <option>Air</option>
-        </select>
-      </label>
-      <label class="toggle">
-        <input type="checkbox" id="showInboundFinished"> Show received / finished
-      </label>
+      <label class="search-field"><span class="visually-hidden">Search inbound</span><span class="icon" aria-hidden="true">⌕</span><input id="inSearch" type="search" placeholder="Search shipment #, invoice #, container, MBL, HBL…"></label>
+      <label><span class="visually-hidden">Filter by mode</span><select id="modeFilter"><option value="">All modes</option><option>Ocean</option><option>Air</option></select></label>
+      <label class="toggle"><input type="checkbox" id="showInboundFinished"> Show received / finished</label>
     </div>
     <div class="table-wrap">
-      <!-- Accessibility: all <th> cells need scope="col" for AT header association -->
       <table class="data-table" id="inTable">
-        <thead>
-          <tr>
-            <th scope="col">Mode</th>
-            <th scope="col">ETA</th>
-            <th scope="col">Shipment #</th>
-            <th scope="col" data-field="invoice">Invoice #</th>
-            <th scope="col">Container / Tracking #</th>
-            <th scope="col">MBL · HBL</th>
-            <th scope="col">Carrier</th>
-            <th scope="col">Origin</th>
-            <th scope="col">Destination</th>
-            <th scope="col">Status</th>
-          </tr>
-        </thead>
+        <thead><tr><th>Mode</th><th>ETA</th><th>Shipment #</th><th data-field="invoice">Invoice #</th><th>Container / Tracking #</th><th>MBL · HBL</th><th>Carrier</th><th>Origin</th><th>Destination</th><th>Status</th></tr></thead>
         <tbody id="inRows"></tbody>
       </table>
     </div>
@@ -297,48 +144,27 @@
   <!-- ══════════ SMALL PARCEL ══════════ -->
   <section class="panel" aria-labelledby="parcelHead">
     <div class="panel-head">
-      <div>
-        <p class="eyebrow">UPS · FedEx · USPS · DHL · Amazon</p>
-        <h2 id="parcelHead">Active small-parcel tracking</h2>
-      </div>
+      <div><p class="eyebrow">UPS · FedEx · USPS · DHL · Amazon</p><h2 id="parcelHead">Active small-parcel tracking</h2></div>
       <span class="badge-count" id="parcelCount">0</span>
     </div>
     <div id="parcelGrid" class="parcel-grid"></div>
   </section>
 
-  <!--
-    Accessibility: role="alert" ensures this notice is announced by AT
-    when it becomes visible (equivalent to aria-live="assertive").
-  -->
-  <div id="setupNotice" class="setup-notice hidden" role="alert">
-    <strong>Can't reach the workbook.</strong> Check that LOGISTICS MASTER 2026 is
-    link-readable (Share → Anyone with the link → Viewer).
-    Each source loads independently.
+  <div id="setupNotice" class="setup-notice hidden">
+    <strong>Can't reach the workbook.</strong> Check that LOGISTICS MASTER 2026 is link-readable
+    (Share → Anyone with the link → Viewer). Each source loads independently.
   </div>
 
   <footer>
     <p><strong>SK</strong> StyleKorean Logistics · Buena Park / Santa Fe Springs CA · Saddle Brook NJ</p>
     <p class="mono" id="footNote">Synced read-only from Google Sheets · auto-refreshes every 10 min</p>
   </footer>
-
 </main>
-
-<!--
-  Security: add a Subresource Integrity (SRI) hash to the CDN script so
-  that a compromised CDN cannot inject malicious code.
-  Generate the hash at: https://www.srihash.org/
-  Example (update hash when upgrading the version):
-    integrity="sha384-REPLACE_WITH_REAL_HASH"
-  Performance: defer all scripts so they don't block HTML parsing.
-  Execution order is preserved by defer — same as the original load order.
--->
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.7"
-        crossorigin="anonymous"
-        defer></script>
-<script src="database-config.js?v=20260806-1"  defer></script>
-<script src="database-client.js?v=20260806-1"  defer></script>
-<script src="platform-config.js?v=20260806-1"  defer></script>
-<script src="site-config.js?v=20260806-1"      defer></script>
-<script src="app.js?v=20260806-1"              defer></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.7" crossorigin="anonymous"></script>
+<script src="database-config.js?v=20260728-12"></script>
+<script src="database-client.js?v=20260728-12"></script>
+<script src="platform-config.js?v=20260728-12"></script>
+<script src="site-config.js?v=20260728-12"></script>
+<script src="app.js?v=20260728-12"></script>
 </body>
 </html>

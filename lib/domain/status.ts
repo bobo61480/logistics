@@ -8,6 +8,10 @@ export type LogisticsStatus =
   | "Received"
   | "Cancelled"
   | "Completed"
+<<<<<<< HEAD
+=======
+  | "N/A"
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   | "Customs Clearance"
   | "FDA Review / Hold"
   | "FWS Review / Hold"
@@ -31,6 +35,10 @@ const aliases = new Map<string, LogisticsStatus>([
   ["CANCELLED", "Cancelled"],
   ["CANCELED", "Cancelled"],
   ["COMPLETED", "Completed"],
+<<<<<<< HEAD
+=======
+  ["N/A", "N/A"],
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   ["CUSTOMS CLEARANCE", "Customs Clearance"],
   ["FDA HOLD", "FDA Review / Hold"],
   ["FDA REVIEW", "FDA Review / Hold"],

@@ -50,13 +50,18 @@ describe("Apps Script production integrity", () => {
     expect(compatibility).toContain("return scanAndImportWmsTruckingOrdersV2();");
   });
 
+<<<<<<< HEAD
   it("central trigger provisioning cleans legacy and current WMS/Gmail handlers", () => {
+=======
+  it("central trigger provisioning cleans legacy WMS/Gmail handlers and provisions the current ones", () => {
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
     const triggers = read("google-apps-script/Triggers.gs");
 
     expect(triggers).toContain('"processLogisticsEmails"');
     expect(triggers).toContain('"processLogisticsEmailsV2"');
     expect(triggers).toContain('"scanAndImportWmsTruckingOrders"');
     expect(triggers).toContain('"scanAndImportWmsTruckingOrdersV2"');
+<<<<<<< HEAD
     expect(triggers).not.toContain('{ handler: "scanAndImportWmsTruckingOrdersV2"');
     expect(triggers).not.toContain('{ handler: "requestSiteRedeploy"');
   });
@@ -66,5 +71,32 @@ describe("Apps Script production integrity", () => {
 
     expect(importer).toContain("var WMS_TRUCKING_SYNC_ENABLED = false;");
     expect(importer).toContain('return { ok: true, skipped: "disabled" };');
+=======
+    // Re-enabled 2026-08-23 (see the "re-enables the hardened WMS trucking
+    // importer" test below) — the V2 handler IS provisioned now, unlike the
+    // legacy alias and the obsolete requestSiteRedeploy handler.
+    expect(triggers).toContain('{ handler: "scanAndImportWmsTruckingOrdersV2", minutes: 15 }');
+    expect(triggers).not.toContain('{ handler: "scanAndImportWmsTruckingOrders",');
+    expect(triggers).not.toContain('{ handler: "requestSiteRedeploy"');
+  });
+
+  it("re-enables the hardened WMS trucking importer in dry-run mode with the customer-canonicalization fix", () => {
+    const importer = read("google-apps-script/WmsTruckingSyncV2.gs");
+    const code = read("google-apps-script/Code.gs");
+
+    expect(importer).toContain("var WMS_TRUCKING_SYNC_ENABLED = true;");
+    expect(importer).toContain("var WMS_TRUCKING_DRY_RUN = true;");
+    expect(importer).toContain("function logWmsDryRun_(");
+    expect(importer).toContain("function wouldChangeMappedValue_(");
+    // Word-boundary anchored — must not collapse "MEGA MARTINEZ..." into
+    // "MEGA MART" the way the unanchored `indexOf(...) === 0` check used to
+    // (see tests/wms-trucking-sync.test.ts for the behavioral regression test).
+    expect(code).toContain('/^MEGA MART\\b/.test(key)');
+    expect(code).toContain('/^TOKTOK BEAUTY\\b/.test(key)');
+    expect(code).toContain('/^ROYAL IMEX\\b/.test(key)');
+    expect(code).not.toContain('key.indexOf("MEGA MART") === 0');
+    expect(code).not.toContain('key.indexOf("TOKTOK BEAUTY") === 0');
+    expect(code).not.toContain('key.indexOf("ROYAL IMEX") === 0');
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   });
 });

@@ -1,5 +1,6 @@
 /**
 <<<<<<< HEAD
+<<<<<<< HEAD
  * Triggers.gs — one-click provisioning of every time-driven job,
  * plus the GitHub Pages redeploy hook.
  *
@@ -16,24 +17,49 @@
  * schedules). It removes both legacy aliases and current handlers before
  * provisioning exactly one trigger for each desired job.
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+ * Triggers.gs — single owner for every production time-driven job.
+ *
+ * Run setupAllTriggers() once after deployment (and again after changing
+ * schedules). It removes both legacy aliases and current handlers before
+ * provisioning exactly one trigger for each desired job.
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
  */
 
 /* eslint-disable no-unused-vars */
 
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+var GMAIL_PIPELINE_TRIGGER_SYNC_VERSION = "2026-08-12-central-v1";
+var APPS_SCRIPT_DEPLOY_SYNC_VERSION = "2026-08-12-stabilization-v1";
+
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 var TRIGGER_PLAN = [
-  { handler: "processLogisticsEmails", minutes: 15 },          // Gmail ingestion
-  { handler: "processApprovedPending", minutes: 30 },          // commit human-approved rows
-  { handler: "scanAndImportWmsTruckingOrders", minutes: 30 },  // existing WMS trucking scanner (Code.gs)
-  { handler: "trackSmallParcelsStatusUpdates", minutes: 45 },  // track inbound small parcels for status updates
-  { handler: "syncInventoryModule", hours: 1 },                // inventory + KPI rebuild
-  { handler: "enrichImportsFromContainerLog", daily: 6 },      // 6 AM daily
-  { handler: "requestSiteRedeploy", daily: 7 }                 // 7 AM daily safety redeploy
+  { handler: "processLogisticsEmailsV2", minutes: 15 },
+  { handler: "processApprovedPending", minutes: 30 },
+  { handler: "scanAndImportWmsTruckingOrdersV2", minutes: 15 },
+  { handler: "trackSmallParcelsStatusUpdates", hours: 1 },
+  { handler: "syncInventoryModule", hours: 1 },
+  { handler: "enrichImportsFromContainerLog", daily: 6 },
+  { handler: "reconcileCustomerBackfill", daily: 5 }
+];
+
+var TRIGGER_CLEANUP_HANDLERS = [
+  "processLogisticsEmails",
+  "processLogisticsEmailsV2",
+  "scanAndImportWmsTruckingOrders",
+  "scanAndImportWmsTruckingOrdersV2",
+  "trackSmallParcelsStatusUpdates",
+  "syncInventoryModule",
+  "enrichImportsFromContainerLog",
+  "reconcileCustomerBackfill",
+  "requestSiteRedeploy"
 ];
 
 function setupAllTriggers() {
-  var handlers = TRIGGER_PLAN.map(function (t) { return t.handler; });
   ScriptApp.getProjectTriggers().forEach(function (trigger) {
+<<<<<<< HEAD
     if (handlers.indexOf(trigger.getHandlerFunction()) !== -1) ScriptApp.deleteTrigger(trigger);
 =======
 var GMAIL_PIPELINE_TRIGGER_SYNC_VERSION = "2026-08-12-central-v1";
@@ -64,6 +90,11 @@ function setupAllTriggers() {
       ScriptApp.deleteTrigger(trigger);
     }
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+    if (TRIGGER_CLEANUP_HANDLERS.indexOf(trigger.getHandlerFunction()) !== -1) {
+      ScriptApp.deleteTrigger(trigger);
+    }
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   });
 
   TRIGGER_PLAN.forEach(function (t) {
@@ -74,14 +105,19 @@ function setupAllTriggers() {
   });
 
 <<<<<<< HEAD
+<<<<<<< HEAD
   Logger.log("Provisioned " + TRIGGER_PLAN.length + " triggers.");
 =======
   Logger.log("Provisioned " + TRIGGER_PLAN.length + " canonical triggers.");
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+  Logger.log("Provisioned " + TRIGGER_PLAN.length + " canonical triggers.");
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   return TRIGGER_PLAN;
 }
 
 /**
+<<<<<<< HEAD
 <<<<<<< HEAD
  * Fires a repository_dispatch event so GitHub Actions redeploys the site.
  * The frontend reads sheet data live at runtime, so this is only needed to
@@ -116,4 +152,13 @@ function requestSiteRedeploy() {
   Logger.log("requestSiteRedeploy is obsolete; live operational data no longer requires a code redeploy.");
   return { skipped: "obsolete" };
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+ * Legacy safety shim only. This handler is intentionally absent from
+ * TRIGGER_PLAN, but retaining the function prevents a stale installed trigger
+ * from failing before setupAllTriggers() has a chance to delete it.
+ */
+function requestSiteRedeploy() {
+  Logger.log("requestSiteRedeploy is obsolete; live operational data no longer requires a code redeploy.");
+  return { skipped: "obsolete" };
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 }

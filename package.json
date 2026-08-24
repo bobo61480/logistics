@@ -13,17 +13,26 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "next build && playwright test",
+<<<<<<< HEAD
+=======
+    "verify:production": "node scripts/verify-production.mjs"
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   },
   "dependencies": {
-    "next": "^16.3.0",
+    "claude": "^0.1.1",
+    "next": "^16.3.1",
     "react": "19.2.6",
-    "react-dom": "19.2.6"
-  },
-  "devDependencies": {
     "react-dom": "19.2.6",
     "wrangler": "^4.120.1"
   },
   "devDependencies": {
+<<<<<<< HEAD
+    "react-dom": "19.2.6",
+    "wrangler": "^4.120.1"
+  },
+  "devDependencies": {
+=======
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
     "@cloudflare/workers-types": "^5.20260813.1",
     "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "4.2.1",
@@ -31,14 +40,18 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "19.2.3",
     "tailwindcss": "4.2.1",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "vitest": "^4.1.10"
   },
   "allowScripts": {
+<<<<<<< HEAD
     "sharp@0.34.5": true
     "typescript": "5.9.3",
     "vitest": "^4.1.10"
   },
   "allowScripts": {
+=======
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
     "sharp@0.34.5": true,
     "esbuild@0.28.1": true,
     "workerd@1.20260804.1": true,

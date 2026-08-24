@@ -17,6 +17,26 @@ describe("effective outbound source selection", () => {
     });
   });
 
+<<<<<<< HEAD
+=======
+  it("uses schedule rows immediately after the sheet's single header row (regression: bug reported 2 rows too many were skipped, permanently falling back to WH Trucking Request)", () => {
+    // Outbound Shipping Schedule (gid 20260708) has exactly one header row —
+    // see e2e/dashboard.spec.ts's outboundCsv() fixture. A row of real data
+    // sitting immediately after that single header row must be picked up.
+    const schedule = [["CUSTOMER", "INVOICE NO.", "", "SHIP DATE"], ["ULTA BEAUTY", "IN12345", "", "8/13/2026"]];
+    const trucking = [...blankRows(2), ["Fallback", "INV-2", "", "8/14/2026"]];
+    const selected = selectOutboundSource(schedule, trucking);
+
+    expect(selected.rows).toBe(schedule);
+    expect(selected.meta).toMatchObject({
+      sheetName: "Outbound Shipping Schedule",
+      headerRow: 1,
+      rowCount: 1,
+      fallback: false,
+    });
+  });
+
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   it("falls back to uncombined trucking rows when the generated schedule is empty", () => {
     const schedule = blankRows(4);
     const trucking = [...blankRows(2), ["Customer A", "INV-1", "", "8/13/2026"], ["Customer A", "INV-2", "", "8/13/2026"]];

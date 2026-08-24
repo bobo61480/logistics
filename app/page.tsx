@@ -6,9 +6,24 @@ import { INBOUND_INVOICE_LINKS } from "./inbound-invoice-links";
 import { packingListPallets } from "./inbound-pallets";
 import { computeLiveKpis } from "../lib/sales-kpis";
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+import FulfillmentTkOrders from "./FulfillmentTkOrders";
+import { GmailIngestionCard, type GmailIngestionEvent } from "./gmail-ingestion-card";
+import { DriveArchiveCard, driveLinkGlyph } from "./drive-archive-card";
+import ShipmentEventTrackerCard from "./ShipmentEventTrackerCard";
+import { LiveMapPanel, useParcelTracking, type MilestoneShipment, type TrackableShipment, type TrackingResult } from "./live-map";
+import { ThemeToggle } from "./theme-toggle";
+import { DataGrids } from "./data-grids";
+import { IngestionRoadmapCard } from "./ingestion-roadmap-card";
+import { LOGISTICS_STATUS_OPTIONS } from "../lib/domain/status";
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 
-const SHEET_ID = "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc";
+const SHEET_ID =
+  process.env.NEXT_PUBLIC_LOGISTICS_MASTER_SHEET_ID ??
+  "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc";
 const SHEET_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit`;
+<<<<<<< HEAD
 const NATIONAL_SHEET_ID = "12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8";
 const NATIONAL_SHEET_URL = `https://docs.google.com/spreadsheets/d/${NATIONAL_SHEET_ID}/edit?gid=99300389#gid=99300389`;
 const SALES_SHEET_ID = "14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I";
@@ -36,6 +51,8 @@ const SHEET_ID =
   process.env.NEXT_PUBLIC_LOGISTICS_MASTER_SHEET_ID ??
   "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc";
 const SHEET_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit`;
+=======
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 const NATIONAL_SHEET_ID =
   process.env.NEXT_PUBLIC_NATIONAL_SHEET_ID ??
   "12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8";
@@ -55,15 +72,22 @@ const DATA_ENDPOINT =
   process.env.NEXT_PUBLIC_LOGISTICS_SNAPSHOT_URL ?? "/api/logistics/snapshot";
 const STATUS_ENDPOINT =
   process.env.NEXT_PUBLIC_LOGISTICS_STATUS_URL ?? "/api/logistics/status";
+<<<<<<< HEAD
 const LEGACY_WRITE_ENDPOINT =
   process.env.NEXT_PUBLIC_APPS_SCRIPT_WRITE_URL ?? "";
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+const PENDING_REVIEW_ENDPOINT =
+  process.env.NEXT_PUBLIC_LOGISTICS_PENDING_REVIEW_URL ?? "/api/logistics/pending-review";
+const LEGACY_WRITE_ENDPOINT =
+  process.env.NEXT_PUBLIC_APPS_SCRIPT_WRITE_URL ?? "";
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 const AUTO_REFRESH_MS = 30 * 60 * 1000;
 
 type Direction = "inbound" | "outbound";
 type OutboundDepartment = "Wholesale" | "B2B/E-Com" | "Nationals" | "MBX" | "NJ";
 
-type ScheduleItem = {
+export type ScheduleItem = {
   id: string;
   direction: Direction;
   date: Date;
@@ -97,9 +121,13 @@ type ScheduleItem = {
   pod?: string;
   eta?: string;
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
   deliveryExpected?: string;
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+  deliveryExpected?: string;
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   isSmallParcel?: boolean;
   shippingMethod?: string;
   sourceType?: string;
@@ -133,7 +161,7 @@ type KpiSnapshot = {
   avgOutOfStateMtd: number;
 };
 
-type InventoryItem = {
+export type InventoryItem = {
   id: string;
   shipmentNo: string;
   productName: string;
@@ -159,16 +187,22 @@ const EMPTY_KPIS: KpiSnapshot = {
   njTransferMtd: 0,
   njTransferYtd: 0,
 <<<<<<< HEAD
+<<<<<<< HEAD
   nationalsSalesMtd: SALES_SNAPSHOT.nationalsMtd,
   nationalsSalesYtd: SALES_SNAPSHOT.nationalsYtd,
   wmsSalesMtd: SALES_SNAPSHOT.wmsMtd,
   wmsSalesYtd: SALES_SNAPSHOT.wmsYtd,
 =======
+=======
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   nationalsSalesMtd: 0,
   nationalsSalesYtd: 0,
   wmsSalesMtd: 0,
   wmsSalesYtd: 0,
+<<<<<<< HEAD
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   topCarriers: [],
   ltlPercent: 0,
   ftlPercent: 0,
@@ -216,6 +250,7 @@ const STATUS_OPTIONS = [
 
 const INBOUND_STATUS_OPTIONS = [
   ...STATUS_OPTIONS,
+  "N/A",
   "Customs Clearance",
   "FDA Review/Hold",
   "FWS Review/Hold",
@@ -225,6 +260,7 @@ const INBOUND_STATUS_OPTIONS = [
 const finished = new Set(["shipped", "delivered", "received", "cancelled", "completed"]);
 const finishedImports = new Set(["delivered", "received", "cancelled", "completed"]);
 
+<<<<<<< HEAD
 <<<<<<< HEAD
 // Defined here (before IMPORT_STALE_CUTOFF) so the IIFE below has no forward-reference
 // dependency on the later startOfToday declaration.
@@ -241,6 +277,8 @@ function startOfToday() {
 
 =======
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 // Any import whose ETA is before this date is treated as effectively received/delivered/completed
 // and hidden from the "current + upcoming" Import Schedules table, even if the sheet's Status
 // cell is blank or stale. This does not overwrite the Status column in the source spreadsheet.
@@ -371,7 +409,10 @@ function dayKey(date: Date) {
 }
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
+=======
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 function startOfToday() {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Los_Angeles",
@@ -383,21 +424,68 @@ function startOfToday() {
   return new Date(Number(value.year), Number(value.month) - 1, Number(value.day));
 }
 
+<<<<<<< HEAD
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
 function statusClass(status: string) {
+=======
+// Five-bucket classification covering every value in LOGISTICS_STATUS_OPTIONS
+// (lib/domain/status.ts) with no gaps — see tests/status-pills.test.ts, which
+// asserts each of the 16 canonical statuses maps to exactly one bucket.
+// Regex-based (not an exact lookup) so it still classifies reasonably for
+// free-text status variants real sheet data can contain beyond the
+// canonical list.
+export function statusClass(status: string) {
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   const value = status.toLowerCase();
-  if (/delay|hold|review|pending/.test(value)) return "status warning";
-  if (/deliver|receive|complete|shipped/.test(value)) return "status done";
-  if (/work|shipping|clearance/.test(value)) return "status active";
-  return "status";
+  if (/cancel/.test(value)) return "status stop";
+  if (/delay|pending/.test(value)) return "status warn";
+  if (/customs|fda|fws|aqi|detained|hold|review/.test(value)) return "status hold";
+  if (/deliver|receive|complete|shipped/.test(value)) return "status good";
+  return "status neutral";
+}
+
+/**
+ * Every canonical status this app recognizes (lib/domain/status.ts), each
+ * shown through the same statusClass() pill classifier the schedule cards
+ * and Data Grids use — so this legend can never silently drift from what
+ * those actually render, and can never omit a real status the way a
+ * hand-maintained list could.
+ */
+function StatusLegend() {
+  return (
+    <section className="status-legend-panel" aria-labelledby="status-legend-heading">
+      <div className="panel-heading status-legend-heading">
+        <div>
+          <p className="eyebrow">Shared Vocabulary</p>
+          <h2 id="status-legend-heading">Status Workflow</h2>
+        </div>
+      </div>
+      <div className="status-legend-row">
+        {LOGISTICS_STATUS_OPTIONS.map((option) => (
+          <span key={option} className={statusClass(option)}>
+            {option}
+          </span>
+        ))}
+      </div>
+      <p className="panel-note status-legend-note">
+        Normalized from raw sheet text (lib/domain/status.ts). The five colors group statuses by
+        what they mean operationally — complete, needs attention now, delayed/pending, held for
+        review, or in progress — not by which department&apos;s sheet a row came from.
+      </p>
+    </section>
+  );
 }
 
 function importsCellUrl(row: number, column: string) {
+<<<<<<< HEAD
 <<<<<<< HEAD
   return `${SHEET_URL}?gid=1497250700&range=${column}${row}#gid=1497250700&range=${column}${row}`;
 =======
   return `${SHEET_URL}?gid=${IMPORTS_GID}&range=${column}${row}#gid=${IMPORTS_GID}&range=${column}${row}`;
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+  return `${SHEET_URL}?gid=${IMPORTS_GID}&range=${column}${row}#gid=${IMPORTS_GID}&range=${column}${row}`;
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 }
 
 function sourceRowUrl(item: ScheduleItem) {
@@ -409,12 +497,20 @@ function sourceRowUrl(item: ScheduleItem) {
   }
   if (item.sourceSheet === "Outbound Shipping Schedule") {
 <<<<<<< HEAD
+<<<<<<< HEAD
     return `${SHEET_URL}?gid=20260708&range=A${item.sourceRow}#gid=20260708&range=A${item.sourceRow}`;
+=======
+    return `${SHEET_URL}?gid=${OUTBOUND_GID}&range=A${item.sourceRow}#gid=${OUTBOUND_GID}&range=A${item.sourceRow}`;
+  }
+  if (item.sourceSheet === "WH Trucking Request") {
+    return `${SHEET_URL}?gid=${TRUCKING_GID}&range=A${item.sourceRow}#gid=${TRUCKING_GID}&range=A${item.sourceRow}`;
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   }
   if (item.sourceSheet === "NATIONAL ORDER PROGRESS") {
-    return `https://docs.google.com/spreadsheets/d/${NATIONAL_SHEET_ID}/edit?gid=99300389&range=A${item.sourceRow}#gid=99300389&range=A${item.sourceRow}`;
+    return `https://docs.google.com/spreadsheets/d/${NATIONAL_SHEET_ID}/edit?gid=${NATIONAL_GID}&range=A${item.sourceRow}#gid=${NATIONAL_GID}&range=A${item.sourceRow}`;
   }
   if (item.sourceSheet === "Stylekorean") {
+<<<<<<< HEAD
     return `https://docs.google.com/spreadsheets/d/${SALES_SHEET_ID}/edit?gid=0&range=A${item.sourceRow}#gid=0&range=A${item.sourceRow}`;
 =======
     return `${SHEET_URL}?gid=${OUTBOUND_GID}&range=A${item.sourceRow}#gid=${OUTBOUND_GID}&range=A${item.sourceRow}`;
@@ -428,6 +524,9 @@ function sourceRowUrl(item: ScheduleItem) {
   if (item.sourceSheet === "Stylekorean") {
     return `https://docs.google.com/spreadsheets/d/${SALES_SHEET_ID}/edit?gid=${SALES_GID}&range=A${item.sourceRow}#gid=${SALES_GID}&range=A${item.sourceRow}`;
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+    return `https://docs.google.com/spreadsheets/d/${SALES_SHEET_ID}/edit?gid=${SALES_GID}&range=A${item.sourceRow}#gid=${SALES_GID}&range=A${item.sourceRow}`;
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   }
   return item.sourceUrl ?? SHEET_URL;
 }
@@ -452,13 +551,19 @@ function officialTrackingUrl(container: string, carrierKey: string, fallback: st
   if (/AMAZON/.test(carrier) || /^TBA/.test(value)) return "https://track.amazon.com/";
   if (/^(SMCU)|SMLM|SM LINES?/.test(`${value} ${carrier}`)) {
 <<<<<<< HEAD
+<<<<<<< HEAD
     return `https://esvc.smlines.com/smline/CUP_HOM_3301GS.do?_search=false&f_cmd=121&page=1&rows=10000&search_name=${encodeURIComponent(value)}&search_type=C&sidx=&sord=asc`;
 =======
+=======
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
     // CUP_HOM_3301GS.do is SM Line's internal JSON data endpoint. Linking to it
     // exposes implementation fields such as hashColumns instead of a readable
     // tracking view. Send users to the carrier's human-facing Cargo Tracking UI.
     return "https://esvc.smlines.com/smline/CUP_HOM_3301.do?sessLocale=en";
+<<<<<<< HEAD
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   }
   if (/^(HDMU)|(^| )HMM( |$)/.test(`${value} ${carrier}`)) {
     return "https://www.hmm21.com/e-service/general/trackNTrace/TrackNTrace.do";
@@ -489,7 +594,10 @@ function parcelCarrier(value: string) {
 }
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
+=======
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 function carrierFromTrackingNumber(value: string) {
   const tracking = clean(value).replace(/[\s-]+/g, "").toUpperCase();
   if (!tracking) return "";
@@ -503,7 +611,20 @@ function carrierFromTrackingNumber(value: string) {
   return "";
 }
 
+<<<<<<< HEAD
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+// The live-map tracking backend only integrates UPS/FedEx/USPS (carrier-tracking.ts) —
+// DHL and Amazon don't have a server-side lookup, so they're intentionally excluded here.
+function trackableCarrier(value?: string): "ups" | "fedex" | "usps" | null {
+  const normalized = clean(value).toLowerCase();
+  if (normalized.includes("ups")) return "ups";
+  if (normalized.includes("fedex")) return "fedex";
+  if (normalized.includes("usps")) return "usps";
+  return null;
+}
+
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 function sourceClass(value: string) {
   const normalized = clean(value).toLowerCase();
   if (normalized === "ocean") return "source-ocean";
@@ -581,6 +702,7 @@ function firstDatedValue(...values: string[]) {
 }
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 function lastDateToken(value: string) {
   const matches = clean(value).match(/\d{1,2}\/\d{1,2}(?:\/\d{2,4})?/g);
   return matches ? matches[matches.length - 1] : clean(value);
@@ -590,6 +712,9 @@ function sanitizeSecondary(value: string) {
 =======
 function lastDateToken(value: string) { const matches = clean(value).match(/\d{1,2}\/\d{1,2}(?:\/\d{2,4})?/g); return matches ? matches[matches.length - 1] : clean(value); } function sanitizeSecondary(value: string) {
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+function lastDateToken(value: string) { const matches = clean(value).match(/\d{1,2}\/\d{1,2}(?:\/\d{2,4})?/g); return matches ? matches[matches.length - 1] : clean(value); } function sanitizeSecondary(value: string) {
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   return clean(value)
     .split(/\s*·\s*/)
     .filter((part) => part && !/^imported from\b/i.test(part))
@@ -629,6 +754,62 @@ function inventoryProductsMatch(left: InventoryItem, right: InventoryItem) {
     normalizedIdentifier(left.productName) === normalizedIdentifier(right.productName),
   );
 }
+
+function parseFullDate(value: string): Date | null {
+  const text = clean(value);
+  if (!text) return null;
+  const mdy = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (mdy) {
+    let year = Number(mdy[3]);
+    if (year < 100) year += 2000;
+    return new Date(year, Number(mdy[1]) - 1, Number(mdy[2]));
+  }
+  const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (iso) return new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
+  return null;
+}
+
+// Buckets relative to today: already-expired or expiring within a year is urgent, 1-2 years out
+// is a warning, anything further away (or unparseable) needs no emphasis.
+function expirationBucketClass(expirationDate: string): string {
+  const date = parseFullDate(expirationDate);
+  if (!date) return "";
+  const today = new Date();
+  const oneYearOut = new Date(today.getFullYear() + 1, today.getMonth(), today.getDate());
+  const twoYearsOut = new Date(today.getFullYear() + 2, today.getMonth(), today.getDate());
+  if (date.getTime() < oneYearOut.getTime()) return "exp-urgent";
+  if (date.getTime() < twoYearsOut.getTime()) return "exp-soon";
+  return "exp-ok";
+}
+
+// No fixed warehouse-zone vocabulary exists in the data — this is a best-guess prefix/substring
+// match against common zone codes (SK/BP/FT) and exception states (HOLD/DAMAGED), not a verified
+// enum. Needs checking against real location values.
+function inventoryLocationClass(location: string): string {
+  const text = clean(location).toUpperCase();
+  if (!text) return "";
+  if (text.includes("DAMAG")) return "loc-damaged";
+  if (text.includes("HOLD")) return "loc-hold";
+  if (text.startsWith("SK")) return "loc-sk";
+  if (text.startsWith("BP")) return "loc-bp";
+  if (text.startsWith("FT")) return "loc-ft";
+  return "loc-other";
+}
+
+// No confirmed SKU-revision naming convention exists — this is a best-guess heuristic (a
+// -R/-REV/-V# suffix with a separator, or a single trailing letter glued onto a numeric SKU body)
+// grouping a SKU with its likely revised/renewed sibling. Needs checking against real SKUs.
+function skuBaseGroup(sku: string): string {
+  const text = clean(sku).toUpperCase();
+  if (!text) return "";
+  const withSeparator = text.match(/^(.+)[-_ ](?:REV\d*|R\d*|V\d+|RENEW(?:ED)?)$/);
+  if (withSeparator) return withSeparator[1];
+  const trailingLetter = text.match(/^([A-Z]*\d+)[A-Z]$/);
+  if (trailingLetter) return trailingLetter[1];
+  return text;
+}
+
+const SKU_GROUP_PALETTE = ["sku-group-0", "sku-group-1", "sku-group-2", "sku-group-3", "sku-group-4", "sku-group-5"];
 
 function inventoryShipmentCodes(item: InventoryItem) {
   return new Set(
@@ -884,7 +1065,7 @@ function InventoryPanel({
   const filteredItems = useMemo(() => {
     const needle = inventoryQuery.trim().toLowerCase();
     if (!needle) return items;
-    return items.filter((item) => [item.productName, item.sku, item.upc, item.expirationDate, item.location, item.shipmentNo]
+    return items.filter((item) => [item.productName, item.sku, item.upc, item.expirationDate, item.location, item.shipmentNo, item.palletNumber]
       .join(" ")
       .toLowerCase()
       .includes(needle));
@@ -902,6 +1083,27 @@ function InventoryPanel({
       )
       .slice(0, 250);
   }, [filteredItems, items, selectedItem, showLocation]);
+  // Only color a SKU family when it actually has more than one distinct SKU sharing a base —
+  // otherwise every row would get tinted for no reason.
+  const skuGroupColors = useMemo(() => {
+    const bases = new Map<string, Set<string>>();
+    displayedItems.forEach((item) => {
+      const sku = clean(item.sku);
+      if (!sku) return;
+      const base = skuBaseGroup(sku);
+      const set = bases.get(base) ?? new Set<string>();
+      set.add(sku);
+      bases.set(base, set);
+    });
+    const colors = new Map<string, string>();
+    let paletteIndex = 0;
+    bases.forEach((skus, base) => {
+      if (skus.size < 2) return;
+      colors.set(base, SKU_GROUP_PALETTE[paletteIndex % SKU_GROUP_PALETTE.length]);
+      paletteIndex += 1;
+    });
+    return colors;
+  }, [displayedItems]);
   useEffect(() => {
     if (!selectedItem || !showLocation) return;
     const frame = window.requestAnimationFrame(() => {
@@ -924,7 +1126,7 @@ function InventoryPanel({
         <input
           aria-label={`Search ${title}`}
           onChange={(event) => setInventoryQuery(event.target.value)}
-          placeholder="Search product, SKU, UPC, shipment, location…"
+          placeholder="Search product, SKU, UPC, shipment, pallet #, location…"
           type="search"
           value={inventoryQuery}
         />
@@ -971,16 +1173,19 @@ function InventoryPanel({
                         target="_blank"
                         title={`Open packing-list documents for ${shipment}`}
                       >
+                        <span aria-hidden="true">{driveLinkGlyph(shipment, packingListUrl(shipment))}</span>{" "}
                         {shipment} <span aria-hidden="true">↗</span>
                       </a>
                     ))}
                   </small>
                 )}
               </td>
-              <td>{item.sku || "—"}</td><td>{item.upc || "—"}</td><td>{item.expirationDate || "—"}</td>
+              <td className={skuGroupColors.get(skuBaseGroup(item.sku)) ?? ""}>{item.sku || "—"}</td>
+              <td>{item.upc || "—"}</td>
+              <td className={expirationBucketClass(item.expirationDate)}>{item.expirationDate || "—"}</td>
               {!showLocation && <td className="inventory-pallet">{item.palletNumber || "—"}</td>}
               <td>{item.quantity.toLocaleString()}</td>
-              {showLocation && <td>{item.location || "Unassigned"}</td>}
+              {showLocation && <td className={inventoryLocationClass(item.location)}>{item.location || "Unassigned"}</td>}
             </tr>})}
             {!loading && filteredItems.length === 0 && <tr><td className="import-empty" colSpan={6}>No matching inventory records are currently available.</td></tr>}
             {loading && <tr><td className="import-empty" colSpan={6}>Syncing inventory…</td></tr>}
@@ -1010,6 +1215,25 @@ function LowStockPanel({
         .filter((inbound) => inventoryProductsMatch(inbound, item))
         .flatMap((inbound) => inventoryShipmentReferences(inbound.shipmentNo)),
     ));
+  const skuGroupColors = useMemo(() => {
+    const bases = new Map<string, Set<string>>();
+    lowStockItems.forEach((item) => {
+      const sku = clean(item.sku);
+      if (!sku) return;
+      const base = skuBaseGroup(sku);
+      const set = bases.get(base) ?? new Set<string>();
+      set.add(sku);
+      bases.set(base, set);
+    });
+    const colors = new Map<string, string>();
+    let paletteIndex = 0;
+    bases.forEach((skus, base) => {
+      if (skus.size < 2) return;
+      colors.set(base, SKU_GROUP_PALETTE[paletteIndex % SKU_GROUP_PALETTE.length]);
+      paletteIndex += 1;
+    });
+    return colors;
+  }, [lowStockItems]);
   return (
     <section className="inventory-panel low-stock-panel" aria-label="Low Stock">
       <div className="panel-heading inventory-heading">
@@ -1025,16 +1249,17 @@ function LowStockPanel({
               return (
                 <tr key={item.id}>
                   <td><strong>{item.productName || "—"}</strong></td>
-                  <td>{item.sku || "—"}</td>
+                  <td className={skuGroupColors.get(skuBaseGroup(item.sku)) ?? ""}>{item.sku || "—"}</td>
                   <td>{item.upc || "—"}</td>
-                  <td>{item.expirationDate || "—"}</td>
+                  <td className={expirationBucketClass(item.expirationDate)}>{item.expirationDate || "—"}</td>
                   <td>{item.quantity.toLocaleString()}</td>
-                  <td>{item.location || "Unassigned"}</td>
+                  <td className={inventoryLocationClass(item.location)}>{item.location || "Unassigned"}</td>
                   <td>
                     {shipments.length ? (
                       <span className="inventory-shipment-links">
                         {shipments.map((shipment) => (
                           <a href={packingListUrl(shipment)} key={shipment} rel="noreferrer" target="_blank">
+                            <span aria-hidden="true">{driveLinkGlyph(shipment, packingListUrl(shipment))}</span>{" "}
                             {shipment} <span aria-hidden="true">↗</span>
                           </a>
                         ))}
@@ -1065,6 +1290,7 @@ async function fetchCsvRows(spreadsheetId: string, gid: number) {
 
 async function fetchLiveKpis() {
 <<<<<<< HEAD
+<<<<<<< HEAD
   // GitHub Pages build: KPIs are computed in the browser from the same
   // link-readable workbook CSVs the old /api/sales-kpis route used.
   return (await computeLiveKpis()) as unknown as KpiSnapshot;
@@ -1076,6 +1302,13 @@ async function fetchLiveKpis() {
   return (await computeLiveKpis()) as unknown as KpiSnapshot;
 }
 
+=======
+  // During migration this remains a Sheets-derived fallback. Once the database
+  // is fully authoritative, the snapshot API can provide the same KPI payload.
+  return (await computeLiveKpis()) as unknown as KpiSnapshot;
+}
+
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 type WorkerSnapshot = {
   ok: true;
   generatedAt?: string;
@@ -1093,6 +1326,10 @@ type WorkerSnapshot = {
     inventoryDashboardTable?: any;
     skwInboundTable?: any;
     skwStockTable?: any;
+<<<<<<< HEAD
+=======
+    gmailIngestion?: GmailIngestionEvent[] | null;
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   };
   kpis?: KpiSnapshot | null;
 };
@@ -1107,7 +1344,11 @@ type OutboundSourceMeta = {
 
 const OUTBOUND_SCHEDULE_META: OutboundSourceMeta = {
   sheetName: "Outbound Shipping Schedule",
+<<<<<<< HEAD
   headerRow: 3,
+=======
+  headerRow: 1,
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   rowCount: 0,
   fallback: false,
 };
@@ -1189,6 +1430,12 @@ async function fetchOperationalSnapshot() {
       inventoryDashboardTable: sources.inventoryDashboardTable ?? null,
       skwInboundTable: sources.skwInboundTable ?? null,
       skwStockTable: sources.skwStockTable ?? null,
+<<<<<<< HEAD
+=======
+      // null (not []) when the deployed Worker predates the feed, so the card
+      // reports "unavailable" instead of claiming the inbox is empty.
+      gmailIngestion: sources.gmailIngestion ?? null,
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
       connection: {
         mode: snapshot.stale ? "stale" as const : "worker" as const,
         storage: snapshot.storage,
@@ -1203,6 +1450,11 @@ async function fetchOperationalSnapshot() {
     console.warn("Worker snapshot unavailable; falling back to Google Sheets.", workerError);
     return {
       ...(await fetchSheetSnapshot()),
+<<<<<<< HEAD
+=======
+      // The direct-Sheets fallback carries no ingestion feed.
+      gmailIngestion: null,
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
       connection: {
         mode: "sheets" as const,
         storage: "sheets" as const,
@@ -1216,7 +1468,10 @@ async function fetchOperationalSnapshot() {
 
 type ConnectionState = Awaited<ReturnType<typeof fetchOperationalSnapshot>>["connection"];
 
+<<<<<<< HEAD
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 function normalizeStatus(value: string) {
   const normalized = clean(value).toLowerCase();
   if (!normalized) return "Scheduled";
@@ -1242,6 +1497,7 @@ type ImportSourceRecord = {
 };
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 function importsBoundaryRow(rows: string[][]) {
   const index = rows.findIndex((row) => {
     const joined = row.map(clean).join("").toUpperCase();
@@ -1262,6 +1518,15 @@ function importSectionMarkerIndex(rows: string[][], marker: string) {
 function importsBoundaryRow(rows: string[][]) {
   const index = importSectionMarkerIndex(rows, "SCHEDULING");
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+function importSectionMarkerIndex(rows: string[][], marker: string) {
+  const wanted = clean(marker).toUpperCase();
+  return rows.findIndex((row) => clean(cell(row, 0)).toUpperCase() === wanted);
+}
+
+function importsBoundaryRow(rows: string[][]) {
+  const index = importSectionMarkerIndex(rows, "SCHEDULING");
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   return index === -1 ? rows.length : index;
 }
 
@@ -1299,6 +1564,7 @@ function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
   return importSourceRecords(importsRows).flatMap((record) => {
     const status = normalizeStatus(record.status);
 <<<<<<< HEAD
+<<<<<<< HEAD
     const hasShipmentDocuments = Boolean(
       record.shipmentNo && (record.invoice || record.mbl || record.hbl || record.container),
     );
@@ -1321,6 +1587,17 @@ function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
     // Import Schedule is authoritative from IMPORTS column O (ETA) only.
     const dated = firstDatedValue(record.eta);
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+    const hasShipmentIdentity = Boolean(record.shipmentNo);
+    const shipmentLabel = clean(record.shipmentNo).toUpperCase();
+    const planningRow = /^(?:AS OF\b|SCHEDULING\b|SCHEDULED\b|NEED SCHEDULING\b|MONTH OF\b|URGENT\b|COMPLETED\b|ESTIMATED\b)/.test(shipmentLabel);
+    // Newly scheduled imports remain visible before invoice/MBL/container documents arrive,
+    // while planning-grid labels are never promoted into shipment rows.
+    if (!hasShipmentIdentity || planningRow || parcelCarrier(record.shipmentNo)) return [];
+
+    // Import Schedule is authoritative from IMPORTS column O (ETA) only.
+    const dated = firstDatedValue(record.eta);
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
     if (!dated) return [];
     const date = dated.date;
     const overdue = date.getTime() < today.getTime();
@@ -1367,10 +1644,19 @@ function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
       pod: /^OSL/i.test(record.shipmentNo) ? "LGB" : "LAX",
       eta,
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
       deliveryExpected: record.deliveryExpected,
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+      deliveryExpected: record.deliveryExpected,
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
       isSmallParcel: false,
+      // No dedicated carrier column exists in IMPORTS for Air/Ocean freight —
+      // vessel is the closest available proxy (ocean vessel names are usually
+      // carrier-branded, e.g. "MAERSK EDMONTON") and is already surfaced in
+      // `secondary` above, so reuse it rather than leaving Top Carriers blank.
+      carrier: record.vessel,
       shippingMethod: mode,
       sourceType: mode,
     }];
@@ -1390,16 +1676,23 @@ function inboundParcelItems(rows: string[][]): ScheduleItem[] {
       currentCarrier = "";
     }
 <<<<<<< HEAD
+<<<<<<< HEAD
     if (!currentCarrier) return [];
 
     const trackingNumber = trackingCandidate(cell(row, 1), cell(row, 10));
 =======
     const trackingNumber = trackingCandidate(cell(row, 1), cell(row, 10));
+=======
+    const trackingNumber = trackingCandidate(cell(row, 1), cell(row, 10));
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
     const trackingCarrier = carrierFromTrackingNumber(trackingNumber);
     const resolvedCarrier = trackingCarrier || currentCarrier;
     if (!resolvedCarrier) return [];
 
+<<<<<<< HEAD
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
     const invoice = cell(row, 2);
     const department = cell(row, 3);
     const etaSource = lastDateToken(cell(row, 4));
@@ -1411,12 +1704,16 @@ function inboundParcelItems(rows: string[][]): ScheduleItem[] {
 
     const sourceRow = index + 1;
 <<<<<<< HEAD
+<<<<<<< HEAD
     // WEBSITE STATUS is column AB (index 27) on IMPORTS; AD/29 lands on the small-parcel
     // section's "BRAND" header block, which silently returned blank statuses.
     const status = normalizeStatus(cell(row, 27));
 =======
     const status = normalizeStatus(cell(row, 29));
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+    const status = normalizeStatus(cell(row, 27)); // Column AB holds the small-parcel status ("Delivered", "FDA Review / Hold", etc.); column AD is "BRAND", not status.
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
     const datedValue = firstDatedValue(etaSource);
     const sourceDate = datedValue?.date ?? today;
     const unfinished = !finished.has(status.toLowerCase());
@@ -1431,10 +1728,14 @@ function inboundParcelItems(rows: string[][]): ScheduleItem[] {
       ? `${datedValue.text}${overdue ? " · OVERDUE" : ""}`
       : "ETA pending";
 <<<<<<< HEAD
+<<<<<<< HEAD
     const shipmentNo = trackingNumber || `${currentCarrier}-${sourceRow}`;
 =======
     const shipmentNo = trackingNumber || `${resolvedCarrier}-${sourceRow}`;
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+    const shipmentNo = trackingNumber || `${resolvedCarrier}-${sourceRow}`;
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 
     return [
       {
@@ -1444,10 +1745,14 @@ function inboundParcelItems(rows: string[][]): ScheduleItem[] {
         dateText: etaText,
         title: trackingNumber || "Tracking pending",
 <<<<<<< HEAD
+<<<<<<< HEAD
         reference: trackingNumber || invoice || `${currentCarrier} parcel`,
 =======
         reference: trackingNumber || invoice || `${resolvedCarrier} parcel`,
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+        reference: trackingNumber || invoice || `${resolvedCarrier} parcel`,
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
         secondary: department,
         status,
         sourceSheet: "IMPORTS",
@@ -1461,14 +1766,19 @@ function inboundParcelItems(rows: string[][]): ScheduleItem[] {
         containerUrl: officialTrackingUrl(
           trackingNumber,
 <<<<<<< HEAD
+<<<<<<< HEAD
           currentCarrier,
+=======
+          resolvedCarrier,
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
           importsCellUrl(sourceRow, "B"),
         ),
         eta: etaText,
-        carrier: currentCarrier,
+        carrier: resolvedCarrier,
         trackingNumber,
         pro: trackingNumber,
         isSmallParcel: true,
+<<<<<<< HEAD
         shippingMethod: currentCarrier,
         sourceType: outboundSourceType(currentCarrier, true),
 =======
@@ -1483,6 +1793,10 @@ function inboundParcelItems(rows: string[][]): ScheduleItem[] {
         shippingMethod: resolvedCarrier,
         sourceType: outboundSourceType(resolvedCarrier, true),
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+        shippingMethod: resolvedCarrier,
+        sourceType: outboundSourceType(resolvedCarrier, true),
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
       },
     ];
   });
@@ -1558,7 +1872,10 @@ function resolvedInboundMode(
 }
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
+=======
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 function inboundItems(table: any, importsRows: string[][]): ScheduleItem[] {
   const imports = importSourceRecords(importsRows);
   return (table.rows ?? []).flatMap((row: any, index: number) => {
@@ -1630,7 +1947,13 @@ function inboundItems(table: any, importsRows: string[][]): ScheduleItem[] {
         vessel,
         pod: /^OSL/i.test(shipmentNo) ? "LGB" : "LAX",
         eta: expectedDelivery || eta,
+<<<<<<< HEAD
         carrier: "",
+=======
+        // See pendingImportItems: no dedicated carrier column exists for Air/Ocean
+        // freight, so vessel (already computed above) is the best available proxy.
+        carrier: vessel,
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
         trackingNumber: "",
         pro: "",
         isSmallParcel: false,
@@ -1641,7 +1964,10 @@ function inboundItems(table: any, importsRows: string[][]): ScheduleItem[] {
   });
 }
 
+<<<<<<< HEAD
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 function ImportSchedules({
   items,
   loading,
@@ -1808,6 +2134,7 @@ function outboundSourceRecords(rows: string[][]): OutboundSourceRecord[] {
   return rows.flatMap((row, index) => {
     const sourceRow = index + 1;
 <<<<<<< HEAD
+<<<<<<< HEAD
     // Outbound Shipping Schedule now has a single header row (row 1) -- verified
     // against the live sheet, which lists every field (CUSTOMER, INVOICE NO.,
     // CARRIER, STATUS, WEBSITE STATUS, etc.) in row 1 alone. The old `< 4` cutoff
@@ -1817,6 +2144,9 @@ function outboundSourceRecords(rows: string[][]): OutboundSourceRecord[] {
 =======
     if (sourceRow < 4) return [];
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+    if (sourceRow < 4) return [];
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
     const customer = cell(row, 0);
     const invoice = cell(row, 1);
     const shipDate = cell(row, 3);
@@ -1860,6 +2190,7 @@ function resolveOutboundSource(records: OutboundSourceRecord[], item: ScheduleIt
 }
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 function outboundItems(rows: string[][]): ScheduleItem[] {
   return rows.flatMap((row, index) => {
     const sourceRow = index + 1;
@@ -1874,6 +2205,15 @@ function outboundItems(
     const sourceRow = index + 1;
     if (sourceRow <= meta.headerRow) return [];
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+function outboundItems(
+  rows: string[][],
+  meta: OutboundSourceMeta = OUTBOUND_SCHEDULE_META,
+): ScheduleItem[] {
+  return rows.flatMap((row, index) => {
+    const sourceRow = index + 1;
+    if (sourceRow <= meta.headerRow) return [];
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
     const customer = cell(row, 0);
     const invoice = cell(row, 1);
     const shipDate = cell(row, 3);
@@ -1894,10 +2234,14 @@ function outboundItems(
         secondary: [cell(row, 16), cell(row, 18)].filter(Boolean).join(" · "),
         status,
 <<<<<<< HEAD
+<<<<<<< HEAD
         sourceSheet: "Outbound Shipping Schedule",
 =======
         sourceSheet: meta.sheetName,
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+        sourceSheet: meta.sheetName,
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
         sourceRow,
         sourceUrl: SHEET_URL,
         editable: true,
@@ -1973,6 +2317,7 @@ function salesOutboundItems(table: any): ScheduleItem[] {
     const isTrucking = /\btruck(?:ing)?\b/i.test(shippingMethod);
     if (!date || !customer || (!isSmallParcel && !isTrucking)) return [];
 <<<<<<< HEAD
+<<<<<<< HEAD
     // Verified against the live sheet: fetchTable(SALES_SHEET_ID, 0, "A2:AF4200", 1)
     // returns table.rows[0] as sheet row 2 (headers=1 uses the sheet's real row 1
     // regardless of the A2 range start), so the source row is index + 2, not + 3 --
@@ -1983,11 +2328,18 @@ function salesOutboundItems(table: any): ScheduleItem[] {
 =======
     const sourceRow = index + 3;
     const issue = cell(row, 7);
+=======
+    const sourceRow = index + 3;
+    const issue = cell(row, 7);
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
     const autoTrackedStatus = issue.match(/\[AUTO TRACK[^\]]*·\s*(Delivered|Received|Shipping|Shipped|Delayed|Customs Clearance|FDA Review\/Hold|Scheduled)\b/i)?.[1];
     const status = autoTrackedStatus
       ? normalizeStatus(autoTrackedStatus)
       : /yes|issue|hold|pending/i.test(issue) ? "Pending" : "Scheduled";
+<<<<<<< HEAD
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
     const trackingNumber = isSmallParcel
       ? trackingCandidate(...Array.from({ length: 24 }, (_, offset) => cell(row, offset + 8)))
       : "";
@@ -2094,6 +2446,10 @@ function consolidateTruckingItems(records: ScheduleItem[]) {
       items.flatMap((item) => splitValues(item.invoice ?? "")).map((value) => value.trim()).filter(Boolean),
     ));
     const warningStatus = items.find((item) => /pending|delay|hold|review/i.test(item.status));
+    const unfinishedStatus = items.find((item) => !finished.has(item.status.toLowerCase()));
+    // Only report a finished status once every grouped shipment is finished — otherwise the
+    // whole group would hide while a constituent shipment is still outstanding.
+    const statusSource = warningStatus ?? unfinishedStatus ?? primary;
     const secondary = Array.from(new Set(items.map((item) => item.secondary).filter(Boolean))).join(" · ");
     const invoice = invoices.join("\n");
     return {
@@ -2102,7 +2458,13 @@ function consolidateTruckingItems(records: ScheduleItem[]) {
       invoice,
       reference: invoice || primary.reference,
       secondary,
-      status: warningStatus?.status ?? primary.status,
+      status: statusSource.status,
+      // The status dropdown and "source row" link act on primary's row — if a different
+      // constituent supplied the displayed status, editing here would silently write to the
+      // wrong shipment, so fall back to that constituent's own source and make it read-only.
+      editable: statusSource === primary ? primary.editable : false,
+      sourceSheet: statusSource.sourceSheet,
+      sourceRow: statusSource.sourceRow,
     };
   });
 
@@ -2110,39 +2472,10 @@ function consolidateTruckingItems(records: ScheduleItem[]) {
 }
 
 async function postStatus(item: ScheduleItem, status: string) {
-  let sourceRow = item.sourceRow;
-  if (item.sourceSheet === "IMPORTS") {
-    const importsRows = await fetchCsvRows(SHEET_ID, 1497250700);
-    const source = item.isSmallParcel
-      ? inboundParcelItems(importsRows).find(
-          (record) =>
-            record.sourceRow === item.sourceRow &&
-            normalizedIdentifier(record.trackingNumber || record.invoice || "") ===
-              normalizedIdentifier(item.trackingNumber || item.invoice || ""),
-        )
-      : resolveImportSource(
-          importSourceRecords(importsRows),
-          item.shipmentNo ?? "",
-          item.invoice ?? "",
-          item.mbl ?? "",
-          item.hbl ?? "",
-        );
-    if (!source) {
-      throw new Error("The IMPORTS sheet did not contain one unique matching shipment row.");
-    }
-    sourceRow = source.sourceRow;
-  } else if (item.sourceSheet === "Outbound Shipping Schedule") {
-    const outbound = outboundSourceRecords(await fetchCsvRows(SHEET_ID, 20260708));
-    const source = resolveOutboundSource(outbound, item);
-    if (!source) {
-      throw new Error("The outbound sheet did not contain one unique matching shipment row.");
-    }
-    sourceRow = source.sourceRow;
-  }
-
   const payload = {
     kind: item.direction,
     sourceSheet: item.sourceSheet,
+<<<<<<< HEAD
     sourceRow,
 =======
 async function postStatus(item: ScheduleItem, status: string) {
@@ -2151,6 +2484,9 @@ async function postStatus(item: ScheduleItem, status: string) {
     sourceSheet: item.sourceSheet,
     sourceRow: item.sourceRow,
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+    sourceRow: item.sourceRow,
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
     shipmentNo: item.shipmentNo ?? "",
     container: item.container ?? "",
     mbl: item.mbl ?? "",
@@ -2160,8 +2496,13 @@ async function postStatus(item: ScheduleItem, status: string) {
     customer: item.customer ?? "",
     shipDate: item.shipDate ?? "",
     currentStatus: item.status,
+    // findInboundTarget_ (Code.gs) needs isSmallParcel to route the write into the
+    // IMPORTS sheet's PARCELS section instead of validating it as a regular import row.
+    isSmallParcel: item.isSmallParcel ?? false,
+    trackingNumber: item.trackingNumber ?? "",
     status,
   };
+<<<<<<< HEAD
 <<<<<<< HEAD
   const body = JSON.stringify(payload);
   const response = await fetch(WRITE_ENDPOINT, {
@@ -2179,42 +2520,52 @@ async function postStatus(item: ScheduleItem, status: string) {
   if (result.row && Number(result.row) !== sourceRow) {
     throw new Error("The update was rejected because the confirmed source row changed.");
   }
+=======
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 
-  const expectedStatus = normalizeStatus(status);
-  for (const delay of [350, 900, 1800]) {
-    await new Promise((resolve) => window.setTimeout(resolve, delay));
-    try {
-      let persisted = "";
-      if (item.sourceSheet === "IMPORTS") {
-        // WEBSITE STATUS lives in column AB (index 27) on the IMPORTS tab — AD is
-        // "CONTAINER RAW (SYSTEM)". Reading the wrong column here made every status
-        // write look unconfirmed even when the Apps Script backend saved it correctly.
-        const table = await fetchTable(
-          SHEET_ID,
-          1497250700,
-          `AB${sourceRow}:AB${sourceRow}`,
-          0,
-        );
-        persisted = cell(table.rows?.[0], 0);
-      } else if (item.sourceSheet === "Outbound Shipping Schedule") {
-        const table = await fetchTable(
-          SHEET_ID,
-          20260708,
-          `U${sourceRow}:X${sourceRow}`,
-          0,
-        );
-        persisted = cell(table.rows?.[0], 3) || cell(table.rows?.[0], 0);
-      }
-      if (
-        persisted &&
-        normalizeStatus(persisted) === expectedStatus
-      ) {
-        return;
-      }
-    } catch {
-      // Retry while the workbook recalculates and publishes its latest values.
+  const parseConfirmation = async (response: Response) => {
+    const result = (await response.json().catch(() => null)) as
+      | { ok?: boolean; error?: string; status?: string }
+      | null;
+    if (!response.ok || result?.ok === false) {
+      const error = new Error(result?.error || `Status update failed (${response.status}).`);
+      (error as Error & { status?: number }).status = response.status;
+      throw error;
     }
+    if (!result || result.ok !== true) {
+      throw new Error("The status service returned an invalid confirmation.");
+    }
+    if (normalizeStatus(String(result.status ?? "")) !== normalizeStatus(status)) {
+      throw new Error("The persisted status did not match the requested status.");
+    }
+    return result;
+  };
+
+  try {
+    const response = await fetch(STATUS_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return await parseConfirmation(response);
+  } catch (error) {
+    const statusCode = (error as Error & { status?: number })?.status;
+    const mayUseLegacy =
+      Boolean(LEGACY_WRITE_ENDPOINT) &&
+      (statusCode === 404 || statusCode === 405 || statusCode === undefined);
+
+    // Static-host migration fallback only. Do not fall back on validation or
+    // concurrency errors, because doing so could overwrite a newer status.
+    if (!mayUseLegacy) throw error;
+
+    const response = await fetch(LEGACY_WRITE_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(payload),
+    });
+    return await parseConfirmation(response);
   }
+<<<<<<< HEAD
   throw new Error(
     "The source sheet did not confirm this status change. The card was left unchanged.",
   );
@@ -2263,6 +2614,33 @@ async function postStatus(item: ScheduleItem, status: string) {
     return await parseConfirmation(response);
   }
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+}
+
+/**
+ * Approve or reject one Gmail-ingestion review row. No legacy-endpoint
+ * fallback (unlike postStatus) — this is a brand-new action with no prior
+ * static-host caller to stay compatible with.
+ */
+async function postPendingReview(event: GmailIngestionEvent, decision: "approve" | "reject") {
+  if (!event.reviewKey) {
+    throw new Error(
+      "This row has no unique customer, invoice, BL/PRO, or container identifier. Review actions are disabled to prevent resolving the wrong shipment — edit it directly in the PENDING VERIFICATION sheet.",
+    );
+  }
+  const response = await fetch(PENDING_REVIEW_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reviewKey: event.reviewKey, decision, shipmentId: event.shipmentId || undefined }),
+  });
+  const result = (await response.json().catch(() => null)) as
+    | { ok?: boolean; error?: string; action?: string; status?: string }
+    | null;
+  if (!response.ok || result?.ok !== true) {
+    throw new Error(result?.error || `Review action failed (${response.status}).`);
+  }
+  return result;
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 }
 
 function ScheduleCard({
@@ -2414,20 +2792,103 @@ function ScheduleCard({
   );
 }
 
+function ParcelCard({
+  direction,
+  item,
+  savingId,
+  onStatus,
+  tracking,
+}: {
+  direction: Direction;
+  item: ScheduleItem;
+  savingId: string;
+  onStatus: (item: ScheduleItem, status: string) => void;
+  tracking?: Record<string, TrackingResult>;
+}) {
+  const trackingNumber = item.trackingNumber || item.pro || "";
+  const carrierCode = trackableCarrier(item.carrier || item.shippingMethod);
+  const liveStatus = carrierCode && trackingNumber ? tracking?.[`${carrierCode}:${trackingNumber}`] : undefined;
+  return (
+    <details
+      className={`parcel-card ${sourceClass(item.sourceType ?? "")} ${
+        direction === "outbound" ? departmentClass(item.department) : ""
+      }`}
+    >
+      <summary className="parcel-summary">
+        <span className="parcel-badges">
+          {direction === "outbound" ? (
+            <span className="department-badge">{item.department ?? "B2B/E-Com"}</span>
+          ) : null}
+          <span className="source-badge">{item.sourceType || item.carrier || "Parcel"}</span>
+        </span>
+        <strong className="parcel-tracking">{item.customer || item.title || "Customer pending"}</strong>
+        {trackingNumber ? (
+          <span className="parcel-tracking-number">
+            Tracking# {trackingNumber}
+            {liveStatus?.ok && liveStatus.status ? ` · ${liveStatus.status}` : ""}
+          </span>
+        ) : null}
+        <span className="parcel-invoice">{item.invoice ? `Invoice # ${item.invoice}` : "Invoice # —"}</span>
+        <span className="expand-mark" aria-hidden="true">＋</span>
+      </summary>
+      <div className="parcel-detail">
+        <div className="parcel-topline">
+          <span className={statusClass(item.status)}>{item.status}</span>
+          <span>{item.customer || item.shipmentNo || ""}</span>
+        </div>
+        <div className="parcel-footer">
+          <span><b>ETA</b> {item.dateText || "—"}</span>
+          {trackingNumber && item.containerUrl ? (
+            <a href={item.containerUrl} target="_blank" rel="noreferrer">
+              Track ↗
+            </a>
+          ) : (
+            <a href={sourceRowUrl(item)} target="_blank" rel="noreferrer">
+              Source ↗
+            </a>
+          )}
+        </div>
+        {item.editable ? (
+          <label className="status-field parcel-status-field">
+            <span>Status</span>
+            <select
+              aria-label={`Update ${item.title} status`}
+              disabled={savingId === item.id}
+              value={
+                (direction === "inbound" ? INBOUND_STATUS_OPTIONS : STATUS_OPTIONS).includes(item.status)
+                  ? item.status
+                  : "Scheduled"
+              }
+              onChange={(event) => onStatus(item, event.target.value)}
+            >
+              {(direction === "inbound" ? INBOUND_STATUS_OPTIONS : STATUS_OPTIONS).map((option) => (
+                <option key={option}>{option}</option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+      </div>
+    </details>
+  );
+}
+
 function SmallParcelSchedule({
   direction,
+  days,
   items,
   loading,
   savingId,
   onStatus,
+  tracking,
 }: {
   direction: Direction;
+  days: Date[];
   items: ScheduleItem[];
   loading: boolean;
   savingId: string;
   onStatus: (item: ScheduleItem, status: string) => void;
+  tracking?: Record<string, TrackingResult>;
 }) {
-  const sortedItems = [...items].sort((a, b) => a.date.getTime() - b.date.getTime());
   const isInbound = direction === "inbound";
   const headingId = `${direction}-small-parcel-heading`;
 
@@ -2446,10 +2907,11 @@ function SmallParcelSchedule({
           </h2>
         </div>
         <div className="parcel-total">
-          <strong>{sortedItems.length}</strong>
+          <strong>{items.length}</strong>
           <span>active</span>
         </div>
       </div>
+<<<<<<< HEAD
       <div className="parcel-grid">
         {sortedItems.map((item) => {
           const tracking = item.trackingNumber || item.pro || "";
@@ -2490,37 +2952,50 @@ function SmallParcelSchedule({
                     <a href={sourceRowUrl(item)} target="_blank" rel="noreferrer">
                       Source ↗
                     </a>
+=======
+      <div className="board-wrap">
+        <div className="board">
+          {days.map((day, index) => {
+            const dayItems = items.filter((item) => dayKey(item.date) === dayKey(day));
+            return (
+              <section
+                className={index === 0 ? "day-column today" : "day-column"}
+                key={`${direction}-parcel-${dayKey(day)}`}
+              >
+                <header>
+                  <span>
+                    {day.toLocaleDateString("en-US", { weekday: "short" }).toUpperCase()}
+                  </span>
+                  <strong>{day.getDate()}</strong>
+                  <small>
+                    {day.toLocaleDateString("en-US", { month: "short" }).toUpperCase()}
+                  </small>
+                  <b>{dayItems.length}</b>
+                </header>
+                <div className="day-items">
+                  {dayItems.map((item) => (
+                    <ParcelCard
+                      key={`parcel-${item.id}`}
+                      direction={direction}
+                      item={item}
+                      savingId={savingId}
+                      onStatus={onStatus}
+                      tracking={tracking}
+                    />
+                  ))}
+                  {!loading && dayItems.length === 0 && (
+                    <div className="empty-day">
+                      <span>—</span>
+                      No {direction} parcels
+                    </div>
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
                   )}
+                  {loading && <div className="loading-card" />}
                 </div>
-                {item.editable ? (
-                  <label className="status-field parcel-status-field">
-                    <span>Status</span>
-                    <select
-                      aria-label={`Update ${item.title} status`}
-                      disabled={savingId === item.id}
-                      value={
-                        (direction === "inbound" ? INBOUND_STATUS_OPTIONS : STATUS_OPTIONS).includes(item.status)
-                          ? item.status
-                          : "Scheduled"
-                      }
-                      onChange={(event) => onStatus(item, event.target.value)}
-                    >
-                      {(direction === "inbound" ? INBOUND_STATUS_OPTIONS : STATUS_OPTIONS).map((option) => (
-                        <option key={option}>{option}</option>
-                      ))}
-                    </select>
-                  </label>
-                ) : null}
-              </div>
-            </details>
-          );
-        })}
-        {!loading && sortedItems.length === 0 && (
-          <div className="parcel-empty">
-            No {direction} small-parcel shipments in the active 14-day window.
-          </div>
-        )}
-        {loading && <div className="loading-card" />}
+              </section>
+            );
+          })}
+        </div>
       </div>
     </section>
   );
@@ -2605,6 +3080,148 @@ function ScheduleBoard({
   );
 }
 
+type CountEntry = [string, number];
+
+function scheduleCarrierName(item: ScheduleItem): string {
+  const name = clean(item.carrier) || (item.isSmallParcel ? clean(item.shippingMethod) : "");
+  // "Trucking" is a freight mode stylekorean sometimes falls back to as a carrier value,
+  // not an actual named carrier — exclude it so it can't displace a real carrier in the ranking.
+  return /^trucking$/i.test(name) ? "" : name;
+}
+
+const CARRIER_CATEGORIES = ["Air", "Ocean", "Domestic Transportation", "Small Parcels"] as const;
+type CarrierCategory = (typeof CARRIER_CATEGORIES)[number];
+
+// Same bucketing as scheduleFreightMode, renamed for display and restricted to the four
+// named categories the Top Carriers card reports on (unclassified "Other" freight is only
+// surfaced in the Freight Mix card, not here).
+function scheduleCarrierCategory(item: ScheduleItem): CarrierCategory | null {
+  if (item.isSmallParcel) return "Small Parcels";
+  if (item.mode === "Air") return "Air";
+  if (item.mode === "Ocean") return "Ocean";
+  if (/^trucking$/i.test(item.shippingMethod ?? "")) return "Domestic Transportation";
+  return null;
+}
+
+type CategoryCarrierStats = {
+  category: CarrierCategory;
+  mtdCount: number;
+  ytdCount: number;
+  topCarriers: CountEntry[];
+};
+
+// All rows count here, including finished/completed ones — these are shipment-volume totals,
+// not the "active" alerts the rest of the Control Tower row reports, matching how the KPI
+// panel's own topCarriers/MTD/YTD figures are computed (see lib/sales-kpis.ts).
+function categoryCarrierStats(source: ScheduleItem[], today: Date): CategoryCarrierStats[] {
+  const yearStart = new Date(today.getFullYear(), 0, 1);
+  return CARRIER_CATEGORIES.map((category) => {
+    const ytdItems = source.filter((item) => {
+      if (scheduleCarrierCategory(item) !== category) return false;
+      const time = item.date.getTime();
+      return time >= yearStart.getTime() && time <= today.getTime();
+    });
+    const mtdCount = ytdItems.filter(
+      (item) => item.date.getFullYear() === today.getFullYear() && item.date.getMonth() === today.getMonth(),
+    ).length;
+    const carrierCounts = new Map<string, number>();
+    ytdItems.forEach((item) => {
+      const name = scheduleCarrierName(item);
+      if (!name) return;
+      carrierCounts.set(name, (carrierCounts.get(name) ?? 0) + 1);
+    });
+    const topCarriers = [...carrierCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+    return { category, mtdCount, ytdCount: ytdItems.length, topCarriers };
+  });
+}
+
+function scheduleFreightMode(item: ScheduleItem): string {
+  if (item.isSmallParcel) return "Parcel";
+  if (item.mode === "Air") return "Air";
+  if (item.mode === "Ocean") return "Ocean";
+  if (/^trucking$/i.test(item.shippingMethod ?? "")) return "Trucking";
+  return "Other";
+}
+
+const FREIGHT_MODE_COLORS: Record<string, string> = {
+  Air: "var(--ct-air)",
+  Ocean: "var(--ct-ocean)",
+  Trucking: "var(--ct-trucking)",
+  Parcel: "var(--ct-parcel)",
+  Other: "var(--ct-other)",
+};
+
+function freightModeCounts(source: ScheduleItem[]): CountEntry[] {
+  const counts = new Map<string, number>();
+  for (const item of source) {
+    const mode = scheduleFreightMode(item);
+    counts.set(mode, (counts.get(mode) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+}
+
+function ControlTowerCarriers({ categories }: { categories: CategoryCarrierStats[] }) {
+  return (
+    <article className="ct-panel ct-panel-carriers">
+      <div className="ct-panel-head">
+        <span className="ct-eyebrow">By shipment count · MTD / YTD</span>
+        <h2>Top Carriers</h2>
+      </div>
+      <div className="ct-carrier-categories">
+        {categories.map(({ category, mtdCount, ytdCount, topCarriers }) => (
+          <div className="ct-carrier-category" key={category}>
+            <div className="ct-carrier-category-head">
+              <span className="ct-carrier-category-name">{category}</span>
+              <span className="ct-carrier-category-counts">
+                <b>{mtdCount}</b> MTD · <b>{ytdCount}</b> YTD
+              </span>
+            </div>
+            <ol className="ct-carrier-category-list">
+              {topCarriers.map(([name, count]) => (
+                <li key={name}>
+                  <span className="ct-carrier-category-carrier">{name}</span>
+                  <span className="ct-carrier-category-carrier-count">{count}</span>
+                </li>
+              ))}
+              {!topCarriers.length && <li className="ct-empty">No named carriers</li>}
+            </ol>
+          </div>
+        ))}
+      </div>
+    </article>
+  );
+}
+
+function ControlTowerFreightMix({ modes }: { modes: CountEntry[] }) {
+  const total = modes.reduce((sum, [, count]) => sum + count, 0) || 1;
+  return (
+    <article className="ct-panel">
+      <div className="ct-panel-head">
+        <span className="ct-eyebrow">Active shipments by mode</span>
+        <h2>Freight Mix</h2>
+      </div>
+      <div className="ct-split-bar">
+        {modes.map(([name, count]) => (
+          <div
+            key={name}
+            className="ct-split-seg"
+            style={{ width: `${(count / total) * 100}%`, background: FREIGHT_MODE_COLORS[name] ?? "var(--ct-other)" }}
+          />
+        ))}
+      </div>
+      <div className="ct-split-legend">
+        {modes.map(([name, count]) => (
+          <span key={name}>
+            <i style={{ background: FREIGHT_MODE_COLORS[name] ?? "var(--ct-other)" }} />
+            {name} {Math.round((count / total) * 100)}%
+          </span>
+        ))}
+      </div>
+      {!modes.length && <p className="ct-empty">No classified freight in the active schedule.</p>}
+    </article>
+  );
+}
+
 export default function Home() {
   const [items, setItems] = useState<ScheduleItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -2613,16 +3230,23 @@ export default function Home() {
   const [nextRefreshAt, setNextRefreshAt] = useState<Date | null>(null);
   const [query, setQuery] = useState("");
   const [includeFinished, setIncludeFinished] = useState(false);
+  const [period, setPeriod] = useState<"mtd" | "ytd">("mtd");
   const [savingId, setSavingId] = useState("");
+  const [reviewingKey, setReviewingKey] = useState("");
   const [notice, setNotice] = useState("");
   const [kpis, setKpis] = useState<KpiSnapshot>(EMPTY_KPIS);
   const [inboundInventory, setInboundInventory] = useState<InventoryItem[]>([]);
   const [warehouseStock, setWarehouseStock] = useState<InventoryItem[]>([]);
   const [selectedInventory, setSelectedInventory] = useState<InventoryItem | null>(null);
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
   const [connection, setConnection] = useState<ConnectionState | null>(null);
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+  const [connection, setConnection] = useState<ConnectionState | null>(null);
+  const [gmailIngestion, setGmailIngestion] = useState<GmailIngestionEvent[] | null>(null);
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   const loadInFlight = useRef(false);
   const lastRefreshAt = useRef(0);
 
@@ -2642,6 +3266,7 @@ export default function Home() {
     setError("");
     try {
 <<<<<<< HEAD
+<<<<<<< HEAD
       const [
         imports,
         outbound,
@@ -2651,12 +3276,19 @@ export default function Home() {
         outbound,
         outboundMeta,
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+      const {
+        imports,
+        outbound,
+        outboundMeta,
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
         nationalOutbound,
         salesOutbound,
         liveKpis,
         inventoryDashboardTable,
         skwInboundTable,
         skwStockTable,
+<<<<<<< HEAD
 <<<<<<< HEAD
       ] = await Promise.all([
         fetchCsvRows(SHEET_ID, 1497250700),
@@ -2668,10 +3300,17 @@ export default function Home() {
         fetchOptionalSheet("SKW_Inbound", "A1:R2500"),
         fetchOptionalSheet("SKW_Stock", "A1:J2500"),
       ]);
+=======
+        gmailIngestion: nextGmailIngestion,
+        connection: nextConnection,
+      } = await fetchOperationalSnapshot();
+      // Each source row remains its own operational move except same-customer,
+      // same-date trucking rows, which consolidateTruckingItems merges into one card.
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
       setItems(consolidateTruckingItems([
         ...pendingImportItems(imports),
         ...inboundParcelItems(imports),
-        ...outboundItems(outbound),
+        ...outboundItems(outbound, outboundMeta),
         ...nationalOutboundItems(nationalOutbound),
         ...salesOutboundItems(salesOutbound),
       ]));
@@ -2699,9 +3338,14 @@ export default function Home() {
         ...skwStockItems(skwStockTable),
       ], false));
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
       setConnection(nextConnection);
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+      setGmailIngestion(nextGmailIngestion);
+      setConnection(nextConnection);
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
       const refreshedAt = new Date();
       lastRefreshAt.current = refreshedAt.getTime();
       setUpdatedAt(refreshedAt);
@@ -2727,9 +3371,12 @@ export default function Home() {
     };
     const timer = window.setInterval(() => {
 <<<<<<< HEAD
+<<<<<<< HEAD
       if (document.visibilityState !== "visible") return;
 =======
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
       load();
       setNextRefreshAt(new Date(Date.now() + AUTO_REFRESH_MS));
     }, AUTO_REFRESH_MS);
@@ -2789,11 +3436,14 @@ export default function Home() {
   );
 
 <<<<<<< HEAD
+<<<<<<< HEAD
   const inboundScheduleVisibleItems = useMemo(
     () => inboundVisibleItems.filter((item) => !item.isSmallParcel),
     [inboundVisibleItems],
   );
 =======
+=======
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   const inboundScheduleVisibleItems = useMemo(() => {
     const first = days[0].getTime();
     const last = days[days.length - 1].getTime();
@@ -2825,7 +3475,10 @@ export default function Home() {
       return [{ ...item, date: scheduled.date, dateText: scheduled.text }];
     });
   }, [days, includeFinished, items, query]);
+<<<<<<< HEAD
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 
   const inboundParcelVisibleItems = useMemo(
     () => inboundVisibleItems.filter((item) => item.isSmallParcel),
@@ -2845,6 +3498,21 @@ export default function Home() {
 
   const outboundParcelVisibleItems = useMemo(
     () => visibleItems.filter((item) => item.direction === "outbound" && item.isSmallParcel),
+    [visibleItems],
+  );
+
+  // Data Grids tabs (Nationals / WMS) — same 14-day/search/completed filtering
+  // as every other schedule view, just sliced by sourceSheet instead of
+  // direction. sourceSheet values are set once in nationalOutboundItems_/
+  // salesOutboundItems_ at load time (see the ...nationalOutboundItems(...)
+  // spread building `items`).
+  const nationalsGridItems = useMemo(
+    () => visibleItems.filter((item) => item.sourceSheet === "NATIONAL ORDER PROGRESS"),
+    [visibleItems],
+  );
+
+  const wmsGridItems = useMemo(
+    () => visibleItems.filter((item) => item.sourceSheet === "Stylekorean"),
     [visibleItems],
   );
 
@@ -2886,6 +3554,54 @@ export default function Home() {
     return { inbound, outbound, dueToday, exceptions };
   }, [days, outboundParcelVisibleItems, outboundVisibleItems, visibleItems]);
 
+  // Reuse visibleItems's day-window/search bounds so these rollups can't be dominated by
+  // shipments that aren't shown anywhere on the active board below, but always drop finished
+  // statuses ourselves — visibleItems keeps them when "Show completed" is toggled on.
+  const activeItems = useMemo(
+    () => visibleItems.filter((item) => !finished.has(item.status.toLowerCase())),
+    [visibleItems],
+  );
+
+  const carrierCategoryStats = useMemo(() => categoryCarrierStats(items, startOfToday()), [items]);
+  const activeFreightModeCounts = useMemo(() => freightModeCounts(activeItems), [activeItems]);
+
+  const mapMilestones = useMemo<MilestoneShipment[]>(
+    () =>
+      activeItems
+        .filter((item) => item.direction === "inbound" && !item.isSmallParcel && (item.mode === "Air" || item.mode === "Ocean"))
+        .map((item) => ({
+          id: item.id,
+          title: item.shipmentNo || item.title,
+          mode: item.mode,
+          pod: item.pod,
+          eta: item.eta,
+          status: item.status,
+          vessel: item.vessel,
+        })),
+    [activeItems],
+  );
+
+  const mapTrackable = useMemo<TrackableShipment[]>(
+    () =>
+      activeItems.flatMap((item) => {
+        if (!item.isSmallParcel || !item.trackingNumber) return [];
+        const carrier = trackableCarrier(item.carrier || item.shippingMethod);
+        if (!carrier) return [];
+        return [{
+          id: item.id,
+          title: item.title,
+          carrier,
+          trackingNumber: item.trackingNumber,
+          direction: item.direction,
+          status: item.status,
+        }];
+      }),
+    [activeItems],
+  );
+
+  const { tracking: parcelTracking, configured: parcelTrackingConfigured, loading: parcelTrackingLoading } =
+    useParcelTracking(mapTrackable);
+
   const handleStatus = async (item: ScheduleItem, status: string) => {
     setSavingId(item.id);
     setNotice(`Saving ${item.title}…`);
@@ -2904,6 +3620,32 @@ export default function Home() {
       );
     } finally {
       setSavingId("");
+    }
+  };
+
+  const handleReview = async (event: GmailIngestionEvent, decision: "approve" | "reject") => {
+    const key = event.reviewKey ?? "";
+    setReviewingKey(key);
+    setNotice(decision === "approve" ? `Approving ${event.shipmentId || "review row"}…` : `Rejecting ${event.shipmentId || "review row"}…`);
+    try {
+      await postPendingReview(event, decision);
+      setGmailIngestion((current) =>
+        (current ?? []).map((row) =>
+          row.reviewKey && row.reviewKey === key
+            ? { ...row, status: decision === "approve" ? "committed" : "rejected", reviewKey: undefined }
+            : row,
+        ),
+      );
+      setNotice(
+        decision === "approve"
+          ? `${event.shipmentId || "Row"} approved and committed to the live schedule.`
+          : `${event.shipmentId || "Row"} rejected.`,
+      );
+      window.setTimeout(() => setNotice(""), 4500);
+    } catch (reviewError) {
+      setNotice(reviewError instanceof Error ? reviewError.message : "Review action failed. Try again.");
+    } finally {
+      setReviewingKey("");
     }
   };
 
@@ -2929,6 +3671,7 @@ export default function Home() {
             </p>
           </div>
           <div className="manifest-actions">
+            <ThemeToggle />
             <button className="button primary" onClick={load} disabled={loading}>
               {loading ? "SYNCING…" : "↻ REFRESH DATA"}
             </button>
@@ -2948,9 +3691,12 @@ export default function Home() {
         <div className="sync-strip" role="status" aria-live="polite">
           <span>
 <<<<<<< HEAD
+<<<<<<< HEAD
             <b className={error ? "sync-dot error" : loading ? "sync-dot loading" : "sync-dot"} />
             {error ? "Workbook connection needs attention" : loading ? "Syncing live records…" : "3 live workbooks connected"}
 =======
+=======
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
             <b className={error ? "sync-dot error" : loading ? "sync-dot loading" : connection?.mode !== "worker" || connection?.degradedSources ? "sync-dot warning" : "sync-dot"} />
             {error
               ? "Workbook connection needs attention"
@@ -2965,21 +3711,55 @@ export default function Home() {
                       : connection?.storage === "d1"
                         ? "D1 snapshot · Sheets fallback ready"
                         : "Worker snapshot · 3 live workbooks connected"}
+<<<<<<< HEAD
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
           </span>
           <span className="mono">
             AUTO SYNC 30 MIN · LAST SYNC {updatedAt ? updatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "America/Los_Angeles" }) : "—"}
             {" · "}NEXT CHECK {nextRefreshAt ? nextRefreshAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "America/Los_Angeles" }) : "—"}
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
             {connection?.version ? ` · ${connection.version}` : ""}
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+            {connection?.version ? ` · ${connection.version}` : ""}
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
           </span>
         </div>
       </header>
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
+=======
+      <div className="badge-row">
+        <div className={error ? "sys-badge logi degraded" : "sys-badge logi"}>
+          <span className="sys-dot" aria-hidden="true" />
+          <div>
+            <div className="sys-badge-name">Logistics Control Tower</div>
+            <div className="sys-badge-host">stylekorean.dpdns.org</div>
+          </div>
+          <span className="sys-badge-status">{error ? "Degraded" : loading ? "Syncing" : "Operational"}</span>
+        </div>
+        <a
+          className="sys-badge wh placeholder"
+          href="https://skwarehouse.dpdns.org"
+          target="_blank"
+          rel="noreferrer"
+        >
+          <span className="sys-dot" aria-hidden="true" />
+          <div>
+            <div className="sys-badge-name">Warehouse Control Tower</div>
+            <div className="sys-badge-host">skwarehouse.dpdns.org</div>
+          </div>
+          <span className="sys-badge-status placeholder-status">External system · no live data here</span>
+        </a>
+      </div>
+
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
       {!error && connection && connection.mode !== "worker" && (
         <div className="alert warning" role="status">
           <strong>{connection.mode === "stale" ? "Continuity mode." : "Fallback mode."}</strong>{" "}
@@ -2990,7 +3770,10 @@ export default function Home() {
         </div>
       )}
 
+<<<<<<< HEAD
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
       {error && (
         <div className="alert" role="alert">
           <strong>Schedule unavailable.</strong> {error} Confirm the workbook is link-readable or
@@ -3013,10 +3796,14 @@ export default function Home() {
           <span>DUE TODAY</span>
           <strong>{counts.dueToday}</strong>
 <<<<<<< HEAD
+<<<<<<< HEAD
           <small>combined moves</small>
 =======
           <small>tracked moves</small>
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+          <small>tracked moves</small>
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
         </article>
         <article className={counts.exceptions ? "metric-alert" : ""}>
           <span>EXCEPTIONS</span>
@@ -3031,42 +3818,55 @@ export default function Home() {
             <p className="eyebrow">2026 ACTUALS · INVOICE FIRST / RATE FALLBACK</p>
             <h2 id="kpi-heading">KPI Control Tower</h2>
           </div>
-          <span>MTD / YTD</span>
+          <div className="period-toggle" role="group" aria-label="KPI period">
+            <button type="button" className={period === "mtd" ? "active" : ""} onClick={() => setPeriod("mtd")}>
+              MTD
+            </button>
+            <button type="button" className={period === "ytd" ? "active" : ""} onClick={() => setPeriod("ytd")}>
+              YTD
+            </button>
+          </div>
         </div>
         <div className="kpi-grid">
           <article className="kpi-card">
             <span>SHIPPING COSTS</span>
-            <div><small>MTD</small><strong>{money(kpis.shippingMtd)}</strong></div>
-            <div><small>YTD</small><strong>{money(kpis.shippingYtd)}</strong></div>
+            <div><small>{period.toUpperCase()}</small><strong>{money(period === "mtd" ? kpis.shippingMtd : kpis.shippingYtd)}</strong></div>
           </article>
           <article className="kpi-card">
             <span>TRANSFER SHIPPING</span>
-            <div><small>MTD</small><strong>{money(kpis.transfersMtd)}</strong></div>
-            <div><small>YTD</small><strong>{money(kpis.transfersYtd)}</strong></div>
+            <div><small>{period.toUpperCase()}</small><strong>{money(period === "mtd" ? kpis.transfersMtd : kpis.transfersYtd)}</strong></div>
           </article>
           <article className="kpi-card">
             <span>TRUCKING TRANSFERS TO NJ</span>
-            <div><small>MTD</small><strong>{money(kpis.njTransferMtd)}</strong></div>
-            <div><small>YTD</small><strong>{money(kpis.njTransferYtd)}</strong></div>
+            <div><small>{period.toUpperCase()}</small><strong>{money(period === "mtd" ? kpis.njTransferMtd : kpis.njTransferYtd)}</strong></div>
           </article>
           <article className="kpi-card">
             <span>SALES · NATIONALS</span>
-            <div><small>MTD</small><strong>{moneyWithCents(kpis.nationalsSalesMtd)}</strong></div>
-            <div><small>YTD</small><strong>{moneyWithCents(kpis.nationalsSalesYtd)}</strong></div>
+            <div><small>{period.toUpperCase()}</small><strong>{moneyWithCents(period === "mtd" ? kpis.nationalsSalesMtd : kpis.nationalsSalesYtd)}</strong></div>
           </article>
           <article className="kpi-card">
             <span>SALES · WMS WHOLESALE</span>
-            <div><small>MTD</small><strong>{moneyWithCents(kpis.wmsSalesMtd)}</strong></div>
-            <div><small>YTD</small><strong>{moneyWithCents(kpis.wmsSalesYtd)}</strong></div>
+            <div><small>{period.toUpperCase()}</small><strong>{moneyWithCents(period === "mtd" ? kpis.wmsSalesMtd : kpis.wmsSalesYtd)}</strong></div>
+          </article>
+          <article className="kpi-card kpi-placeholder-card">
+            <span>NET MARGIN</span>
+            <div className="kpi-placeholder">
+              <strong>—</strong>
+              <small>No cost/margin data source yet</small>
+            </div>
           </article>
           <article className="kpi-card kpi-carrier">
-            <span>TOP 3 CARRIERS · YTD</span>
+            <span>TOP 3 CARRIERS · YTD (always YTD)</span>
             <div className="carrier-table-head" aria-hidden="true">
+<<<<<<< HEAD
 <<<<<<< HEAD
               <small>Carrier</small><small>Earnings</small><small>Shipments</small>
 =======
               <small>Carrier</small><small>Freight Spend</small><small>Shipments</small>
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+              <small>Carrier</small><small>Freight Spend</small><small>Shipments</small>
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
             </div>
             <ol className="carrier-ranking">
               {kpis.topCarriers.map((carrier) => (
@@ -3080,7 +3880,7 @@ export default function Home() {
             </ol>
           </article>
           <article className="kpi-card kpi-split">
-            <span>TRUCKLOAD MIX · YTD</span>
+            <span>TRUCKLOAD MIX · YTD (always YTD)</span>
             <div><small>LTL</small><strong>{kpis.ltlPercent}%</strong></div>
             <div><small>FTL</small><strong>{kpis.ftlPercent}%</strong></div>
           </article>
@@ -3088,14 +3888,19 @@ export default function Home() {
             <span>AVG TRUCKING COST · MTD / YTD</span>
             <div className="average-head" aria-hidden="true"><small>Lane</small><small>MTD</small><small>YTD</small></div>
 <<<<<<< HEAD
+<<<<<<< HEAD
             <div><small>LOCAL ≤50 MI</small><strong>{money(kpis.avgLocalMtd)}</strong><strong>{money(kpis.avgLocal)}</strong></div>
 =======
             <div><small>LOCAL / REGIONAL HEURISTIC</small><strong>{money(kpis.avgLocalMtd)}</strong><strong>{money(kpis.avgLocal)}</strong></div>
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+            <div><small>LOCAL / REGIONAL HEURISTIC</small><strong>{money(kpis.avgLocalMtd)}</strong><strong>{money(kpis.avgLocal)}</strong></div>
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
             <div><small>CALIFORNIA</small><strong>{money(kpis.avgCaliforniaMtd)}</strong><strong>{money(kpis.avgCalifornia)}</strong></div>
             <div><small>OUT OF STATE</small><strong>{money(kpis.avgOutOfStateMtd)}</strong><strong>{money(kpis.avgOutOfState)}</strong></div>
           </article>
         </div>
+<<<<<<< HEAD
         <p className="kpi-method">
           All rows, including hidden/completed entries. Shipping costs use freight Invoice first,
           then Rate when Invoice is blank—never shipment Invoice Amount. Nationals sales use
@@ -3122,7 +3927,45 @@ export default function Home() {
           </a>
           .
         </p>
+=======
+        <details className="kpi-method">
+          <summary>Methodology notes</summary>
+          <p>
+            All rows, including hidden/completed entries. Shipping costs use freight Invoice first,
+            then Rate when Invoice is blank—never shipment Invoice Amount. Nationals sales use
+            Order Date (column G) and Amount (column E), expand K values, and exclude cancelled
+            orders. WMS wholesale sales use Date (column A) and numeric INVOICE AMOUNT (column G);
+            text entries such as “FREE SAMPLE,” “FOC,” “Sample,” and operational notes are excluded.
+            MTD is the current month through today; YTD begins January 1, 2026. Trucking averages
+            exclude transfers and unclassified destinations; local / regional uses a destination city/ZIP heuristic for the Southern California operating area and is not a measured mileage radius.
+            The NJ transfer card includes only TRANSFERS rows whose TO field is NJ or New Jersey.
+            Carrier freight spend uses the same freight Invoice-first, Rate-fallback cost, and shipment share
+            is each carrier’s moves divided by all YTD moves with a named carrier.{" "}
+            <a href={NATIONAL_SHEET_URL} target="_blank" rel="noreferrer">
+              Open Nationals source
+            </a>
+            {" · "}
+            <a href={SALES_SHEET_URL} target="_blank" rel="noreferrer">
+              Open WMS source
+            </a>
+            .
+          </p>
+        </details>
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
       </section>
+
+      <section className="ct-row" aria-label="Active carrier and freight mode rollups">
+        <ControlTowerCarriers categories={carrierCategoryStats} />
+        <ControlTowerFreightMix modes={activeFreightModeCounts} />
+      </section>
+
+      <LiveMapPanel
+        milestones={mapMilestones}
+        trackable={mapTrackable}
+        tracking={parcelTracking}
+        configured={parcelTrackingConfigured}
+        trackingLoading={parcelTrackingLoading}
+      />
 
       <section className="control-panel" aria-label="Schedule filters">
         <label className="search">
@@ -3210,10 +4053,12 @@ export default function Home() {
         />
         <SmallParcelSchedule
           direction="inbound"
+          days={days}
           items={inboundParcelVisibleItems}
           loading={loading}
           savingId={savingId}
           onStatus={handleStatus}
+          tracking={parcelTracking}
         />
         <ScheduleBoard
           direction="outbound"
@@ -3224,17 +4069,47 @@ export default function Home() {
           onStatus={handleStatus}
         />
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
         <FulfillmentTkOrders />
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+        <FulfillmentTkOrders />
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
         <SmallParcelSchedule
           direction="outbound"
+          days={days}
           items={outboundParcelVisibleItems}
           loading={loading}
           savingId={savingId}
           onStatus={handleStatus}
+          tracking={parcelTracking}
         />
       </div>
+
+      <DataGrids
+        imports={importScheduleItems}
+        outbound={outboundVisibleItems}
+        nationals={nationalsGridItems}
+        wms={wmsGridItems}
+        inventory={[...inboundInventory, ...warehouseStock]}
+        loading={loading}
+        includeFinished={includeFinished}
+        onToggleFinished={setIncludeFinished}
+      />
+
+      {/* .ingestion-archive-row keeps this row ordered above the footer on the
+          flex-reordered /light, /light-full, and /fulfillment-style variants. */}
+      <div className="ingestion-archive-row mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2" aria-label="Email ingestion and document archive">
+        <GmailIngestionCard events={gmailIngestion} loading={loading} onReview={handleReview} reviewingKey={reviewingKey} sheetUrl={SHEET_URL} />
+        <DriveArchiveCard />
+      </div>
+
+      <IngestionRoadmapCard />
+
+      <StatusLegend />
+
+      <ShipmentEventTrackerCard />
 
       <footer>
         <p><strong>SK</strong> STYLEKOREAN LOGISTICS · COMPANY OPERATIONS</p>

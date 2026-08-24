@@ -7,12 +7,18 @@ const NATIONAL_SHEET_ID = "12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8";
 const WMS_SHEET_ID = "14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I";
 const LOGISTICS_SHEET_ID = "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc";
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
+=======
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 // Current LOGISTICS MASTER 2026 tab id for "WH Trucking Request".
 // The old gid 852802817 no longer exists in the workbook and caused the KPI
 // Promise.all to reject, which in turn made the entire dashboard source load fail.
 const LOGISTICS_TRUCKING_GID = 1418033635;
+<<<<<<< HEAD
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 
 type CarrierKpi = {
   name: string;
@@ -22,10 +28,14 @@ type CarrierKpi = {
 };
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 function parseCsv(text: string) {
 =======
 export function parseCsv(text: string) {
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+export function parseCsv(text: string) {
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   const rows: string[][] = [];
   let row: string[] = [];
   let value = "";
@@ -65,10 +75,14 @@ export function parseCsv(text: string) {
 }
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 function dateCode(value: string) {
 =======
 export function dateCode(value: string) {
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+export function dateCode(value: string) {
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   const match = value.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
   if (!match) return 0;
   let year = Number(match[3]);
@@ -77,10 +91,14 @@ export function dateCode(value: string) {
 }
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 function freightDateCode(value: string, today: ReturnType<typeof pacificDateParts>) {
 =======
 export function freightDateCode(value: string, today: ReturnType<typeof pacificDateParts>) {
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+export function freightDateCode(value: string, today: ReturnType<typeof pacificDateParts>) {
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   const full = dateCode(value);
   if (full) return full;
   const match = value.trim().match(/^(\d{1,2})\/(\d{1,2})$/);
@@ -93,10 +111,14 @@ export function freightDateCode(value: string, today: ReturnType<typeof pacificD
 }
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 function amount(value: string, allowSuffix: boolean) {
 =======
 export function amount(value: string, allowSuffix: boolean) {
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+export function amount(value: string, allowSuffix: boolean) {
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   const text = value.trim().toUpperCase().replace(/[$,\s]/g, "");
   const match = text.match(allowSuffix ? /^(-?\d+(?:\.\d+)?)([KMB])?$/ : /^(-?\d+(?:\.\d+)?)$/);
   if (!match) return null;
@@ -113,10 +135,14 @@ export function amount(value: string, allowSuffix: boolean) {
 }
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 function freightAmount(value: string) {
 =======
 export function freightAmount(value: string) {
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+export function freightAmount(value: string) {
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   const text = value.trim().toUpperCase().replace(/\bUSD\b/g, "").trim();
   if (!text || /[A-Z]/.test(text) || !/^[\s$,\d().-]+$/.test(text)) return 0;
   const parsed = amount(text.replace(/[()]/g, ""), true) ?? 0;
@@ -124,15 +150,20 @@ export function freightAmount(value: string) {
 }
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 function loadType(value: string) {
 =======
 export function loadType(value: string) {
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+export function loadType(value: string) {
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   const text = value.trim();
   if (/\bFTL\b|FULL\s*TRUCK|TRUCKLOAD/i.test(text)) return "FTL" as const;
   return Number(text.match(/\d+/)?.[0] ?? 0) >= 10 ? ("FTL" as const) : ("LTL" as const);
 }
 
+<<<<<<< HEAD
 <<<<<<< HEAD
 function isNewJerseyDestination(destination: string) {
   return /\b(?:NJ|NEW JERSEY)\b/i.test(destination.trim());
@@ -146,6 +177,13 @@ export function isNewJerseyDestination(destination: string) {
 
 export function distanceBand(destination: string) {
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+export function isNewJerseyDestination(destination: string) {
+  return /\b(?:NJ|NEW JERSEY)\b/i.test(destination.trim());
+}
+
+export function distanceBand(destination: string) {
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   const text = destination.trim().toUpperCase();
   if (!text) return "unknown" as const;
   const localCity =
@@ -168,10 +206,14 @@ export function distanceBand(destination: string) {
 }
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 function pacificDateParts() {
 =======
 export function pacificDateParts() {
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+export function pacificDateParts() {
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Los_Angeles",
     year: "numeric",
@@ -203,10 +245,14 @@ export async function computeLiveKpis(): Promise<Record<string, number | string 
       fullCsv(NATIONAL_SHEET_ID, 99300389),
       fullCsv(WMS_SHEET_ID, 0),
 <<<<<<< HEAD
+<<<<<<< HEAD
       fullCsv(LOGISTICS_SHEET_ID, 852802817),
 =======
       fullCsv(LOGISTICS_SHEET_ID, LOGISTICS_TRUCKING_GID),
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+      fullCsv(LOGISTICS_SHEET_ID, LOGISTICS_TRUCKING_GID),
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
       fullCsv(LOGISTICS_SHEET_ID, 1834454901),
     ]);
     const today = pacificDateParts();

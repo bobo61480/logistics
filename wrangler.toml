@@ -16,6 +16,18 @@ name = "STATUS_WRITE_RATE_LIMITER"
 namespace_id = "2026081301"
 simple = { limit = 30, period = 60 }
 
+<<<<<<< HEAD
+=======
+[[d1_databases]]
+binding = "DB"
+database_name = "stylekorean-logistics-read-model"
+database_id = "b7eba1d8-839f-4f18-b537-02b1b536927b"
+migrations_dir = "./migrations"
+
+[triggers]
+crons = ["*/15 * * * *"]
+
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 [assets]
 directory = "./out"
 binding = "ASSETS"

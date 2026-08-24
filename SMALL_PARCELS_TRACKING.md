@@ -13,6 +13,7 @@ The inbound schedule now includes **periodic status tracking for small parcels**
 
 2. **IMPORTS Sheet** — Main inbound schedule
 <<<<<<< HEAD
+<<<<<<< HEAD
    - Packages in "SCHEDULED" status (awaiting delivery)
    - Scans notes/remarks for tracking keywords
    - Updates status based on email notifications and tracking updates
@@ -30,6 +31,16 @@ The inbound schedule now includes **periodic status tracking for small parcels**
 
 - **Frequency:** Every hour
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+   - Rows strictly below the `PARCELS` marker in `IMPORTS`
+   - Uses the tracking number and the ETA/status note in the parcel section
+   - Checks the official carrier page first (UPS/FedEx/USPS/DHL), then exact-tracking carrier email, then the sheet note
+   - Writes changed `WEBSITE STATUS` and tracked ETA details back to the exact source row
+
+### Schedule
+
+- **Frequency:** Every hour
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 - **Trigger Function:** `trackSmallParcelsStatusUpdates()`
 - **Pipeline Log:** All tracking runs logged in PIPELINE LOG tab
 
@@ -48,10 +59,14 @@ FOR each row in SKW_Inbound sheet:
 This automatically marks packages as delivered once they've been physically received.
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 ### IMPORTS Schedule Tracking
 =======
 ### IMPORTS `PARCELS` Section Tracking
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+### IMPORTS `PARCELS` Section Tracking
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 
 ```
 FOR each row in IMPORTS sheet:
@@ -92,10 +107,14 @@ setupAllTriggers()
 ```
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 This provisions 7 triggers including `trackSmallParcelsStatusUpdates` (every 45 min).
 =======
 This provisions 7 triggers including `trackSmallParcelsStatusUpdates` (hourly).
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+This provisions 7 triggers including `trackSmallParcelsStatusUpdates` (hourly).
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 
 ### Step 2 — Verify in Triggers View
 
@@ -106,10 +125,14 @@ Function: trackSmallParcelsStatusUpdates
 Source: Time-driven
 Trigger type: Time-based trigger
 <<<<<<< HEAD
+<<<<<<< HEAD
 Schedule: 45 minutes
 =======
 Schedule: Every hour
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+Schedule: Every hour
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 ```
 
 ### Step 3 — Monitor Pipeline Log
@@ -130,10 +153,14 @@ After the first run, check **PIPELINE LOG** tab in LOGISTICS MASTER 2026:
 | Row 10 | ... | SCHEDULED | 2026-08-07 |
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 **After (45 minutes later):**
 =======
 **After (the next hourly tracking cycle):**
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+**After (the next hourly tracking cycle):**
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 | SKW_Inbound | ... | STATUS | DATE_RECEIVED |
 |-------------|-----|--------|---------------|
 | Row 10 | ... | DELIVERED | 2026-08-07 |

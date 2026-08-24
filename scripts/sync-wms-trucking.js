@@ -2,324 +2,183 @@
 
 /**
  * Sync Runner Script: WMS Trucking Scanner & Importer
- *
- * Scans the WMS "Invoice and Issues" spreadsheet for rows whose Shipping
- * Method is "Trucking", merges multiple invoices for the same customer + ship
- * date into a single shipment entry, then reports which entries are new and
- * which have changed relative to the "WH Trucking Request" tab.
- *
- * Sheet IDs can be overridden via environment variables:
- *   TARGET_SHEET_ID  — Logistics Master 2026 (default: 1M-vZ24…)
- *   WMS_SHEET_ID     — WMS Invoice & Issues  (default: 14lH9S…)
+ * Scans WMS Invoice and Issues spreadsheet (14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I)
+ * for rows with Shipping Method = "Trucking", combines multiple invoices for the same customer
+ * and ship date into one entry, and synchronizes new/updated entries to the WH Trucking Request tab.
  */
-
-// ─── Configuration ────────────────────────────────────────────────────────────
 
 const TARGET_SHEET_ID = process.env.TARGET_SHEET_ID || "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc";
-const WMS_SHEET_ID    = process.env.WMS_SHEET_ID    || "14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I";
+const WMS_SHEET_ID = process.env.WMS_SHEET_ID || "14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I";
 
-/**
- * Maps each logical field to the column-header keywords used to locate it in
- * the WMS source sheet.  Keeping this declarative means adding a new field
- * only requires a single entry here — no other code needs to change.
- */
-const WMS_COLUMN_SPECS = {
-  method:   ["SHIPPING METHOD", "SHIP METHOD", "METHOD"],
-  invoice:  ["INVOICE#", "INVOICE NO.", "INVOICE #", "INVOICE"],
-  customer: ["CUSTOMER NAME", "CUSTOMER", "CLIENT"],
-  shipDate: ["SHIP DATE", "DATE"],
-  pallets:  ["PALLET", "PLT", "QTY", "CARTONS"],
-  carrier:  ["CARRIER", "TRUCKING"],
-  pro:      ["PRO#", "PRO", "TRACKING#", "BOL"],
-  note:     ["REMARKS (SALES)", "REMARKS (WAREHOUSE)", "NOTE", "REMARK"],
-};
-
-// ─── GViz fetch helper ────────────────────────────────────────────────────────
-
-/**
- * Fetches a Google Sheets table via the GViz JSON endpoint.
- *
- * @param {string} sheetId  - Spreadsheet ID.
- * @param {string} tabName  - Sheet/tab name (empty = first sheet).
- * @param {string} range    - A1 range (empty = entire sheet).
- * @param {string} headers  - "0" means the sheet has no header row to skip.
- * @returns {Promise<object>} The `table` object from the GViz payload.
- */
-async function fetchGvizTable(sheetId, tabName = "", range = "", headers = "1") {
+async function fetchGvizTable(sheetId, tabName = "", range = "", headersVal = "1") {
   const url = new URL(`https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq`);
-  url.searchParams.set("tqx",     "out:json");
-  url.searchParams.set("headers", headers);
+  url.searchParams.set("tqx", "out:json");
+  url.searchParams.set("headers", headersVal);
   if (tabName) url.searchParams.set("sheet", tabName);
-  if (range)   url.searchParams.set("range", range);
+  if (range) url.searchParams.set("range", range);
 
   const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status} fetching sheet '${sheetId}'${tabName ? ` / '${tabName}'` : ""}`);
-  }
-
+  if (!res.ok) throw new Error(`HTTP ${res.status} fetching sheet '${sheetId}' / '${tabName}'`);
   const text = await res.text();
-  // GViz wraps JSON in a callback — strip everything outside the outermost braces.
-  const start = text.indexOf("{");
-  const end   = text.lastIndexOf("}");
-  if (start < 0 || end < 0) throw new Error(`Invalid GViz payload for sheet '${sheetId}'`);
-
-  const payload = JSON.parse(text.slice(start, end + 1));
-  if (payload.status !== "ok") throw new Error(`GViz error for sheet '${sheetId}': ${payload.status}`);
-
+  const a = text.indexOf("{");
+  const b = text.lastIndexOf("}");
+  if (a < 0 || b < 0) throw new Error(`Invalid GViz payload for sheet '${sheetId}'`);
+  const payload = JSON.parse(text.slice(a, b + 1));
+  if (payload.status !== "ok") throw new Error(`GViz error on '${sheetId}': ${payload.status}`);
   return payload.table;
 }
 
-// ─── Column-resolution helpers ────────────────────────────────────────────────
-
-/**
- * Finds the first column index (0-based) whose header matches any of the given
- * keywords (case-insensitive substring match).
- *
- * @param {string[]} headerCols - Normalised (upper-cased) header names.
- * @param {string[]} keywords   - Candidate keywords to search for.
- * @returns {number} Column index, or -1 if not found.
- */
-function findColIndex(headerCols, keywords) {
-  return headerCols.findIndex(h => keywords.some(kw => h.includes(kw)));
+function getColValue(row, ...names) {
+  const normalizedNames = names.map(n => n.toUpperCase());
+  for (const key of Object.keys(row)) {
+    if (normalizedNames.some(n => key.includes(n)) && row[key]) {
+      return row[key];
+    }
+  }
+  return "";
 }
 
-/**
- * Builds a column-index map for every logical field defined in WMS_COLUMN_SPECS
- * by scanning a single header row.
- *
- * @param {string[]} headerCols - Normalised (upper-cased) header names.
- * @returns {Object<string, number>} e.g. { method: 5, invoice: 1, … }
- */
-function resolveWmsColumns(headerCols) {
-  return Object.fromEntries(
-    Object.entries(WMS_COLUMN_SPECS).map(([field, keywords]) => [
-      field,
-      findColIndex(headerCols, keywords),
-    ])
-  );
+function normalizeShipDate(value) {
+  const text = String(value || "").trim();
+  const match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (!match) return text.toUpperCase();
+  let year = Number(match[3]);
+  if (year < 100) year += 2000;
+  return [year, String(Number(match[1])).padStart(2, "0"), String(Number(match[2])).padStart(2, "0")].join("-");
 }
 
-/**
- * Reads a cell value from a row by logical column name, falling back to "".
- *
- * @param {string[]}            vals - Raw cell values for the row.
- * @param {Object<string,number>} colMap - Output of resolveWmsColumns().
- * @param {string}              field  - Logical field name.
- */
-function cellOf(vals, colMap, field) {
-  const idx = colMap[field];
-  return (idx !== undefined && idx >= 0) ? (vals[idx] || "") : "";
-}
-
-// ─── String normalisation utilities ──────────────────────────────────────────
-
-/** Normalises a customer name to UPPER-CASE with collapsed whitespace. */
-const normCustomer = str => str.toUpperCase().replace(/\s+/g, " ").trim();
-
-/** Normalises a date string for key comparison. */
-const normDate = str => str.toUpperCase().trim();
-
-/**
- * Deduplicates and joins an array of strings, skipping empty values.
- *
- * @param {string[]} arr       - Source values.
- * @param {string}   separator - Joiner (default: newline).
- */
-const dedupJoin = (arr, separator = "\n") =>
-  [...new Set(arr.filter(Boolean))].join(separator);
-
-// ─── Main scan function ───────────────────────────────────────────────────────
-
-/**
- * Scans the WMS sheet and compares it against the existing target tab.
- *
- * @param {{ dryRun?: boolean }} options
- * @returns {Promise<ScanResult>}
- *
- * @typedef {{ ok: true,  scanned: number, truckingCount: number, groups: number,
- *             newCount: number, modifiedCount: number,
- *             newEntries: Entry[], modifiedEntries: ModifiedEntry[] }} ScanResult
- * @typedef {{ customer: string, shipDate: string, invoice: string, pallets: string,
- *             carrier: string, pro: string, note: string, status: string }} Entry
- * @typedef {Entry & { existingRow: number }} ModifiedEntry
- */
 async function runScan({ dryRun = false } = {}) {
-  log("INFO", `Starting WMS Trucking scan from WMS Sheet ${WMS_SHEET_ID}… (dryRun=${dryRun})`);
+  const timestamp = new Date().toLocaleString();
+  console.log(`[${timestamp}] Starting WMS Trucking scan from WMS Sheet ${WMS_SHEET_ID}... (dryRun=${dryRun})`);
 
-  // ── Step 1: Fetch and parse WMS sheet ──────────────────────────────────────
-  let wmsRows;
+  let wmsRows = [];
   try {
-    wmsRows = await fetchWmsRows();
+    const table = await fetchGvizTable(WMS_SHEET_ID, "", "", "0");
+    const rawRows = table.rows || [];
+    
+    // Header is on Row 2 (idx 1)
+    let headerRowIdx = 1;
+    if (rawRows.length <= headerRowIdx) throw new Error("WMS sheet has fewer than 2 rows.");
+    const headerCols = rawRows[headerRowIdx].c.map(c => c ? String(c.f ?? c.v ?? "").trim().toUpperCase() : "");
+
+    wmsRows = rawRows.slice(headerRowIdx + 1).map((r, rowIndex) => {
+      const vals = r.c ? r.c.map(c => c ? String(c.f ?? c.v ?? "").trim() : "") : [];
+      const rowObj = { __sourceRow: rowIndex + headerRowIdx + 2 };
+      headerCols.forEach((h, i) => {
+        const key = h || `COL_${i}`;
+        rowObj[key] = vals[i] || "";
+      });
+      // Fallback positional indexing if header labels vary
+      rowObj["_DATE"] = vals[0] || "";
+      rowObj["_INVOICE"] = vals[1] || "";
+      rowObj["_CUSTOMER"] = vals[2] || "";
+      rowObj["_SALES"] = vals[3] || "";
+      rowObj["_SHIPDATE"] = vals[4] || vals[0] || "";
+      rowObj["_METHOD"] = vals[5] || "";
+      return rowObj;
+    });
   } catch (err) {
-    log("ERROR", `Failed to fetch WMS sheet '${WMS_SHEET_ID}': ${err.message}`);
+    console.error(`[ERROR] Failed to fetch external WMS sheet '${WMS_SHEET_ID}':`, err.message);
     return { ok: false, error: err.message };
   }
 
-  // ── Step 2: Filter to Trucking rows only ───────────────────────────────────
-  const truckingRows = wmsRows.filter(({ method }) =>
-    method.toUpperCase().includes("TRUCKING")
-  );
-  log("INFO", `Scanned ${wmsRows.length} rows. Found ${truckingRows.length} with Shipping Method = "Trucking".`);
-
-  // ── Step 3: Group by (normalised Customer + Ship Date) ────────────────────
-  const groups = groupTruckingRows(truckingRows);
-  log("INFO", `Grouped ${truckingRows.length} Trucking rows into ${groups.size} distinct shipments.`);
-
-  // ── Step 4: Fetch existing target rows ─────────────────────────────────────
-  let existingMap;
-  try {
-    existingMap = await fetchExistingTargetMap();
-  } catch (err) {
-    log("ERROR", `Failed to fetch target tab 'WH Trucking Request': ${err.message}`);
-    return { ok: false, error: err.message };
-  }
-
-  // ── Step 5: Diff groups against existing entries ──────────────────────────
-  const { newEntries, modifiedEntries } = diffGroups(groups, existingMap);
-
-  // ── Step 6: Report ─────────────────────────────────────────────────────────
-  logScanResult(newEntries, modifiedEntries);
-
-  return {
-    ok:            true,
-    scanned:       wmsRows.length,
-    truckingCount: truckingRows.length,
-    groups:        groups.size,
-    newCount:      newEntries.length,
-    modifiedCount: modifiedEntries.length,
-    newEntries,
-    modifiedEntries,
-  };
-}
-
-// ─── Step implementations ─────────────────────────────────────────────────────
-
-/**
- * Fetches and parses every data row from the WMS sheet into plain objects.
- * The WMS header lives on row 2 (index 1); row 1 is a title/merge row.
- */
-async function fetchWmsRows() {
-  const table   = await fetchGvizTable(WMS_SHEET_ID, "", "", "0");
-  const rawRows = table.rows || [];
-
-  const HEADER_ROW_IDX = 1; // WMS header is always on the second row
-  if (rawRows.length <= HEADER_ROW_IDX) {
-    throw new Error("WMS sheet has fewer than 2 rows — expected a header on row 2.");
-  }
-
-  const headerCols = rawRows[HEADER_ROW_IDX].c.map(c =>
-    c ? String(c.f ?? c.v ?? "").trim().toUpperCase() : ""
-  );
-  const colMap = resolveWmsColumns(headerCols);
-
-  return rawRows.slice(HEADER_ROW_IDX + 1).map((r, i) => {
-    const vals = r.c ? r.c.map(c => (c ? String(c.f ?? c.v ?? "").trim() : "")) : [];
-    return {
-      sourceRow: i + HEADER_ROW_IDX + 2, // 1-based sheet row number
-      method:    cellOf(vals, colMap, "method"),
-      invoice:   cellOf(vals, colMap, "invoice"),
-      customer:  cellOf(vals, colMap, "customer"),
-      shipDate:  cellOf(vals, colMap, "shipDate"),
-      pallets:   cellOf(vals, colMap, "pallets"),
-      carrier:   cellOf(vals, colMap, "carrier"),
-      pro:       cellOf(vals, colMap, "pro"),
-      note:      cellOf(vals, colMap, "note"),
-    };
+  // Filter rows where Shipping Method is "Trucking"
+  const truckingRows = wmsRows.filter(row => {
+    const method = row["_METHOD"] || getColValue(row, "SHIPPING METHOD", "SHIP METHOD", "METHOD");
+    return method.toUpperCase().includes("TRUCKING");
   });
-}
 
-/**
- * Groups parsed trucking rows by (normalised customer + normalised ship date).
- * Rows with no customer name get a unique per-row key so they are never merged.
- *
- * @param {object[]} rows - Output of fetchWmsRows(), pre-filtered to Trucking.
- * @returns {Map<string, object[]>}
- */
-function groupTruckingRows(rows) {
+  console.log(`[INFO] Scanned ${wmsRows.length} total rows from WMS sheet. Found ${truckingRows.length} with Shipping Method = 'Trucking'.`);
+
+  // Group by (Customer + Ship Date)
   const groups = new Map();
+  truckingRows.forEach((row, idx) => {
+    const invoice = row["_INVOICE"] || getColValue(row, "INVOICE#", "INVOICE NO.", "INVOICE #", "INVOICE");
+    const customer = row["_CUSTOMER"] || getColValue(row, "CUSTOMER NAME", "CUSTOMER", "CLIENT");
+    const shipDate = row["_SHIPDATE"] || getColValue(row, "SHIP DATE", "DATE");
+    const pallets = getColValue(row, "PALLET", "PLT", "QTY", "CARTONS");
+    const carrier = getColValue(row, "CARRIER", "TRUCKING");
+    const pro = getColValue(row, "PRO#", "PRO", "TRACKING#", "BOL");
+    const note = getColValue(row, "REMARKS (SALES)", "REMARKS (WAREHOUSE)", "NOTE", "REMARK");
 
-  rows.forEach((row, idx) => {
-    const nc  = normCustomer(row.customer);
-    const nd  = normDate(row.shipDate);
-    const key = nc ? `${nc}___${nd}` : `UNKNOWN___${idx}`;
+    const normCust = customer.toUpperCase().replace(/\s+/g, " ").trim();
+    const normDate = normalizeShipDate(shipDate);
+    const groupKey = normCust ? (normCust + "___" + normDate) : ("UNKNOWN___" + idx);
 
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(row);
+    if (!groups.has(groupKey)) groups.set(groupKey, []);
+    groups.get(groupKey).push({ invoice, customer, shipDate, pallets, carrier, pro, note, sourceRow: row.__sourceRow });
   });
 
-  return groups;
-}
+  console.log(`[INFO] Grouped ${truckingRows.length} Trucking rows into ${groups.size} distinct customer + ship date shipments.`);
 
-/**
- * Fetches the "WH Trucking Request" tab and builds a dual-keyed lookup map:
- *   "CUST___DATE"   → row object
- *   "INV___<inv>"   → row object  (one entry per invoice in the cell)
- *
- * @returns {Promise<Map<string, object>>}
- */
-async function fetchExistingTargetMap() {
-  const table   = await fetchGvizTable(TARGET_SHEET_ID, "WH Trucking Request", "A2:U", "1");
-  const headers = table.cols.map((c, i) => (c.label || `COL_${i}`).toUpperCase().replace(/\s+/g, " ").trim());
+  // Fetch target WH Trucking Request tab from Logistics Master 2026
+  let targetRows = [];
+  try {
+    const table = await fetchGvizTable(TARGET_SHEET_ID, "WH Trucking Request", "A2:U", "1");
+    const headers = table.cols.map((c, i) => (c.label || `COL_${i}`).toUpperCase().replace(/\s+/g, " ").trim());
+    targetRows = table.rows.map((r, rowIndex) => ({
+      __sourceRow: rowIndex + 3,
+      ...Object.fromEntries(headers.map((h, i) => {
+        const c = r.c?.[i];
+        return [h, String(c ? (c.f ?? c.v ?? "") : "").trim()];
+      }))
+    }));
+  } catch (err) {
+    console.error(`[ERROR] Failed to fetch target tab 'WH Trucking Request':`, err.message);
+    return { ok: false, error: err.message };
+  }
 
+  // Index existing target rows by exact normalized Customer + Ship Date.
   const existingMap = new Map();
-
-  (table.rows || []).forEach((r, i) => {
-    const rowObj = {
-      __sourceRow: i + 3, // Row 1 = sheet header, row 2 = range start → data from row 3
-      ...Object.fromEntries(
-        headers.map((h, j) => {
-          const c = r.c?.[j];
-          return [h, String(c ? (c.f ?? c.v ?? "") : "").trim()];
-        })
-      ),
-    };
-
-    const cust = (rowObj["CUSTOMER"] || "").toUpperCase().replace(/\s+/g, " ").trim();
-    const date = (rowObj["SHIP DATE"] || "").toUpperCase().trim();
-    if (cust && date) existingMap.set(`${cust}___${date}`, rowObj);
-
-    // Index every invoice so we can match by individual invoice number too.
-    const rawInvs = rowObj["INVOICE NO."] || rowObj["INVOICE #"] || rowObj["INVOICE"] || "";
-    rawInvs.split(/[\r\n,;·]+/).forEach(inv => {
-      const clean = inv.trim().toUpperCase();
-      if (clean) existingMap.set(`INV___${clean}`, rowObj);
+  const existingInvoiceMap = new Map();
+  targetRows.forEach((row) => {
+    const invoices = getColValue(row, "INVOICE NO.", "INVOICE #", "INVOICE").split(/[\r\n,;·]+/);
+    const cust = getColValue(row, "CUSTOMER").toUpperCase().replace(/\s+/g, " ").trim();
+    const date = normalizeShipDate(getColValue(row, "SHIP DATE"));
+    if (cust && date) existingMap.set(cust + "___" + date, row);
+    invoices.forEach(invoice => {
+      const key = invoice.trim().toUpperCase();
+      if (!key) return;
+      if (!existingInvoiceMap.has(key)) existingInvoiceMap.set(key, new Set());
+      existingInvoiceMap.get(key).add(row);
     });
   });
 
-  return existingMap;
-}
-
-/**
- * Compares each shipment group against `existingMap` and classifies it as
- * new (not found) or modified (invoices have changed since last import).
- *
- * @param {Map<string, object[]>} groups
- * @param {Map<string, object>}   existingMap
- * @returns {{ newEntries: Entry[], modifiedEntries: ModifiedEntry[] }}
- */
-function diffGroups(groups, existingMap) {
-  const newEntries      = [];
+  const newEntries = [];
   const modifiedEntries = [];
   const skippedRescheduled = [];
 
-  groups.forEach((items) => {
-    const { customer, shipDate } = items[0];
-    const combinedInvoices = dedupJoin(items.map(i => i.invoice));
-    const combinedCarrier  = items.map(i => i.carrier).find(Boolean) || "Trucking";
-    const combinedPro      = dedupJoin(items.map(i => i.pro));
-    const combinedPallets  = dedupJoin(items.map(i => i.pallets), " · ");
-    const combinedNote     = dedupJoin(items.map(i => i.note),    " · ")
-                             || "Imported from WMS Invoice & Issues";
+  groups.forEach((items, groupKey) => {
+    const customer = items[0].customer;
+    const shipDate = items[0].shipDate;
+    const combinedInvoices = [...new Set(items.map(i => i.invoice).filter(Boolean))].join("\n");
+    const combinedCarrier = items.map(i => i.carrier).find(Boolean) || "Trucking";
+    const combinedPro = [...new Set(items.map(i => i.pro).filter(Boolean))].join("\n");
+    const combinedPallets = [...new Set(items.map(i => i.pallets).filter(Boolean))].join(" · ");
+    const combinedNote = [...new Set(items.map(i => i.note).filter(Boolean))].join(" · ") || "Imported from WMS Invoice & Issues";
 
-    const matchKey  = `${normCustomer(customer)}___${normDate(shipDate)}`;
-    let   matchedRow = existingMap.get(matchKey);
+    const normCust = customer.toUpperCase().replace(/\s+/g, " ").trim();
+    const normDate = normalizeShipDate(shipDate);
+    const matchKey = normCust + "___" + normDate;
 
-    // Secondary lookup: match any individual invoice number.
+    let matchedRow = existingMap.get(matchKey);
     if (!matchedRow) {
-      for (const item of items) {
-        if (!item.invoice) continue;
-        const candidate = existingMap.get(`INV___${item.invoice.toUpperCase()}`);
-        if (candidate) { matchedRow = candidate; break; }
+      const invoiceMatches = new Set();
+      items.forEach(item => {
+        const rows = existingInvoiceMap.get(String(item.invoice || "").trim().toUpperCase());
+        if (rows) rows.forEach(row => invoiceMatches.add(row));
+      });
+      if (invoiceMatches.size === 1) {
+        const candidate = [...invoiceMatches][0];
+        if (normalizeShipDate(getColValue(candidate, "SHIP DATE")) === normDate) {
+          matchedRow = candidate;
+        } else {
+          skippedRescheduled.push({ customer, shipDate, invoice: combinedInvoices, existingRow: candidate.__sourceRow });
+          return;
+        }
+      } else if (invoiceMatches.size > 1) {
+        skippedRescheduled.push({ customer, shipDate, invoice: combinedInvoices, existingRow: "ambiguous" });
+        return;
       }
     }
 
@@ -329,70 +188,64 @@ function diffGroups(groups, existingMap) {
       invoice: combinedInvoices,
       pallets: combinedPallets,
       carrier: combinedCarrier,
-      pro:     combinedPro,
-      note:    combinedNote,
-      status:  "WORK IN PROGRESS",
+      pro: combinedPro,
+      note: combinedNote,
+      status: "WORK IN PROGRESS"
     };
 
     if (matchedRow) {
-      // Determine the stored invoice value using whichever column name exists.
-      const curInvs = matchedRow["INVOICE NO."] || matchedRow["INVOICE #"] || matchedRow["INVOICE"] || "";
-      if (curInvs !== combinedInvoices) {
-        modifiedEntries.push({ ...entry, existingRow: matchedRow.__sourceRow });
+      const curInvs = getColValue(matchedRow, "INVOICE NO.", "INVOICE #", "INVOICE");
+      const mergedInvoices = [...new Set(
+        [curInvs, combinedInvoices]
+          .join("\n")
+          .split(/[\r\n,;·]+/)
+          .map(invoice => invoice.trim())
+          .filter(Boolean)
+      )].join("\n");
+      if (curInvs !== mergedInvoices) {
+        modifiedEntries.push({ ...entry, invoice: mergedInvoices, existingRow: matchedRow.__sourceRow });
       }
     } else {
       newEntries.push(entry);
     }
   });
 
-  return { newEntries, modifiedEntries };
-}
-
-// ─── Logging helpers ──────────────────────────────────────────────────────────
-
-/** Prefixes a message with a timestamp and severity label. */
-function log(level, message) {
-  const ts = new Date().toLocaleString();
-  console.log(`[${ts}] [${level}] ${message}`);
-}
-
-/** Formats an entry for a single summary line in the result log. */
-const entryLine = (e, idx) =>
-  `  ${idx + 1}. ${e.customer} (${e.shipDate}) → Invoices: ${e.invoice.replace(/\n/g, ", ")}`;
-
-function logScanResult(newEntries, modifiedEntries) {
-  log("RESULT", `Scan complete: ${newEntries.length} new, ${modifiedEntries.length} modified.`);
-
+  console.log(`\n[RESULT] Scan complete: ${newEntries.length} new entries to append, ${modifiedEntries.length} entries to update, ${skippedRescheduled.length} rescheduled/ambiguous entries skipped.`);
   if (newEntries.length > 0) {
-    console.log(`\n[NEW ENTRIES (${newEntries.length})]:`);
-    newEntries.forEach((e, i) => console.log(entryLine(e, i)));
+    console.log(`\n[NEW COMBINED ENTRIES (${newEntries.length})]:`);
+    newEntries.forEach((e, idx) => console.log(`  ${idx+1}. ${e.customer} (${e.shipDate}) -> Invoices: ${e.invoice.replace(/\n/g, ", ")}`));
   }
   if (modifiedEntries.length > 0) {
-    console.log(`\n[MODIFIED ENTRIES (${modifiedEntries.length})]:`);
-    modifiedEntries.forEach((e, i) =>
-      console.log(`  ${i + 1}. Row ${e.existingRow}: ${e.customer} (${e.shipDate}) → Invoices: ${e.invoice.replace(/\n/g, ", ")}`)
-    );
+    console.log(`\n[MODIFIED COMBINED ENTRIES (${modifiedEntries.length})]:`);
+    modifiedEntries.forEach((e, idx) => console.log(`  ${idx+1}. Row ${e.existingRow}: ${e.customer} (${e.shipDate}) -> Invoices: ${e.invoice.replace(/\n/g, ", ")}`));
   }
+
+  return {
+    ok: true,
+    scanned: wmsRows.length,
+    truckingCount: truckingRows.length,
+    groups: groups.size,
+    newCount: newEntries.length,
+    modifiedCount: modifiedEntries.length,
+    skippedRescheduledCount: skippedRescheduled.length,
+    newEntries,
+    modifiedEntries,
+    skippedRescheduled
+  };
 }
 
-// ─── CLI entry point ──────────────────────────────────────────────────────────
-
-// ESM equivalent of `if (require.main === module)`.
-const isMain = process.argv[1] &&
-  (await import("url")).fileURLToPath(import.meta.url) === process.argv[1];
-
-if (isMain) {
-  const args   = process.argv.slice(2);
+// Support CLI execution
+if (require.main === module) {
+  const args = process.argv.slice(2);
   const dryRun = args.includes("--dry-run");
-  const loop   = args.includes("--loop");
+  const loop = args.includes("--loop");
 
-  await runScan({ dryRun });
-
-  if (loop) {
-    const INTERVAL_MS = 30 * 60 * 1000;
-    log("INFO", `Entering ${INTERVAL_MS / 60_000}-minute recurring loop…`);
-    setInterval(() => runScan({ dryRun }), INTERVAL_MS);
-  }
+  runScan({ dryRun }).then(res => {
+    if (loop) {
+      console.log("Entering 30-minute recurring loop...");
+      setInterval(() => runScan({ dryRun }), 30 * 60 * 1000);
+    }
+  });
 }
 
-export { runScan };
+module.exports = { runScan };

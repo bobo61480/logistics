@@ -23,13 +23,19 @@ var GMAIL_PIPELINE = {
   inboundSheet: "IMPORTS",
   outboundSheet: "WH Trucking Request",
 <<<<<<< HEAD
+<<<<<<< HEAD
   driveRootName: "SK Logistics Email Archive",
 =======
+=======
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   driveRootName: "SK Logistics Email Archive", // legacy helper compatibility
   // Canonical shared-drive destinations used by the live IMPORTS document links.
   warehouseDocumentsFolderId: "1YBWV9lXAasRt7JolWxk199dPkGbx60M9",
   importShipmentsFolderId: "1AhGI2qM2pGFXSb406OY6dsOaN8unlGDM",
+<<<<<<< HEAD
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   labels: {
     processed: "sk-logistics/processed",
     pending: "sk-logistics/pending-verification",
@@ -54,6 +60,7 @@ var GMAIL_PIPELINE = {
 
 /** Entry point — run from a 15-minute time-driven trigger. */
 function processLogisticsEmails() {
+<<<<<<< HEAD
 <<<<<<< HEAD
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(5000)) return;
@@ -234,6 +241,11 @@ function tabularToRecords_(rows, category, meta) {
   // dedupe, broader logistics discovery, source-row updates, and trigger migration.
   return processLogisticsEmailsV2();
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+  // Compatibility entry point for any pre-existing trigger. V2 owns message-level
+  // dedupe, broader logistics discovery, source-row updates, and trigger migration.
+  return processLogisticsEmailsV2();
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 }
 
 function headerAliasMap_(headerRow, aliases) {
@@ -316,9 +328,12 @@ function upsertInboundRow_(record) {
   put(["QTY", "CTNS", "CARTONS", "수량"], record.qty);
   put(["MODE", "TYPE"], record.mode);
 <<<<<<< HEAD
+<<<<<<< HEAD
   put(["NOTE", "REMARK", "비고"], (record.note || "") + " [auto: " + (record._sourceEmail || "email") + "]");
 =======
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   put(["WEBSITE STATUS", "STATUS"], "SCHEDULED");
   sheet.appendRow(newRow);
   markAutoRow_(sheet, sheet.getLastRow());
@@ -358,9 +373,12 @@ function upsertOutboundRow_(record) {
   put(["CARRIER"], record.carrier || "Trucking");
   put(["PRO#", "PRO"], record.pro);
 <<<<<<< HEAD
+<<<<<<< HEAD
   put(["NOTE", "REMARK"], (record.note || "Imported from email") + " [auto: " + (record._sourceEmail || "email") + "]");
 =======
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   put(["WEBSITE STATUS", "STATUS"], "WORK IN PROGRESS");
   sheet.appendRow(newRow);
   markAutoRow_(sheet, sheet.getLastRow());

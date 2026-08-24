@@ -1,6 +1,7 @@
 "use client";
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 // SKW Inventory Panels — Inbound line items + Current warehouse stock.
 // Self-contained: reads the SKW_Inbound and SKW_Stock tabs (created by the
 // Apps Script ingestion pipeline inside LOGISTICS MASTER 2026) via the gviz
@@ -9,6 +10,11 @@
 // Reads the filtered INVENTORY aggregate and SKW_Stock tabs (created by the
 // Apps Script inventory sync inside LOGISTICS MASTER 2026) via the gviz
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+// SKW Inventory Panels — active inbound allocation + current warehouse stock.
+// Reads the filtered INVENTORY aggregate and SKW_Stock tabs (created by the
+// Apps Script inventory sync inside LOGISTICS MASTER 2026) via the gviz
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 // CSV endpoint. Tab-name addressing + cb + no-store per SKW conventions.
 
 import { useCallback, useEffect, useState } from "react";
@@ -79,23 +85,32 @@ export default function InventoryPanels() {
   const load = useCallback(async () => {
     try {
 <<<<<<< HEAD
+<<<<<<< HEAD
       const [inbGrid, stockGrid] = await Promise.all([
         fetchTab("SKW_Inbound"),
+=======
+      const [inventoryGrid, stockGrid] = await Promise.all([
+        fetchTab("INVENTORY"),
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
         fetchTab("SKW_Stock"),
       ]);
 
-      const ih = indexHeaders(inbGrid[0] ?? []);
+      const ih = indexHeaders(inventoryGrid[0] ?? []);
       const cell = (r: string[], k: string) => (ih[k] !== undefined ? (r[ih[k]] ?? "").trim() : "");
-      const inboundRows = inbGrid.slice(1)
-        .filter((r) => cell(r, "sku"))
+      const inboundRows = inventoryGrid.slice(1)
+        .filter((r) => {
+          const remaining = Number(cell(r, "remaining to receive").replace(/,/g, "")) || 0;
+          return Boolean(cell(r, "sku")) && remaining > 0 && Boolean(cell(r, "inbound shipments (차수)"));
+        })
         .map((r) => ({
           sku: cell(r, "sku"),
-          upc: cell(r, "upc"),
-          name: cell(r, "product_description"),
-          batch: cell(r, "batch_no"),
-          expiry: cell(r, "expiry_date"),
-          qty: cell(r, "qty_ea"),
+          upc: cell(r, "barcode"),
+          name: cell(r, "product name"),
+          batch: "",
+          expiry: "",
+          qty: cell(r, "remaining to receive"),
           location: "",
+<<<<<<< HEAD
           status: cell(r, "status"),
           eta: cell(r, "eta_date"),
 =======
@@ -122,6 +137,10 @@ export default function InventoryPanels() {
           status: cell(r, "inbound shipments (차수)"),
           eta: "",
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+          status: cell(r, "inbound shipments (차수)"),
+          eta: "",
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
         }))
         .filter((r) => !FINISHED.has(r.status.toLowerCase()));
 
@@ -170,10 +189,14 @@ export default function InventoryPanels() {
             <th>Expiration</th>
             <th>Qty (EA)</th>
 <<<<<<< HEAD
+<<<<<<< HEAD
             {withLocation ? <th>Location</th> : <th>ETA · Status</th>}
 =======
             {withLocation ? <th>Location</th> : <th>Current Import Shipment(s)</th>}
 >>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
+=======
+            {withLocation ? <th>Location</th> : <th>Current Import Shipment(s)</th>}
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
           </tr>
         </thead>
         <tbody>

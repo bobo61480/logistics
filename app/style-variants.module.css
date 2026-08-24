@@ -43,6 +43,36 @@
   border-color: rgba(19, 138, 85, .35);
 }
 
+<<<<<<< HEAD
+=======
+.variantNavCurrent {
+  padding: 7px 11px;
+  border: 1px solid rgba(19, 138, 85, .4);
+  border-radius: 8px;
+  background: #eef9f3;
+  color: #0f6b43;
+  font: 900 9px "IBM Plex Mono", monospace;
+  box-shadow: inset 0 -2px 0 #138a55;
+}
+
+:global([data-theme="dark"]) .variantNav {
+  border-color: var(--hairline-strong);
+  background: rgba(20, 24, 34, .94);
+  box-shadow: 0 7px 24px rgba(0, 0, 0, .35);
+}
+:global([data-theme="dark"]) .variantNavLabel { color: var(--text-faint); }
+:global([data-theme="dark"]) .variantNav a {
+  border-color: var(--hairline-strong);
+  background: var(--surface-inset);
+  color: var(--text-soft);
+}
+:global([data-theme="dark"]) .variantNavCurrent {
+  border-color: rgba(19, 138, 85, .5);
+  background: rgba(19, 138, 85, .16);
+  color: #4ee39a;
+}
+
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 .variantActive {
   border-color: rgba(19, 138, 85, .4) !important;
   background: #eef9f3 !important;
@@ -94,10 +124,19 @@
 .fulfillment :global(.fulfillment-tk-panel) { order: 13; }
 .light :global(.outbound-parcel-panel),
 .fulfillment :global(.outbound-parcel-panel) { order: 14; }
+<<<<<<< HEAD
 .light :global(footer),
 .fulfillment :global(footer) { order: 15; }
 .light :global(.toast),
 .fulfillment :global(.toast) { order: 16; }
+=======
+.light :global(.ingestion-archive-row),
+.fulfillment :global(.ingestion-archive-row) { order: 15; }
+.light :global(footer),
+.fulfillment :global(footer) { order: 16; }
+.light :global(.toast),
+.fulfillment :global(.toast) { order: 17; }
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 
 .light {
   --variant-blue: #eaf3ff;
@@ -316,7 +355,12 @@
 .lightFull :global(.fulfillment-tk-panel) { order: 11; }
 .lightFull :global(.kpi-panel) { order: 12; }
 .lightFull :global(.source-legend) { order: 13; }
+<<<<<<< HEAD
 .lightFull :global(footer) { order: 14; }
+=======
+.lightFull :global(.ingestion-archive-row) { order: 14; }
+.lightFull :global(footer) { order: 15; }
+>>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 .lightFull :global(.metrics article),
 .lightFull :global(.kpi-panel),
 .lightFull :global(.inventory-panel),
