@@ -563,4 +563,31 @@ describe("WH Trucking Request customer lookup: appending a note never duplicates
       { row: 5, col: 20, value: "Contact: Jane Doe (old, no longer active)\nContact: Jane Doe" },
     ]);
   });
+
+  // Round 11 (2026-08-24, Codex review on PR #96): a field value containing
+  // the literal " | " section delimiter (Accessories) or an unnormalized
+  // newline (No. of Stores/Sales Rep, which weren't run through the same
+  // "\n" -> " · " normalization Address/Contact/Accessories/References
+  // already had) fragments differently when existingCustomerNoteParts_
+  // re-parses the stored note than when it was generated — so the same
+  // record edited a second time would never match its own already-written
+  // section and get re-appended as "new" forever.
+  it("never re-appends a section whose field value contains the note's own delimiter characters", () => {
+    const record = makeRecord({
+      name: "Fanloli Beauty",
+      accessories: "LIFT GATE | APPOINTMENT REQUIRED",
+      salesRep: "Christine\nBackup: Dana",
+    });
+    const firstWriteSheet = makeFakeNoteSheet("");
+    helpers.appendCustomerNote_(firstWriteSheet, 5, 20, record);
+    const noteAfterFirstWrite = String(firstWriteSheet.writes[0]?.value);
+
+    // Re-run against a fresh sheet seeded with exactly what the first write
+    // produced, simulating the same record being matched again on a later
+    // edit — this must be a no-op, not a second append of the same content.
+    const secondEditSheet = makeFakeNoteSheet(noteAfterFirstWrite);
+    helpers.appendCustomerNote_(secondEditSheet, 5, 20, record);
+
+    expect(secondEditSheet.writes).toEqual([]);
+  });
 });

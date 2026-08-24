@@ -432,14 +432,29 @@ function logCanonicalMatchNeedsReview_(spreadsheet, customerValue, whTruckingRow
  * a note is built from, before joining — kept separate so a later write can
  * add just the sections that are actually new (see appendCustomerNote_).
  */
+/**
+ * Normalizes a TRUCKING field value for safe inclusion in a note section:
+ * strips characters that collide with the note's own structural delimiters
+ * ("\n" between separate write events, " | " between sections within one
+ * write). Without this, a field that happens to contain either one — a
+ * multi-line Accessories cell, a literal "|" in References — fragments
+ * differently when existingCustomerNoteParts_ re-parses the stored note
+ * than when it was generated, so the freshly-generated section never
+ * matches any existing fragment and gets silently re-appended as "new" on
+ * every later edit (Codex review on PR #96).
+ */
+function sanitizeCustomerNoteField_(value) {
+  return String(value || "").replace(/\n+/g, " · ").replace(/\s*\|\s*/g, " · ").trim();
+}
+
 function customerNoteParts_(record) {
   var parts = [];
-  if (record.address) parts.push("Address: " + record.address);
-  if (record.contact) parts.push("Contact: " + record.contact.replace(/\n+/g, " · "));
-  if (record.accessories) parts.push("Accessories: " + record.accessories.replace(/\n+/g, " · "));
-  if (record.references) parts.push("References: " + record.references.replace(/\n+/g, " · "));
-  if (record.storeCount) parts.push("No. of Stores: " + record.storeCount);
-  if (record.salesRep) parts.push("Sales Rep: " + record.salesRep);
+  if (record.address) parts.push("Address: " + sanitizeCustomerNoteField_(record.address));
+  if (record.contact) parts.push("Contact: " + sanitizeCustomerNoteField_(record.contact));
+  if (record.accessories) parts.push("Accessories: " + sanitizeCustomerNoteField_(record.accessories));
+  if (record.references) parts.push("References: " + sanitizeCustomerNoteField_(record.references));
+  if (record.storeCount) parts.push("No. of Stores: " + sanitizeCustomerNoteField_(record.storeCount));
+  if (record.salesRep) parts.push("Sales Rep: " + sanitizeCustomerNoteField_(record.salesRep));
   if (record.services.length) parts.push("Services: " + record.services.join(", "));
   return parts;
 }

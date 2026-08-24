@@ -172,6 +172,17 @@ describe("Apps Script production integrity", () => {
     expect(lookup).toMatch(/if \(record\.references\) parts\.push\(/);
     expect(lookup).toMatch(/if \(record\.storeCount\) parts\.push\(/);
     expect(lookup).toMatch(/if \(record\.salesRep\) parts\.push\(/);
+    // Codex review on PR #96 (first round): a field value containing the
+    // note's own structural delimiters — a literal " | " in Accessories, or
+    // an un-normalized newline in No. of Stores/Sales Rep (which weren't
+    // getting the same "\n" -> " · " treatment Address/Contact/Accessories/
+    // References already had) — fragments differently when
+    // existingCustomerNoteParts_ re-parses the stored note than when it was
+    // generated, so the same record edited a second time would never match
+    // its own already-written section and get re-appended forever. Every
+    // field must go through one shared sanitizer before being written.
+    expect(lookup).toContain("function sanitizeCustomerNoteField_(");
+    expect(lookup).toMatch(/replace\(\/\\n\+\/g, " · "\)\.replace\(\/\\s\*\\\|\\s\*\/g, " · "\)/);
   });
 
   it("runs the customer backfill batch job live, with the '- 1'/'- 2' second-location write path implemented", () => {
