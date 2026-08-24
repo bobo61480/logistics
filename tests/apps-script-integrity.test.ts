@@ -148,7 +148,15 @@ describe("Apps Script production integrity", () => {
     // must filter per-section (customerNoteParts_), not compare the joined
     // string as one unit.
     expect(lookup).toContain("function customerNoteParts_(");
-    expect(lookup).toMatch(/parts\.filter\(function \(part\) \{ return existing\.indexOf\(part\) === -1; \}\)/);
+    // Round 10 of the same review: the per-section check above used raw
+    // string indexOf, a substring search — a manual note like "Previous
+    // Address: 123 Main St" contains the generated "Address: 123 Main St"
+    // as a literal substring, so the real current value was silently
+    // dropped instead of appended. Sections must be split out of the
+    // existing text and compared for exact equality, not searched for as a
+    // substring of the whole cell.
+    expect(lookup).toContain("function existingCustomerNoteParts_(");
+    expect(lookup).toMatch(/existingParts\.indexOf\(part\) === -1/);
   });
 
   it("runs the customer backfill batch job live, with the '- 1'/'- 2' second-location write path implemented", () => {
@@ -237,6 +245,19 @@ describe("Apps Script production integrity", () => {
     // success — otherwise a caller/operator checking the return value's
     // .ok has no way to tell a partial run from a complete one.
     expect(backfill).toMatch(/ok:\s*!batchStoppedEarly/);
+    // Round 10 of the same review: the split-repair check compared the
+    // broad, canonically-aliased family key (canonicalFamilyBaseKey_),
+    // which collapses differently-NAMED locations sharing only a brand
+    // alias (e.g. "MEGA MART (FREMONT)"/"MEGA MART (PALO ALTO)") into one
+    // key — wrongly treating an exact match on one location as a partial
+    // split of an unrelated sibling location. literalBackfillBaseKey_ is
+    // strictly literal (case/whitespace only, no brand-alias
+    // canonicalization), matching how flagBackfillSecondLocation_/
+    // renameToFirstLocation_ actually derive a sibling's base name.
+    expect(backfill).toContain("function literalBackfillBaseKey_(");
+    expect(backfill).toMatch(
+      /literalBackfillBaseKey_\(r\.name\) === literalBackfillBaseKey_\(matchedRecord\.name\)/,
+    );
   });
 
   it("does not provision an installable onEdit trigger for customer lookup (deploy-apps-script.yml never runs setupAllTriggers)", () => {

@@ -462,6 +462,27 @@ function canonicalFamilyBaseKey_(name) {
 }
 
 /**
+ * Literal (case/whitespace-insensitive only, NOT canonically-aliased)
+ * stripped base name — deliberately narrower than canonicalFamilyBaseKey_.
+ * Used only to detect a genuine in-progress two-write split (see
+ * classifyCustomerCandidate_'s needsSplitRepair below): canonicalFamilyBaseKey_
+ * collapses differently-NAMED locations that merely share a brand alias
+ * (e.g. "MEGA MART (FREMONT)" and "MEGA MART (PALO ALTO)" both canonicalize
+ * to "MEGA MART") into the same key — which wrongly read an exact match on
+ * one location as a partial split of a DIFFERENT location, just because some
+ * unrelated sibling elsewhere in the same brand family happened to already
+ * carry a "- N" suffix (Codex review on PR #92, round 10). A genuine partial
+ * split never has this problem: flagBackfillSecondLocation_/
+ * renameToFirstLocation_ both derive a sibling's base name from
+ * stripBackfillLocationSuffix_(matchedRecord.name) with no canonicalization
+ * at all, so the primary and its own numbered sibling always share this
+ * literal key exactly.
+ */
+function literalBackfillBaseKey_(name) {
+  return stripBackfillLocationSuffix_(name).toUpperCase().replace(/\s+/g, " ").trim();
+}
+
+/**
  * True when 2+ existing TRUCKING records already share customerValue's base
  * name (ignoring any "- N" suffix) once BOTH sides are canonicalized the
  * same way — not just simple-normalized. A sibling's stripped base name is
@@ -651,7 +672,7 @@ function classifyCustomerCandidate_(name, aggregate, truckingRecords) {
     truckingRecords.some(function (r) {
       return r !== matchedRecord &&
         /^(.*?)\s*-\s*(\d+)\s*$/.test(r.name) &&
-        canonicalFamilyBaseKey_(r.name) === canonicalFamilyBaseKey_(matchedRecord.name);
+        literalBackfillBaseKey_(r.name) === literalBackfillBaseKey_(matchedRecord.name);
     });
   if (needsSplitRepair) {
     return {

@@ -420,6 +420,21 @@ function buildCustomerNoteText_(record) {
 }
 
 /**
+ * Splits an existing NOTE cell's text into the individual pipe-delimited
+ * sections it's actually made of (one or more "\n"-separated lines, each
+ * itself one or more " | "-separated sections) — used to test a generated
+ * part for exact membership instead of raw substring search (see
+ * appendCustomerNote_ below).
+ */
+function existingCustomerNoteParts_(existing) {
+  return existing
+    .split("\n")
+    .reduce(function (all, line) { return all.concat(line.split(" | ")); }, [])
+    .map(function (part) { return part.trim(); })
+    .filter(function (part) { return part; });
+}
+
+/**
  * Appends only the note sections not already present in the cell, not the
  * whole combined string. A customer typed and its address filled in as two
  * separate edits (Codex review on PR #92, round 6) matches the same record
@@ -429,13 +444,23 @@ function buildCustomerNoteText_(record) {
  * that the Contact/Services portion was already written — round 9's review
  * found that duplicated them on every address-fill. Filtering per-section
  * instead means only the new "Address: ..." piece gets appended.
+ *
+ * The per-section check itself must compare exact sections, not raw
+ * substrings: a staff-typed manual note like "Previous Address: 123 Main St"
+ * contains the generated "Address: 123 Main St" as a literal substring, and
+ * "Contact: Jane Doe (old)" contains "Contact: Jane Doe" the same way —
+ * plain indexOf treated both as "already present" and silently dropped a
+ * genuinely new section (Codex review on PR #92, round 10). Splitting the
+ * existing text into its own pipe-delimited sections and requiring an exact
+ * match avoids both false positives.
  */
 function appendCustomerNote_(sheet, rowNumber, noteCol, record) {
   var parts = customerNoteParts_(record);
   if (!parts.length) return;
   var noteRange = sheet.getRange(rowNumber, noteCol);
   var existing = String(noteRange.getDisplayValue() || "");
-  var newParts = parts.filter(function (part) { return existing.indexOf(part) === -1; });
+  var existingParts = existingCustomerNoteParts_(existing);
+  var newParts = parts.filter(function (part) { return existingParts.indexOf(part) === -1; });
   if (!newParts.length) return;
   var noteText = newParts.join(" | ");
   noteRange.setValue(existing ? existing + "\n" + noteText : noteText);

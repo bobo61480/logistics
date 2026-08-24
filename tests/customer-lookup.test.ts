@@ -472,4 +472,32 @@ describe("WH Trucking Request customer lookup: appending a note never duplicates
       { row: 5, col: 20, value: "Contact: Jane Doe | Services: Liftgate\nAddress: 123 Main St" },
     ]);
   });
+
+  // Round 10 (2026-08-24, Codex review on PR #92): the per-section
+  // duplicate check used plain string indexOf, a raw substring search — a
+  // staff-typed manual note containing a generated section as a substring
+  // of a longer line (not the section itself) was wrongly treated as
+  // "already present" and silently dropped, instead of appending the real
+  // current value.
+  it("still appends a section that only appears as a substring of a longer manual line", () => {
+    const sheet = makeFakeNoteSheet("Previous Address: 999 Old St");
+    const record = makeRecord({ name: "Acme Co", address: "123 Main St" });
+
+    helpers.appendCustomerNote_(sheet, 5, 20, record);
+
+    expect(sheet.writes).toEqual([
+      { row: 5, col: 20, value: "Previous Address: 999 Old St\nAddress: 123 Main St" },
+    ]);
+  });
+
+  it("still appends a section whose text is a substring of an unrelated existing section", () => {
+    const sheet = makeFakeNoteSheet("Contact: Jane Doe (old, no longer active)");
+    const record = makeRecord({ name: "Acme Co", contact: "Jane Doe" });
+
+    helpers.appendCustomerNote_(sheet, 5, 20, record);
+
+    expect(sheet.writes).toEqual([
+      { row: 5, col: 20, value: "Contact: Jane Doe (old, no longer active)\nContact: Jane Doe" },
+    ]);
+  });
 });

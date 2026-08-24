@@ -583,6 +583,30 @@ describe("customer backfill: live writes (2026-08-24 rollout)", () => {
       const result = helpers.classifyCustomerCandidate_("Solo Co", aggregate, records);
       expect(result.classification).toBe("ok-no-action");
     });
+
+    // Round 10 (2026-08-24, Codex review on PR #92): the repair check used
+    // canonicalFamilyBaseKey_ (the broad brand-alias key), which collapses
+    // differently-NAMED locations sharing only a brand alias — e.g. "MEGA
+    // MART (FREMONT)" and "MEGA MART (PALO ALTO)" both canonicalize to "MEGA
+    // MART" — into the same family. An exact match on the unsuffixed Palo
+    // Alto record was wrongly read as a partial split of Fremont just
+    // because Fremont happened to already have a "- 1" suffix, and would
+    // have renamed Palo Alto to "MEGA MART (PALO ALTO) - 1" for no reason —
+    // corrupting a location that was never part of any split.
+    it("does not treat an exact match as needing split-repair just because an unrelated same-brand location already has a suffix", () => {
+      const rows = makeTruckingRows([
+        { name: "MEGA MART (PALO ALTO)", address: "1 Palo Alto Way" },
+        { name: "MEGA MART (FREMONT) - 1", address: "1 Fremont Way" },
+      ]);
+      const header = helpers.findBackfillCustomerDbHeader_(rows);
+      const records = helpers.buildBackfillCustomerRecords_(rows, header);
+      const aggregate = makeFamilyAggregate_("MEGA MART (PALO ALTO)", {
+        "B2B/E-COM TRUCKING": ["1 Palo Alto Way"],
+      });
+
+      const result = helpers.classifyCustomerCandidate_("MEGA MART (PALO ALTO)", aggregate, records);
+      expect(result.classification).toBe("ok-no-action");
+    });
   });
 
   // Round 5 (2026-08-24, Codex review on PR #92): a canonical-only match
