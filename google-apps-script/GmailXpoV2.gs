@@ -9,7 +9,7 @@
 
 /* eslint-disable no-unused-vars */
 
-var GMAIL_XPO_V2_VERSION = "2026-08-24-v1-xpo-status-adapter";
+var GMAIL_XPO_V2_VERSION = "2026-08-24-v2-source-validation";
 var GMAIL_XPO_V2_LOOKBACK_DAYS = 4;
 var GMAIL_XPO_V2_SEEN_PREFIX = "GMAIL_XPO_V2_SEEN_";
 var GMAIL_XPO_V2_MAX_MESSAGES = 100;
@@ -115,7 +115,6 @@ function gmailXpoMarkSeenV2_(messageId) {
 function parseXpoMessageV2_(message) {
   var subject = String(message.getSubject() || "").trim();
   var body = String(message.getPlainBody() || "");
-  var text = subject + "\n" + body;
   var subjectPro = subject.match(/\bPro\s+([0-9]{8,12})\b/i);
   var shipmentPro = body.match(/\bShipment\s*:\s*([0-9]{3}-[0-9]{6})\b/i);
   var proNumber = body.match(/\bPro Number\s*:\s*([0-9]{8,12})\b/i);
@@ -152,8 +151,6 @@ function xpoCanonicalStatusV2_(rawStatus, body) {
 
 function xpoDisplayProV2_(value) {
   var digits = String(value || "").replace(/\D/g, "");
-  // XPO's email-facing Pro Number may contain wrapper digits. Prefer the
-  // canonical `Shipment: 123-456789` value whenever it is present.
   return digits || String(value || "").trim();
 }
 
@@ -171,8 +168,7 @@ function xpoFindHeaderV2_(rows) {
     pro: ["PRO#", "PRO", "PRONO", "TRACKING#", "TRACKINGNO"],
     status: ["STATUS", "WEBSITESTATUS"],
     carrier: ["CARRIER", "TRUCKING"],
-    shipDate: ["SHIPDATE", "PICKUPDATE", "DATE"],
-    note: ["NOTE", "NOTES", "REMARK", "REMARKS"]
+    shipDate: ["SHIPDATE", "PICKUPDATE", "DATE"]
   };
   for (var r = 0; r < Math.min(rows.length, 8); r++) {
     var map = {};
@@ -186,6 +182,21 @@ function xpoFindHeaderV2_(rows) {
     if (map.status !== undefined && (map.pro !== undefined || map.po !== undefined)) return { row: r, map: map };
   }
   return null;
+}
+
+function xpoValidatedStatusV2_(cell, canonicalStatus) {
+  var rule = cell.getDataValidation();
+  if (!rule) return canonicalStatus;
+  try {
+    if (rule.getCriteriaType() === SpreadsheetApp.DataValidationCriteria.VALUE_IN_LIST) {
+      var criteria = rule.getCriteriaValues();
+      var values = criteria && criteria[0] ? criteria[0] : [];
+      for (var i = 0; i < values.length; i++) {
+        if (String(values[i]).trim().toUpperCase() === String(canonicalStatus).trim().toUpperCase()) return String(values[i]);
+      }
+    }
+  } catch (e) { /* use canonical fallback */ }
+  return canonicalStatus;
 }
 
 function upsertXpoSourceV2_(record) {
@@ -211,8 +222,6 @@ function upsertXpoSourceV2_(record) {
 
   candidates.sort(function (a, b) { return b.score - a.score; });
   if (!candidates.length) {
-    // WH Trucking Request has its own strong PRO matcher. Give it one safe
-    // chance before parking the notice for review.
     var wh = upsertOutboundEmailV2_(record, false);
     if (wh.matched) {
       wh.sheet = "WH Trucking Request";
@@ -249,11 +258,10 @@ function upsertXpoSourceV2_(record) {
   setField("shipDate", record.shipDate, false, "Ship Date");
   if (record.status && map.status !== undefined) {
     var currentStatus = String(old[map.status] || "").trim();
-    if (canAutoTransitionLogisticsStatus_(currentStatus, record.status)) setField("status", record.status, true, "Status");
-  }
-  if (map.note !== undefined && record.rawStatus) {
-    var latestNote = "XPO: " + record.rawStatus;
-    setField("note", latestNote, true, "Note");
+    if (canAutoTransitionLogisticsStatus_(currentStatus, record.status)) {
+      var statusCell = sheet.getRange(hit.row, map.status + 1);
+      setField("status", xpoValidatedStatusV2_(statusCell, record.status), true, "Status");
+    }
   }
 
   if (changed && map.status !== undefined && isTerminalLogisticsStatus_(String(old[map.status] || ""))) {
