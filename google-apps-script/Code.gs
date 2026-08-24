@@ -26,23 +26,10 @@
 
 const SPREADSHEET_ID = "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc";
 const WMS_SPREADSHEET_ID = "14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I";
-<<<<<<< HEAD
-<<<<<<< HEAD
-
-const OUTBOUND_STATUS = ["", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "SHIPPING", "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED"];
-const INBOUND_STATUS = ["", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "SHIPPING", "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED", "N/A", "Customs Clearance", "FDA Review/Hold", "FWS Review/Hold", "Delayed"];
-=======
 const NATIONAL_SPREADSHEET_ID = "12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8";
 
 const OUTBOUND_STATUS = ["", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "SHIPPING", "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED"];
 const INBOUND_STATUS = ["", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "SHIPPING", "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED", "N/A", "Customs Clearance", "FDA Review / Hold", "FWS Review / Hold", "RECEIVED/FDA HOLD/REVIEW", "FDA Detained", "AQI Examination", "Delayed"];
->>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
-=======
-const NATIONAL_SPREADSHEET_ID = "12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8";
-
-const OUTBOUND_STATUS = ["", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "SHIPPING", "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED"];
-const INBOUND_STATUS = ["", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "SHIPPING", "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED", "N/A", "Customs Clearance", "FDA Review / Hold", "FWS Review / Hold", "RECEIVED/FDA HOLD/REVIEW", "FDA Detained", "AQI Examination", "Delayed"];
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 const ALLOWED_SHEETS = ["WH Trucking Request", "B2B/E-COM TRUCKING", "TRANSFERS", "ULTA", "IHERB", "IMPORTS", "NATIONAL ORDER PROGRESS", "Outbound Shipping Schedule", "TJX/ROSS"];
 
 const COMPLETED_STATUSES = ["SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED"];
@@ -54,11 +41,6 @@ const COMPLETED_STATUSES = ["SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "CO
 const INVENTORY_TRANSFER_STATUSES = ["DELIVERED", "RECEIVED", "COMPLETED"];
 const SKW_INBOUND_SHEET = "SKW_Inbound";
 const SKW_STOCK_SHEET = "SKW_Stock";
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-=======
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 const WMS_TRUCKING_LEDGER_SHEET = "WMS Trucking Processed";
 
 function doGet(e) {
@@ -80,9 +62,6 @@ function doGet(e) {
         salesOutbound: readSnapshotRows_(wms, null, 0, 2, 4199, 32),
         inventoryDashboardTable: readSnapshotRows_(master, "INVENTORY", null, 1, 6500, 15),
         skwInboundTable: readSnapshotRows_(master, "SKW_Inbound", null, 1, 2500, 18),
-<<<<<<< HEAD
-        skwStockTable: readSnapshotRows_(master, "SKW_Stock", null, 1, 2500, 10)
-=======
         skwStockTable: readSnapshotRows_(master, "SKW_Stock", null, 1, 2500, 10),
         // Optional: Validation.gs creates this tab lazily, so its absence must
         // not fail the whole snapshot. Feeds the dashboard's Gmail Ingestion card.
@@ -91,7 +70,6 @@ function doGet(e) {
         // endpoint — and read from the tail, because the tab is an append-only
         // audit trail whose newest rows matter most.
         pendingVerification: readPendingVerificationTail_(master, "PENDING VERIFICATION", 2000, 14)
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
       }
     });
   } catch (error) {
@@ -99,8 +77,6 @@ function doGet(e) {
   }
 }
 
-<<<<<<< HEAD
-=======
 function readPendingVerificationTail_(spreadsheet, sheetName, maxRows, maxColumns) {
   try {
     const sheet = spreadsheet.getSheetByName(sheetName);
@@ -158,7 +134,6 @@ function readPendingVerificationTail_(spreadsheet, sheetName, maxRows, maxColumn
   }
 }
 
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 function readSnapshotRows_(spreadsheet, sheetName, sheetId, startRow, maxRows, maxColumns) {
   let sheet = sheetName ? spreadsheet.getSheetByName(sheetName) : null;
   if (!sheet && sheetId !== null && sheetId !== undefined) {
@@ -171,10 +146,6 @@ function readSnapshotRows_(spreadsheet, sheetName, sheetId, startRow, maxRows, m
   if (lastRow < firstRow || lastColumn < 1) return [];
   return sheet.getRange(firstRow, 1, lastRow - firstRow + 1, lastColumn).getDisplayValues();
 }
-<<<<<<< HEAD
->>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
-=======
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 
 function doPost(e) {
   const lock = LockService.getScriptLock();
@@ -206,31 +177,6 @@ function doPost(e) {
       ? findInboundTarget_(sheet, request)
       : findOutboundTarget_(sheet, request);
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-    const allowed = (request.kind === "inbound" ? INBOUND_STATUS : OUTBOUND_STATUS).map((value) => String(value).toUpperCase());
-    const status = String(request.status || "").trim();
-    if (!allowed.includes(status.toUpperCase())) throw new Error("Status is not allowed.");
-=======
-    const status = canonicalLogisticsStatus_(request.status);
-    if (!status) throw new Error("Status is not allowed.");
-    const allowed = (request.kind === "inbound" ? INBOUND_STATUS : OUTBOUND_STATUS)
-      .map((value) => String(value).toUpperCase());
-    if (!allowed.includes(status.toUpperCase())) throw new Error("Status is not allowed for this relation.");
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
-
-    const current = String(target.getDisplayValue() || "").trim();
-    const requestCurrent = String(request.currentStatus || "").trim();
-    const normCurrent = canonicalLogisticsStatus_(current).toUpperCase();
-    const normRequest = canonicalLogisticsStatus_(requestCurrent).toUpperCase();
-
-    // Check concurrency, tolerating default status fallbacks ("" vs "SCHEDULED").
-    const DEFAULT_EQUIVALENT = ["", "SCHEDULED"];
-    const bothDefaults = DEFAULT_EQUIVALENT.indexOf(normCurrent) !== -1 && DEFAULT_EQUIVALENT.indexOf(normRequest) !== -1;
-    if (requestCurrent && normCurrent !== normRequest && !bothDefaults) {
-<<<<<<< HEAD
-      Logger.log("Concurrency note: Current='" + current + "', Request='" + requestCurrent + "'");
-=======
     const status = canonicalLogisticsStatus_(request.status);
     if (!status) throw new Error("Status is not allowed.");
     const allowed = (request.kind === "inbound" ? INBOUND_STATUS : OUTBOUND_STATUS)
@@ -247,10 +193,6 @@ function doPost(e) {
     const bothDefaults = DEFAULT_EQUIVALENT.indexOf(normCurrent) !== -1 && DEFAULT_EQUIVALENT.indexOf(normRequest) !== -1;
     if (requestCurrent && normCurrent !== normRequest && !bothDefaults) {
       throw new Error("Status changed in the source. Refresh before saving again.");
->>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
-=======
-      throw new Error("Status changed in the source. Refresh before saving again.");
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
     }
 
     target.setValue(status);
@@ -260,15 +202,7 @@ function doPost(e) {
       inventoryTransfer = transferInboundInventory_(spreadsheet, request);
     }
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-    // Format row in Google Sheets: Grey out completed rows, reset active rows
-=======
     // Format row in Google Sheets: grey out completed rows, reset active rows.
->>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
-=======
-    // Format row in Google Sheets: grey out completed rows, reset active rows.
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
     const rowIdx = target.getRow();
     const rowRange = sheet.getRange(rowIdx, 1, 1, Math.max(sheet.getLastColumn(), 1));
     const isCompleted = COMPLETED_STATUSES.includes(status.toUpperCase());
@@ -314,12 +248,6 @@ function inboundWriteTokens_(value) {
 function findInboundTarget_(sheet, request) {
   const row = Number(request.sourceRow);
   if (!Number.isInteger(row) || row < 3 || row > sheet.getLastRow()) throw new Error("Invalid IMPORTS source row.");
-<<<<<<< HEAD
-<<<<<<< HEAD
-  const headers = sheet.getRange(1, 1, 3, sheet.getLastColumn()).getDisplayValues();
-=======
-=======
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 
   const values = sheet.getDataRange().getDisplayValues();
   const schedulingRow = importsSectionMarkerRow_(values, "SCHEDULING");
@@ -352,10 +280,6 @@ function findInboundTarget_(sheet, request) {
   }
 
   const headers = values.slice(0, 3);
-<<<<<<< HEAD
->>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
-=======
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   const header = findHeader_(headers, ["WEBSITE STATUS", "STATUS", "INBOUND STATUS", "SHIPMENT STATUS"]);
   if (!header) throw new Error("Inbound status column not found.");
   return sheet.getRange(row, header.column);
@@ -522,37 +446,6 @@ function referencesMatch_(left, right) {
   return a.includes(b) || b.includes(a);
 }
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-/**
- * Periodically scans external "WMS PROMOTION" workbook sheet (14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I)
- * for rows where "Shipping Method" is "Trucking", combines multiple invoices
- * for the same customer & ship date into one entry, and imports/updates into "WH Trucking Request".
- */
-function scanAndImportWmsTruckingOrders() {
-  const lock = LockService.getScriptLock();
-  if (!lock.tryLock(10000)) return { ok: false, error: "Lock timeout" };
-  try {
-    let wmsSpreadsheet;
-    try {
-      wmsSpreadsheet = SpreadsheetApp.openById(WMS_SPREADSHEET_ID);
-    } catch (e) {
-      wmsSpreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
-=======
-// The legacy WMS importer was removed on 2026-08-12. The only callable legacy
-// handler name now lives in zz_WmsTruckingCompatibility.gs and delegates to V2.
-
-function findWmsTruckingHeader_(rows) {
-  for (let r = 0; r < Math.min(rows.length, 10); r++) {
-    const map = headerMap_(rows[r]);
-    if (map["INVOICE#"] !== undefined && map["CUSTOMER NAME"] !== undefined &&
-        map["SHIP OUT DATE"] !== undefined && map["SHIPPING METHOD"] !== undefined) {
-      return { rowIndex: r, map: map };
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
-    }
-  }
-<<<<<<< HEAD
-=======
 // The legacy WMS importer was removed on 2026-08-12. The only callable legacy
 // handler name now lives in zz_WmsTruckingCompatibility.gs and delegates to V2.
 
@@ -564,8 +457,6 @@ function findWmsTruckingHeader_(rows) {
       return { rowIndex: r, map: map };
     }
   }
-=======
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   throw new Error("Could not locate the WMS Stylekorean header row.");
 }
 
@@ -602,11 +493,6 @@ function canonicalWmsCustomer_(value) {
     "GLOWISS": "GLOWISS",
     "GLOWISS LLC": "GLOWISS"
   };
-<<<<<<< HEAD
-  if (key.indexOf("MEGA MART") === 0) return "MEGA MART";
-  if (key.indexOf("TOKTOK BEAUTY") === 0) return "TOKTOK BEAUTY";
-  if (key.indexOf("ROYAL IMEX") === 0) return "ROYAL IMEX INC";
-=======
   // Word-boundary anchored, not indexOf(...) === 0 — a raw prefix match let an
   // unrelated customer like "MEGA MARTINEZ DISTRIBUTION" collapse into the
   // "MEGA MART" canonical key and merge with a real Mega Mart shipment on the
@@ -615,7 +501,6 @@ function canonicalWmsCustomer_(value) {
   if (/^MEGA MART\b/.test(key)) return "MEGA MART";
   if (/^TOKTOK BEAUTY\b/.test(key)) return "TOKTOK BEAUTY";
   if (/^ROYAL IMEX\b/.test(key)) return "ROYAL IMEX INC";
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   if (key === "PPIH GUAM" || key === "GREAT LUCK PPIH GUAM") return "Great Luck Inc. (PPIH - GUAM)";
   return aliases[key] || raw.toUpperCase().replace(/\s+/g, " ").trim();
 }
@@ -707,10 +592,6 @@ function setMappedValue_(row, map, header, value) {
   if (String(row[index] || "").trim() === String(value).trim()) return false;
   row[index] = value;
   return true;
-<<<<<<< HEAD
->>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
-=======
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 }
 
 function exactVal_(row, map, names) {
@@ -721,26 +602,6 @@ function exactVal_(row, map, names) {
 }
 
 /**
-<<<<<<< HEAD
-<<<<<<< HEAD
- * Creates or resets the 30-minute time-driven trigger for WMS Trucking scanner.
- * Deletes all obsolete/legacy triggers in the project to ensure a clean schedule.
-=======
- * Backward-compatible trigger setup entry point. Trigger ownership is centralized
- * in Triggers.gs so this helper can no longer recreate the unsafe legacy handler.
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
- */
-function createTimeDrivenTrigger() {
-  return setupAllTriggers();
-}
-
-<<<<<<< HEAD
-  ScriptApp.newTrigger("scanAndImportWmsTruckingOrders")
-    .timeBased()
-    .everyMinutes(30)
-    .create();
-  Logger.log("30-minute time-driven trigger cleanly provisioned for scanAndImportWmsTruckingOrders");
-=======
  * Backward-compatible trigger setup entry point. Trigger ownership is centralized
  * in Triggers.gs so this helper can no longer recreate the unsafe legacy handler.
  */
@@ -751,12 +612,6 @@ function createTimeDrivenTrigger() {
 /** Backward-compatible entry point for anyone who previously used this name. */
 function create30MinTrigger() {
   return setupAllTriggers();
->>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
-=======
-/** Backward-compatible entry point for anyone who previously used this name. */
-function create30MinTrigger() {
-  return setupAllTriggers();
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 }
 
 /**

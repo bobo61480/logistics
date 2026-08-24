@@ -7,14 +7,7 @@ pnpm-lock.yaml
 pnpm-workspace.yaml
 *.log
 .next-stale*
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
 .wrangler.production.toml
->>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
-=======
-.wrangler.production.toml
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 
 # Prevent accidental version-specifier files (e.g. from mistyped `pip install pkg =1.0.0`)
 /=*
@@ -26,19 +19,10 @@ pnpm-workspace.yaml
 bob-task-*.json
 git-error-*.txt
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-=======
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 # Playwright output
 test-results/
 playwright-report/
 
-<<<<<<< HEAD
->>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
-=======
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 # OS artifacts
 .DS_Store
 Thumbs.db

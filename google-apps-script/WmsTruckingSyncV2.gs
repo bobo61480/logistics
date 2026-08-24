@@ -11,9 +11,6 @@
  */
 
 var WMS_TRUCKING_IMPORT_MIN_DATE = "2026-08-01";
-<<<<<<< HEAD
-var WMS_TRUCKING_SYNC_ENABLED = false;
-=======
 var WMS_TRUCKING_SYNC_ENABLED = true;
 // Re-enabled 2026-08-23 after fixing the customer-canonicalization bug that
 // caused the 2026-08-12 KORHEIM wrong-merge incident (canonicalWmsCustomer_
@@ -23,7 +20,6 @@ var WMS_TRUCKING_SYNC_ENABLED = true;
 // so the fix can be validated against live data before trusting it with
 // writes again. Flip to false only after reviewing several dry-run cycles.
 var WMS_TRUCKING_DRY_RUN = true;
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 
 function wmsImportEligible_(dateInfo) {
   var key = String(dateInfo && dateInfo.key || "").trim();
@@ -193,19 +189,6 @@ function scanAndImportWmsTruckingOrdersV2() {
         var removedCount = currentInvoices.length - retainedInvoices.length;
         var changed = false;
 
-<<<<<<< HEAD
-        changed = writeMappedValue_(targetSheet, match.rowNumber, targetMap, "CUSTOMER", group.customer) || changed;
-        changed = writeMappedValue_(targetSheet, match.rowNumber, targetMap, "INVOICE NO.", mergedInvoices.join("\n")) || changed;
-        changed = writeMappedValue_(targetSheet, match.rowNumber, targetMap, "SHIP DATE", group.shipDate) || changed;
-
-        if (totalAmount > 0 && targetMap["VALUE"] !== undefined && !current[targetMap["VALUE"]]) {
-          targetSheet.getRange(match.rowNumber, targetMap["VALUE"] + 1).setValue(totalAmount);
-          changed = true;
-        }
-        if (targetMap["STATUS"] !== undefined && !current[targetMap["STATUS"]]) {
-          targetSheet.getRange(match.rowNumber, targetMap["STATUS"] + 1).setValue("WORK IN PROGRESS");
-          changed = true;
-=======
         if (WMS_TRUCKING_DRY_RUN) {
           changed = wouldChangeMappedValue_(current, targetMap, "CUSTOMER", group.customer) ||
             wouldChangeMappedValue_(current, targetMap, "INVOICE NO.", mergedInvoices.join("\n")) ||
@@ -226,7 +209,6 @@ function scanAndImportWmsTruckingOrdersV2() {
             targetSheet.getRange(match.rowNumber, targetMap["STATUS"] + 1).setValue("WORK IN PROGRESS");
             changed = true;
           }
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
         }
 
         match.invoices = mergedInvoices.slice();
@@ -242,15 +224,11 @@ function scanAndImportWmsTruckingOrdersV2() {
       newRow[targetMap["SHIP DATE"]] = group.shipDate;
       if (targetMap["VALUE"] !== undefined && totalAmount > 0) newRow[targetMap["VALUE"]] = totalAmount;
       if (targetMap["STATUS"] !== undefined) newRow[targetMap["STATUS"]] = "WORK IN PROGRESS";
-<<<<<<< HEAD
-      pendingRows.push({ row: newRow, group: group });
-=======
       if (WMS_TRUCKING_DRY_RUN) {
         logWmsDryRun_("insert", null, group, group.invoices, totalAmount);
       } else {
         pendingRows.push({ row: newRow, group: group });
       }
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
       imported++;
     });
 
@@ -279,11 +257,7 @@ function scanAndImportWmsTruckingOrdersV2() {
 
     SpreadsheetApp.flush();
     Logger.log(
-<<<<<<< HEAD
-      "WMS trucking v2: groups=" + groups.size +
-=======
       "WMS trucking v2" + (WMS_TRUCKING_DRY_RUN ? " (DRY RUN)" : "") + ": groups=" + groups.size +
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
       ", imported=" + imported +
       ", updated=" + updated +
       ", repaired=" + repaired +
@@ -293,10 +267,7 @@ function scanAndImportWmsTruckingOrdersV2() {
 
     return {
       ok: true,
-<<<<<<< HEAD
-=======
       dryRun: WMS_TRUCKING_DRY_RUN,
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
       groups: groups.size,
       imported: imported,
       updated: updated,
@@ -312,8 +283,6 @@ function scanAndImportWmsTruckingOrdersV2() {
     lock.releaseLock();
   }
 }
-<<<<<<< HEAD
-=======
 
 /** Non-mutating twin of writeMappedValue_ — reports whether a write would
  * change the cell, without performing it. Used only in dry-run mode. */
@@ -342,4 +311,3 @@ function logWmsDryRun_(action, rowNumber, group, invoices, totalAmount) {
     Logger.log("logWmsDryRun_ failed: " + e.message);
   }
 }
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481

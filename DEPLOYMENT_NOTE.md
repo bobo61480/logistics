@@ -39,20 +39,9 @@ the WRITE_ENDPOINT `/exec` URL used by `app/page.tsx`.
    `WRITE_ENDPOINT` in `app/page.tsx` does not need to change.
 4. Re-verify with a test status write before trusting it in production.
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-`backup/Code.gs` is now known-stale relative to this version and should not
-be used as a reference; kept only for history.
-=======
 The former `backup/Code.gs` copy was known-stale relative to this version and
 has been removed from the working source tree; use git history if you need to
 audit that snapshot.
->>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
-=======
-The former `backup/Code.gs` copy was known-stale relative to this version and
-has been removed from the working source tree; use git history if you need to
-audit that snapshot.
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 
 ---
 

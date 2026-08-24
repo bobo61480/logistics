@@ -1,17 +1,9 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-import { ProductionHealth } from "./production-health";
-import { StyleSwitcher } from "./style-switcher";
->>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
-=======
 import { ProductionHealth } from "./production-health";
 import { StyleSwitcher } from "./style-switcher";
 import { THEME_BOOT_SCRIPT } from "./theme";
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -49,16 +41,8 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
         <StyleSwitcher />
         <ProductionHealth />
->>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
-=======
-        <StyleSwitcher />
-        <ProductionHealth />
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
         {children}
       </body>
     </html>

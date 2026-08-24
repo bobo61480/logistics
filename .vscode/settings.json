@@ -1,9 +1,4 @@
 {
-<<<<<<< HEAD
-<<<<<<< HEAD
-    "google.datacloud.starredProjects": [
-        "key=AIzaSyBqwLCAX4w6VJg2FC3iKdTpkiO8faPFmrY"
-=======
     "workbench.browser.openLocalhostLinks": true,
     "playwright.pickLocatorCopyToClipboard": true,
     "playwright.reuseBrowser": false,
@@ -11,28 +6,11 @@
     "playwright.showTrace": true,
     "google.datacloud.starredProjects": [
         "key=AIzaSyBqwLCAX4w6VJg2FC3iKdaTpkiO8faPFmrY"
->>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
-=======
-    "workbench.browser.openLocalhostLinks": true,
-    "playwright.pickLocatorCopyToClipboard": true,
-    "playwright.reuseBrowser": false,
-    "playwright.runGlobalSetupOnEachRun": true,
-    "playwright.showTrace": true,
-    "google.datacloud.starredProjects": [
-        "key=AIzaSyBqwLCAX4w6VJg2FC3iKdaTpkiO8faPFmrY"
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
     ],
     "google.datacloud.expandMenus": true,
     "google.datacloud.executeCellToolForNotebookMCP": true,
     "google.datacloud.executeCellToolConsent": true,
     "google.datacloud.composer.region": "us-west2",
-<<<<<<< HEAD
-<<<<<<< HEAD
-    "google.datacloud.composer.project": "logistics-5609"
->>>>>>> c01631ba5f4c7212516cbd0b2421d06155b61b5d
-=======
-=======
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
     "google.datacloud.composer.project": "logistics-5609",
     "chat.mcp.serverSampling": {
         "logistics/.vscode/mcp.json: github": {
@@ -461,11 +439,6 @@
                 "openrouter/OpenRouter/z-ai/glm-5v-turbo"
             ]
         }
-<<<<<<< HEAD
-    }
->>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
-=======
     },
     "claudeCode.useCtrlEnterToSend": true
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 }

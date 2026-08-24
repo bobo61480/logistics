@@ -7,11 +7,8 @@ import {
 } from "./database";
 import { fetchOperationalSources } from "./sources";
 import { handleStatusCommand } from "./status-command";
-<<<<<<< HEAD
-=======
 import { handlePendingReviewCommand } from "./pending-review-command";
 import { handleTrackingCommand } from "./tracking-command";
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 
 const WORKER_VERSION = "2026-08-13-worker-v8-public-guardrails";
 const SNAPSHOT_CACHE_URL = "https://stylekorean.internal/api/logistics/snapshot";
@@ -254,13 +251,10 @@ export default {
         : json({ ok: false, error: "Method not allowed" }, 405);
     } else if (url.pathname === "/api/logistics/status") {
       response = await handleStatusCommand(request, env, context);
-<<<<<<< HEAD
-=======
     } else if (url.pathname === "/api/logistics/pending-review") {
       response = await handlePendingReviewCommand(request, env, context);
     } else if (url.pathname === "/api/logistics/tracking") {
       response = await handleTrackingCommand(request, env);
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
     } else if (url.pathname === "/api/logistics/health") {
       response = request.method === "GET"
         ? await handleHealth(env)

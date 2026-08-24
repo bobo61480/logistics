@@ -55,8 +55,6 @@ describe("WMS trucking synchronization safeguards", () => {
     expect(helpers.canonicalWmsCustomer_("Yamibuy")).toBe("YAMIBUY");
   });
 
-<<<<<<< HEAD
-=======
   // Regression test for the 2026-08-12 incident (KORHEIM invoices wrongly
   // merged) — the customer-matching half of that bug class was an unanchored
   // prefix check (`key.indexOf("MEGA MART") === 0`) that let any customer
@@ -69,7 +67,6 @@ describe("WMS trucking synchronization safeguards", () => {
     expect(helpers.canonicalWmsCustomer_("ROYAL IMEXPORT GROUP")).not.toBe("ROYAL IMEX INC");
   });
 
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   it("accepts freight methods and excludes pickup and parcel carriers", () => {
     expect(helpers.isWmsFreightMethod_("TRUCKING")).toBe(true);
     expect(helpers.isWmsFreightMethod_("LTL Freight")).toBe(true);

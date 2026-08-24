@@ -187,8 +187,6 @@ export async function readDatabaseHealth(db: D1Database) {
   } : { ready: false };
 }
 
-<<<<<<< HEAD
-=======
 export async function recordPendingReviewDecision(db: D1Database, event: {
   correlationId: string;
   reviewKey: string;
@@ -212,7 +210,6 @@ export async function recordPendingReviewDecision(db: D1Database, event: {
     .run();
 }
 
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 export async function recordConfirmedStatusWrite(db: D1Database, event: {
   correlationId: string;
   entityType: "inbound" | "outbound";
