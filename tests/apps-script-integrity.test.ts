@@ -83,4 +83,22 @@ describe("Apps Script production integrity", () => {
     expect(code).not.toContain('key.indexOf("TOKTOK BEAUTY") === 0');
     expect(code).not.toContain('key.indexOf("ROYAL IMEX") === 0');
   });
+
+  it("runs the WH Trucking Request customer-lookup create path live, after a dry-run review period", () => {
+    const lookup = read("google-apps-script/CustomerLookup.gs");
+    expect(lookup).toContain("var CUSTOMER_LOOKUP_ENABLED = true;");
+    expect(lookup).toContain("var CUSTOMER_CREATE_DRY_RUN = false;");
+  });
+
+  it("runs the customer backfill batch job live, with the '- 1'/'- 2' second-location write path implemented", () => {
+    const backfill = read("google-apps-script/CustomerBackfill.gs");
+    expect(backfill).toContain("var CUSTOMER_BACKFILL_ENABLED = true;");
+    expect(backfill).toContain("var CUSTOMER_BACKFILL_DRY_RUN = false;");
+    expect(backfill).toContain("function appendBackfillCustomer_(");
+    expect(backfill).toContain("function fillBackfillCustomerAddress_(");
+    expect(backfill).toContain("function flagBackfillSecondLocation_(");
+    // Every candidate is still logged to PIPELINE LOG regardless of dry-run
+    // state, live or not — the audit trail must never be silently dropped.
+    expect(backfill).toContain("function logCustomerBackfillCandidate_(");
+  });
 });

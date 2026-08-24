@@ -17,22 +17,20 @@
  * an ambiguous canonical match is treated as no match rather than guessed,
  * the same discipline that fixed the 2026-08-12 WMS trucking incident.
  *
- * When no match exists at all, a new customer stub is NOT written to
- * TRUCKING live — see CUSTOMER_CREATE_DRY_RUN. This mirrors the
- * WmsTruckingSyncV2 dry-run rollout: the customer domain just caused a
- * real wrong-merge incident, so new automation here ships log-only first.
+ * When no match exists at all, a new customer row IS written to TRUCKING
+ * live (CUSTOMER_CREATE_DRY_RUN = false, flipped 2026-08-24 after a review
+ * period with no writes). Set it back to true to return to log-only
+ * (PIPELINE LOG "CUSTOMER DB DRY RUN") without touching any other code.
  *
- * A full backfill/reconciliation of the customer master against the B2B/
- * E-Com transaction-log tabs (with duplicate-address disambiguation) is
- * intentionally NOT part of this — that is a separate, larger batch job
- * (structurally similar to WmsTruckingSyncV2 itself) and needs its own
- * design pass; this file only handles the live per-edit lookup + create-
- * proposal described above.
+ * The full backfill/reconciliation of the customer master against the B2B/
+ * E-Com transaction-log tabs (with duplicate-address disambiguation) lives
+ * in the separate CustomerBackfill.gs batch job, not here — this file only
+ * handles the live per-edit lookup + create described above.
  */
 
 var CUSTOMER_DB_SHEET_NAME = "TRUCKING";
 var CUSTOMER_LOOKUP_ENABLED = true;
-var CUSTOMER_CREATE_DRY_RUN = true;
+var CUSTOMER_CREATE_DRY_RUN = false;
 
 var CUSTOMER_SERVICE_FLAGS = [
   ["LIFTGATE", "Liftgate"],
@@ -167,12 +165,11 @@ function appendCustomerNote_(sheet, rowNumber, noteCol, record) {
 }
 
 /**
- * No TRUCKING record matched this customer name at all. Never appends a new
- * row live by default (CUSTOMER_CREATE_DRY_RUN) — logs the proposal to the
- * existing PIPELINE LOG sheet (same helper item 8's Shipment Notices and the
- * WMS trucking sync's dry-run already use) so the team can review real
- * proposals against real data before trusting this to grow the customer
- * database unattended.
+ * No TRUCKING record matched this customer name at all. Appends a new row
+ * live with whatever address was already typed into this WH Trucking
+ * Request row (often blank — filled in by staff later), unless
+ * CUSTOMER_CREATE_DRY_RUN is set back to true, in which case it only logs
+ * the proposal to PIPELINE LOG ("CUSTOMER DB DRY RUN") for review instead.
  */
 function proposeNewCustomer_(customerValue, seedAddress, whTruckingRow, dbSheet, dbHeader, targetDbRow) {
   if (CUSTOMER_CREATE_DRY_RUN) {

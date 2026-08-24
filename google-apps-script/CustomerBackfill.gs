@@ -1,17 +1,23 @@
 /*
- * CustomerBackfill.gs — TRUCKING customer database backfill (dry-run, batch)
+ * CustomerBackfill.gs — TRUCKING customer database backfill (batch)
  *
  * Deferred from CustomerLookup.gs (see that file's header comment): a full
  * reconciliation of the TRUCKING customer master against the B2B/E-COM
  * TRUCKING transaction log, using the Customer Entry tab as a secondary
- * address source, flagging conflicting addresses as possible second
- * locations instead of guessing.
+ * address source, preserving conflicting addresses as distinct, numbered
+ * locations instead of guessing which one is current.
  *
  * Same discipline as WmsTruckingSyncV2.gs/CustomerLookup.gs after the
- * 2026-08-12 KORHEIM wrong-merge incident: never guess among ambiguous
- * matches, ship dry-run/log-only. This file never writes to TRUCKING —
- * every candidate (new customer, address conflict, or a record with no
- * address on file at all) is logged to PIPELINE LOG for a human to review.
+ * 2026-08-12 KORHEIM wrong-merge incident — applied to the customer domain
+ * as "never overwrite, never guess which address is right; when two
+ * addresses genuinely conflict, keep both under distinct '- 1'/'- 2'
+ * location suffixes" rather than as a dry-run/log-only rollout: after a
+ * review period with the job in dry-run and no writes, this now runs live
+ * (CUSTOMER_BACKFILL_ENABLED = true, CUSTOMER_BACKFILL_DRY_RUN = false).
+ * Set CUSTOMER_BACKFILL_DRY_RUN back to true to return to log-only without
+ * touching any other code. Every candidate (new customer, address
+ * conflict, or a record with no address on file at all) is always logged
+ * to PIPELINE LOG, live or dry-run, for an audit trail either way.
  * Per an explicit product decision, candidates are NOT filtered by how
  * often a name appears in the transaction log (most distinct names in the
  * live log appear only once) — every distinct name is reconciled and
@@ -39,8 +45,8 @@
  * for that one ambiguous column.
  */
 
-var CUSTOMER_BACKFILL_ENABLED = false;
-var CUSTOMER_BACKFILL_DRY_RUN = true;
+var CUSTOMER_BACKFILL_ENABLED = true;
+var CUSTOMER_BACKFILL_DRY_RUN = false;
 var CUSTOMER_BACKFILL_DB_SHEET_NAME = "TRUCKING";
 var B2B_TRUCKING_SHEET_NAME = "B2B/E-COM TRUCKING";
 var CUSTOMER_ENTRY_SHEET_NAME = "Customer Entry";
@@ -49,13 +55,6 @@ function reconcileCustomerBackfill() {
   if (!CUSTOMER_BACKFILL_ENABLED) {
     Logger.log("Customer backfill is disabled.");
     return { ok: true, skipped: "disabled" };
-  }
-  if (!CUSTOMER_BACKFILL_DRY_RUN) {
-    // No live-write path exists yet — this flag is a documented placeholder
-    // for a future PR, not a working toggle. Flip CUSTOMER_BACKFILL_ENABLED
-    // on its own first and review a few PIPELINE LOG cycles before anyone
-    // builds a path that writes TRUCKING live.
-    throw new Error("Live customer-backfill writes are not implemented; this build is dry-run only.");
   }
 
   var lock = LockService.getScriptLock();
@@ -69,7 +68,12 @@ function reconcileCustomerBackfill() {
 
     var truckingValues = truckingSheet.getDataRange().getDisplayValues();
     var truckingHeader = findBackfillCustomerDbHeader_(truckingValues);
+    // Mutable — updated as rows are written during this same run (address
+    // fills, second-location renames, new appends) so a later candidate's
+    // classification/suffix numbering sees this run's own writes, not a
+    // stale pre-run snapshot.
     var truckingRecords = buildBackfillCustomerRecords_(truckingValues, truckingHeader);
+    var nextTruckingRow = truckingValues.length + 1;
 
     var b2bValues = b2bSheet.getDataRange().getDisplayValues();
     var b2bHeader = findB2bTruckingHeader_(b2bValues);
@@ -89,15 +93,33 @@ function reconcileCustomerBackfill() {
 
     aggregation.aggregates.forEach(function (aggregate, exactKey) {
       var classification = classifyCustomerCandidate_(aggregate.name, aggregate, truckingRecords);
+
       if (classification.classification === "would-create") {
         wouldCreate++;
         logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
+        if (!CUSTOMER_BACKFILL_DRY_RUN) {
+          appendBackfillCustomer_(truckingSheet, truckingHeader, aggregate.name, classification.proposedAddress, nextTruckingRow);
+          truckingRecords.push(makeBackfillRecord_(nextTruckingRow, aggregate.name, classification.proposedAddress));
+          nextTruckingRow++;
+        }
       } else if (classification.classification === "would-flag-second-location") {
         wouldFlag++;
         logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
+        if (!CUSTOMER_BACKFILL_DRY_RUN) {
+          var newName = flagBackfillSecondLocation_(
+            truckingSheet, truckingHeader, truckingRecords, classification.matchedRecord,
+            classification.proposedAddress, nextTruckingRow
+          );
+          truckingRecords.push(makeBackfillRecord_(nextTruckingRow, newName, classification.proposedAddress));
+          nextTruckingRow++;
+        }
       } else if (classification.classification === "would-fill-missing-address") {
         wouldFill++;
         logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
+        if (!CUSTOMER_BACKFILL_DRY_RUN) {
+          fillBackfillCustomerAddress_(truckingSheet, truckingHeader, classification.matchedRecord, classification.proposedAddress);
+          classification.matchedRecord.address = classification.proposedAddress;
+        }
       } else {
         okCount++;
       }
@@ -109,7 +131,8 @@ function reconcileCustomerBackfill() {
       wouldFlagSecondLocation: wouldFlag,
       wouldFillMissingAddress: wouldFill,
       okNoAction: okCount,
-      skippedBlankNameRows: aggregation.skippedBlankNameRows
+      skippedBlankNameRows: aggregation.skippedBlankNameRows,
+      dryRun: CUSTOMER_BACKFILL_DRY_RUN
     }));
 
     Logger.log(
@@ -118,7 +141,8 @@ function reconcileCustomerBackfill() {
       ", wouldFlagSecondLocation=" + wouldFlag +
       ", wouldFillMissingAddress=" + wouldFill +
       ", ok=" + okCount +
-      ", skippedBlankNameRows=" + aggregation.skippedBlankNameRows
+      ", skippedBlankNameRows=" + aggregation.skippedBlankNameRows +
+      ", dryRun=" + CUSTOMER_BACKFILL_DRY_RUN
     );
 
     return {
@@ -128,7 +152,8 @@ function reconcileCustomerBackfill() {
       wouldFlagSecondLocation: wouldFlag,
       wouldFillMissingAddress: wouldFill,
       okNoAction: okCount,
-      skippedBlankNameRows: aggregation.skippedBlankNameRows
+      skippedBlankNameRows: aggregation.skippedBlankNameRows,
+      dryRun: CUSTOMER_BACKFILL_DRY_RUN
     };
   } catch (error) {
     Logger.log("Error in reconcileCustomerBackfill: " + error.message);
@@ -356,13 +381,105 @@ function classifyCustomerCandidate_(name, aggregate, truckingRecords) {
 }
 
 /**
- * Logs a candidate to PIPELINE LOG (never writes TRUCKING). occurrenceCount
- * lets a human sort/triage the full, unfiltered list after the fact even
- * though nothing was excluded before logging.
+ * Strips a trailing " - <N>" location-disambiguation suffix (the sheet's
+ * existing convention, e.g. "OVER N OVER Over Beauty - 1/-2/-3") from a
+ * customer name, returning the bare base name shared by every location of
+ * the same brand. A name with no suffix is returned unchanged.
+ */
+function stripCustomerLocationSuffix_(name) {
+  var match = /^(.*?)\s*-\s*(\d+)\s*$/.exec(name);
+  return match ? match[1].trim() : name;
+}
+
+/**
+ * Finds the next unused numeric location suffix for baseName across
+ * records, treating an unsuffixed record matching baseName as implicit
+ * location "1" (so the first real duplicate becomes "- 2", never
+ * colliding with the original). Always appends after the highest suffix
+ * seen rather than filling a gap, so numbering only ever grows.
+ */
+function nextCustomerLocationSuffix_(baseName, records) {
+  var baseKey = baseName.toUpperCase().replace(/\s+/g, " ").trim();
+  var used = [0];
+  records.forEach(function (record) {
+    var match = /^(.*?)\s*-\s*(\d+)\s*$/.exec(record.name);
+    var recordBase = (match ? match[1] : record.name).toUpperCase().replace(/\s+/g, " ").trim();
+    if (recordBase !== baseKey) return;
+    used.push(match ? parseInt(match[2], 10) : 1);
+  });
+  return Math.max.apply(null, used) + 1;
+}
+
+function makeBackfillRecord_(rowNumber, name, address) {
+  return {
+    rowNumber: rowNumber,
+    name: name,
+    exactKey: name.toUpperCase().replace(/\s+/g, " "),
+    canonicalKey: normalizeWmsCustomerKey_(canonicalWmsCustomer_(name)),
+    address: address || ""
+  };
+}
+
+/**
+ * Appends a brand-new customer row to TRUCKING (name + best available
+ * observed address, which is often blank and filled in by staff later).
+ * Mirrors CustomerLookup.gs's proposeNewCustomer_ live-write for the same
+ * "no match at all" case, just triggered from the batch job instead of a
+ * live edit.
+ */
+function appendBackfillCustomer_(truckingSheet, header, name, address, targetRow) {
+  var width = Math.max.apply(null, Object.keys(header.map).map(function (key) { return header.map[key]; })) + 1;
+  var newRow = new Array(width).fill("");
+  newRow[header.map["CUSTOMER NAME"]] = name;
+  if (address) newRow[header.map["ADDRESS"]] = address;
+  truckingSheet.getRange(targetRow, 1, 1, width).setValues([newRow]);
+}
+
+/**
+ * Fills a currently-blank ADDRESS cell on an existing TRUCKING row.
+ * classifyCustomerCandidate_ only ever returns "would-fill-missing-address"
+ * when that cell is already confirmed blank, so this never overwrites a
+ * real value.
+ */
+function fillBackfillCustomerAddress_(truckingSheet, header, matchedRecord, address) {
+  truckingSheet.getRange(matchedRecord.rowNumber, header.map["ADDRESS"] + 1).setValue(address);
+}
+
+/**
+ * Handles a conflicting-address candidate by preserving both addresses as
+ * distinct, numbered locations rather than guessing which one is current —
+ * the exact discipline that fixed the 2026-08-12 KORHEIM incident, applied
+ * here as "mark 1 or 2" per an explicit product decision. If the existing
+ * matched row has no location suffix yet, it is renamed in place to
+ * "<name> - 1" (its implicit first location) before the new location is
+ * appended as "<name> - <next>". Returns the new row's name.
+ */
+function flagBackfillSecondLocation_(truckingSheet, header, truckingRecords, matchedRecord, newAddress, targetRow) {
+  var baseName = stripCustomerLocationSuffix_(matchedRecord.name);
+  var alreadySuffixed = /^(.*?)\s*-\s*(\d+)\s*$/.test(matchedRecord.name);
+
+  if (!alreadySuffixed) {
+    var renamed = baseName + " - 1";
+    truckingSheet.getRange(matchedRecord.rowNumber, header.map["CUSTOMER NAME"] + 1).setValue(renamed);
+    matchedRecord.name = renamed;
+    matchedRecord.exactKey = renamed.toUpperCase().replace(/\s+/g, " ");
+  }
+
+  var nextSuffix = nextCustomerLocationSuffix_(baseName, truckingRecords);
+  var newName = baseName + " - " + nextSuffix;
+  appendBackfillCustomer_(truckingSheet, header, newName, newAddress, targetRow);
+  return newName;
+}
+
+/**
+ * Logs a candidate to PIPELINE LOG. occurrenceCount lets a human sort/
+ * triage the full, unfiltered list after the fact even though nothing was
+ * excluded before logging. Logged unconditionally (live or dry-run) so
+ * there is always an audit trail of what this job did or would do.
  */
 function logCustomerBackfillCandidate_(name, aggregate, classification) {
   try {
-    logPipeline_("CUSTOMER BACKFILL DRY RUN", name, JSON.stringify({
+    logPipeline_(CUSTOMER_BACKFILL_DRY_RUN ? "CUSTOMER BACKFILL DRY RUN" : "CUSTOMER BACKFILL LIVE", name, JSON.stringify({
       action: classification.classification,
       customer: name,
       occurrenceCount: aggregate.occurrenceCount,

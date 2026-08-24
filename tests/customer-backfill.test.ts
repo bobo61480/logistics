@@ -20,6 +20,9 @@ type Aggregate = {
 type Header = { rowIndex: number; map: Record<string, number> };
 type B2bHeader = { rowIndex: number; nameCol: number; addressCol: number };
 
+type FakeWrite = { row: number; col: number; numRows: number; numCols: number; values?: unknown[][]; value?: unknown };
+type FakeSheet = { writes: FakeWrite[]; getRange: (row: number, col: number, numRows?: number, numCols?: number) => unknown };
+
 type BackfillHelpers = {
   findB2bTruckingHeader_: (rows: string[][]) => B2bHeader;
   buildB2bCustomerAggregates_: (
@@ -43,6 +46,18 @@ type BackfillHelpers = {
     addressVariants: string[];
     sourcesUsed: string[];
   };
+  stripCustomerLocationSuffix_: (name: string) => string;
+  nextCustomerLocationSuffix_: (baseName: string, records: CustomerRecord[]) => number;
+  appendBackfillCustomer_: (sheet: FakeSheet, header: Header, name: string, address: string, targetRow: number) => void;
+  fillBackfillCustomerAddress_: (sheet: FakeSheet, header: Header, matchedRecord: CustomerRecord, address: string) => void;
+  flagBackfillSecondLocation_: (
+    sheet: FakeSheet,
+    header: Header,
+    records: CustomerRecord[],
+    matchedRecord: CustomerRecord,
+    newAddress: string,
+    targetRow: number,
+  ) => string;
 };
 
 function loadBackfillHelpers(): BackfillHelpers {
@@ -54,11 +69,32 @@ function loadBackfillHelpers(): BackfillHelpers {
     `${codeSource}\n${backfillSource}\n;globalThis.__backfill = {` +
       "findB2bTruckingHeader_,buildB2bCustomerAggregates_,findCustomerEntryHeader_," +
       "mergeCustomerEntryAddresses_,findBackfillCustomerDbHeader_,buildBackfillCustomerRecords_," +
-      "matchBackfillCustomerRecord_,classifyCustomerCandidate_};",
+      "matchBackfillCustomerRecord_,classifyCustomerCandidate_,stripCustomerLocationSuffix_," +
+      "nextCustomerLocationSuffix_,appendBackfillCustomer_,fillBackfillCustomerAddress_," +
+      "flagBackfillSecondLocation_};",
     context,
   );
   return context.__backfill as BackfillHelpers;
 }
+
+function makeFakeSheet(): FakeSheet {
+  const writes: FakeWrite[] = [];
+  return {
+    writes,
+    getRange(row: number, col: number, numRows?: number, numCols?: number) {
+      return {
+        setValues(values: unknown[][]) {
+          writes.push({ row, col, numRows: numRows ?? 1, numCols: numCols ?? 1, values });
+        },
+        setValue(value: unknown) {
+          writes.push({ row, col, numRows: 1, numCols: 1, value });
+        },
+      };
+    },
+  };
+}
+
+const TRUCKING_HEADER: Header = { rowIndex: 0, map: { "CUSTOMER NAME": 0, ADDRESS: 1 } };
 
 const helpers = loadBackfillHelpers();
 
@@ -208,5 +244,71 @@ describe("customer backfill: candidate classification", () => {
     const result = helpers.classifyCustomerCandidate_("Mega Mart", aggregate, records);
     expect(result.classification).toBe("would-create");
     expect(result.matchedRecord).toBeNull();
+  });
+});
+
+describe("customer backfill: live writes (2026-08-24 rollout)", () => {
+  it("strips a trailing numeric location suffix, leaving unsuffixed names untouched", () => {
+    expect(helpers.stripCustomerLocationSuffix_("OVER N OVER Over Beauty - 2")).toBe("OVER N OVER Over Beauty");
+    expect(helpers.stripCustomerLocationSuffix_("Plain Customer Co")).toBe("Plain Customer Co");
+  });
+
+  it("treats an unsuffixed record as implicit location 1, so the first real duplicate becomes 2", () => {
+    const records = [{ name: "Acme Co" } as CustomerRecord];
+    expect(helpers.nextCustomerLocationSuffix_("Acme Co", records)).toBe(2);
+  });
+
+  it("appends after the highest existing suffix rather than filling a gap", () => {
+    const records = [
+      { name: "Acme Co - 1" } as CustomerRecord,
+      { name: "Acme Co - 2" } as CustomerRecord,
+    ];
+    expect(helpers.nextCustomerLocationSuffix_("Acme Co", records)).toBe(3);
+  });
+
+  it("ignores records for a different base name entirely", () => {
+    const records = [{ name: "Unrelated Co - 1" } as CustomerRecord];
+    expect(helpers.nextCustomerLocationSuffix_("Acme Co", records)).toBe(1);
+  });
+
+  it("appends a brand-new customer row with name and address at the target row", () => {
+    const sheet = makeFakeSheet();
+    helpers.appendBackfillCustomer_(sheet, TRUCKING_HEADER, "Brand New Co", "1 New Ave", 42);
+    expect(sheet.writes).toEqual([{ row: 42, col: 1, numRows: 1, numCols: 2, values: [["Brand New Co", "1 New Ave"]] }]);
+  });
+
+  it("fills only the address cell on the matched row, leaving the name column untouched", () => {
+    const sheet = makeFakeSheet();
+    const matched = { rowNumber: 7 } as CustomerRecord;
+    helpers.fillBackfillCustomerAddress_(sheet, TRUCKING_HEADER, matched, "9 Fill St");
+    expect(sheet.writes).toEqual([{ row: 7, col: 2, numRows: 1, numCols: 1, value: "9 Fill St" }]);
+  });
+
+  it("renames an unsuffixed matched row to '- 1' and appends the new location as '- 2'", () => {
+    const sheet = makeFakeSheet();
+    const matched = { rowNumber: 5, name: "Acme Co", exactKey: "ACME CO" } as CustomerRecord;
+    const otherRecords = [matched];
+
+    const newName = helpers.flagBackfillSecondLocation_(sheet, TRUCKING_HEADER, otherRecords, matched, "2 Second Loc", 99);
+
+    expect(newName).toBe("Acme Co - 2");
+    expect(matched.name).toBe("Acme Co - 1");
+    expect(sheet.writes).toEqual([
+      { row: 5, col: 1, numRows: 1, numCols: 1, value: "Acme Co - 1" },
+      { row: 99, col: 1, numRows: 1, numCols: 2, values: [["Acme Co - 2", "2 Second Loc"]] },
+    ]);
+  });
+
+  it("does not rename an already-suffixed matched row, and numbers the new one after it", () => {
+    const sheet = makeFakeSheet();
+    const matched = { rowNumber: 5, name: "Acme Co - 1", exactKey: "ACME CO - 1" } as CustomerRecord;
+    const otherRecords = [matched];
+
+    const newName = helpers.flagBackfillSecondLocation_(sheet, TRUCKING_HEADER, otherRecords, matched, "3 Third Loc", 100);
+
+    expect(newName).toBe("Acme Co - 2");
+    expect(matched.name).toBe("Acme Co - 1");
+    // Only the new-row append happens — no rename write for an already-suffixed row.
+    expect(sheet.writes).toEqual([{ row: 100, col: 1, numRows: 1, numCols: 2, values: [["Acme Co - 2", "3 Third Loc"]] }]);
   });
 });
