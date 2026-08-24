@@ -402,20 +402,42 @@ function logCanonicalMatchNeedsReview_(spreadsheet, customerValue, whTruckingRow
   }));
 }
 
-function buildCustomerNoteText_(record) {
+/**
+ * The individual "Address: ..." / "Contact: ..." / "Services: ..." sections
+ * a note is built from, before joining — kept separate so a later write can
+ * add just the sections that are actually new (see appendCustomerNote_).
+ */
+function customerNoteParts_(record) {
   var parts = [];
   if (record.address) parts.push("Address: " + record.address);
   if (record.contact) parts.push("Contact: " + record.contact.replace(/\n+/g, " · "));
   if (record.services.length) parts.push("Services: " + record.services.join(", "));
-  return parts.join(" | ");
+  return parts;
 }
 
+function buildCustomerNoteText_(record) {
+  return customerNoteParts_(record).join(" | ");
+}
+
+/**
+ * Appends only the note sections not already present in the cell, not the
+ * whole combined string. A customer typed and its address filled in as two
+ * separate edits (Codex review on PR #92, round 6) matches the same record
+ * twice: the first edit appends Contact/Services (Address is still blank on
+ * file); the second fills the address and re-runs this with the now-complete
+ * record. Comparing the full combined string against existing text missed
+ * that the Contact/Services portion was already written — round 9's review
+ * found that duplicated them on every address-fill. Filtering per-section
+ * instead means only the new "Address: ..." piece gets appended.
+ */
 function appendCustomerNote_(sheet, rowNumber, noteCol, record) {
-  var noteText = buildCustomerNoteText_(record);
-  if (!noteText) return;
+  var parts = customerNoteParts_(record);
+  if (!parts.length) return;
   var noteRange = sheet.getRange(rowNumber, noteCol);
   var existing = String(noteRange.getDisplayValue() || "");
-  if (existing.indexOf(noteText) !== -1) return;
+  var newParts = parts.filter(function (part) { return existing.indexOf(part) === -1; });
+  if (!newParts.length) return;
+  var noteText = newParts.join(" | ");
   noteRange.setValue(existing ? existing + "\n" + noteText : noteText);
 }
 

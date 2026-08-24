@@ -139,6 +139,16 @@ describe("Apps Script production integrity", () => {
     expect(lookup).toMatch(
       /if\s*\(\s*!matchedByExactName_\(customerValue,\s*record\)\s*\)\s*\{\s*logCanonicalMatchNeedsReview_\(/,
     );
+    // Round 9 of the same review: staff typing the customer name and its
+    // address as two separate edits (round 6) matches the same record
+    // twice — comparing the whole combined note string against the existing
+    // cell missed that a customer-only first edit had already written the
+    // Contact/Services portion while the address was still blank, so
+    // filling the address and re-running duplicated it. appendCustomerNote_
+    // must filter per-section (customerNoteParts_), not compare the joined
+    // string as one unit.
+    expect(lookup).toContain("function customerNoteParts_(");
+    expect(lookup).toMatch(/parts\.filter\(function \(part\) \{ return existing\.indexOf\(part\) === -1; \}\)/);
   });
 
   it("runs the customer backfill batch job live, with the '- 1'/'- 2' second-location write path implemented", () => {

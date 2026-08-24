@@ -23,6 +23,7 @@ type CustomerLookupHelpers = {
   customerAddressFillable_: (record: CustomerRecord, seedAddress: string) => boolean;
   matchedByExactName_: (customerValue: string, record: CustomerRecord) => boolean;
   fillCustomerAddress_: (sheet: FakeDbSheet, header: DbHeader, record: CustomerRecord, address: string) => void;
+  appendCustomerNote_: (sheet: FakeNoteSheet, rowNumber: number, noteCol: number, record: CustomerRecord) => void;
   shouldProcessCustomerLookupEdit_: (
     customerCol: number,
     addressCol: number | null,
@@ -69,6 +70,27 @@ function makeFakeDbSheet(): FakeDbSheet {
   };
 }
 
+type NoteWrite = { row: number; col: number; value: unknown };
+type FakeNoteSheet = {
+  writes: NoteWrite[];
+  getRange: (row: number, col: number) => { getDisplayValue: () => string; setValue: (value: unknown) => void };
+};
+
+function makeFakeNoteSheet(existingValue = ""): FakeNoteSheet {
+  const writes: NoteWrite[] = [];
+  let current = existingValue;
+  return {
+    writes,
+    getRange: (row: number, col: number) => ({
+      getDisplayValue: () => current,
+      setValue: (value: unknown) => {
+        current = String(value);
+        writes.push({ row, col, value });
+      },
+    }),
+  };
+}
+
 function makeFakeSheet(): FakeSheet {
   const rows: unknown[][] = [];
   return {
@@ -108,7 +130,7 @@ function loadCustomerLookupHelpers(): CustomerLookupHelpers {
       "stripCustomerLocationSuffix_,isAmbiguousLocationFamily_,customerAddressConflicts_," +
       "customerAddressFillable_,matchedByExactName_,fillCustomerAddress_," +
       "shouldProcessCustomerLookupEdit_,logPipelineFromBoundSpreadsheet_," +
-      "logCanonicalMatchNeedsReview_};",
+      "logCanonicalMatchNeedsReview_,appendCustomerNote_};",
     context,
   );
   return context.__cust as CustomerLookupHelpers;
@@ -407,5 +429,47 @@ describe("WH Trucking Request customer lookup: canonical-only matches route to r
     const exactRecord = makeRecord({ name: "MEGA MART (PALO ALTO)" });
     expect(helpers.matchedByExactName_("MEGA MART (PALO ALTO)", exactRecord)).toBe(true);
     expect(helpers.matchedByExactName_("MEGA MART (FREMONT)", exactRecord)).toBe(false);
+  });
+});
+
+// Round 9 (2026-08-24, Codex review on PR #92): staff typing the customer
+// name and address as two separate edits (round 6) matches the same record
+// twice — the first edit (address still blank on file) appends Contact/
+// Services alone; the second, after fillCustomerAddress_ fills the address,
+// re-runs appendCustomerNote_ with the now-complete record. Comparing the
+// full combined note string against the existing cell missed that the
+// Contact/Services portion was already there, duplicating it on every fill.
+describe("WH Trucking Request customer lookup: appending a note never duplicates already-written sections", () => {
+  it("appends the full note on a bare cell", () => {
+    const sheet = makeFakeNoteSheet("");
+    const record = makeRecord({ name: "Acme Co", address: "123 Main St", contact: "Jane Doe" });
+
+    helpers.appendCustomerNote_(sheet, 5, 20, record);
+
+    expect(sheet.writes).toEqual([{ row: 5, col: 20, value: "Address: 123 Main St | Contact: Jane Doe" }]);
+  });
+
+  it("writes nothing when the exact same note is already present", () => {
+    const sheet = makeFakeNoteSheet("Address: 123 Main St | Contact: Jane Doe");
+    const record = makeRecord({ name: "Acme Co", address: "123 Main St", contact: "Jane Doe" });
+
+    helpers.appendCustomerNote_(sheet, 5, 20, record);
+
+    expect(sheet.writes).toEqual([]);
+  });
+
+  it("appends only the newly-available address section instead of re-adding contact/services (the round-9 bug)", () => {
+    // The first, customer-only edit already wrote Contact/Services while the
+    // address was still blank on file.
+    const sheet = makeFakeNoteSheet("Contact: Jane Doe | Services: Liftgate");
+    // The second, address-only edit fills the address and calls this with
+    // the now-complete record.
+    const record = makeRecord({ name: "Acme Co", address: "123 Main St", contact: "Jane Doe", services: ["Liftgate"] });
+
+    helpers.appendCustomerNote_(sheet, 5, 20, record);
+
+    expect(sheet.writes).toEqual([
+      { row: 5, col: 20, value: "Contact: Jane Doe | Services: Liftgate\nAddress: 123 Main St" },
+    ]);
   });
 });
