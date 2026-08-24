@@ -89,6 +89,7 @@ function reconcileCustomerBackfill() {
     var wouldCreate = 0;
     var wouldFlag = 0;
     var wouldFill = 0;
+    var wouldRepair = 0;
     var ambiguousCount = 0;
     var okCount = 0;
 
@@ -140,6 +141,15 @@ function reconcileCustomerBackfill() {
           fillBackfillCustomerAddress_(truckingSheet, truckingHeader, classification.matchedRecord, classification.proposedAddress);
           classification.matchedRecord.address = classification.proposedAddress;
         }
+      } else if (classification.classification === "would-repair-split-rename") {
+        // A prior flagBackfillSecondLocation_ append succeeded but its
+        // follow-up rename didn't — finish the rename now rather than
+        // leaving the pair permanently unrecognized as a split family.
+        wouldRepair++;
+        logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
+        if (!CUSTOMER_BACKFILL_DRY_RUN) {
+          renameToFirstLocation_(truckingSheet, truckingHeader, classification.matchedRecord);
+        }
       } else {
         okCount++;
       }
@@ -150,6 +160,7 @@ function reconcileCustomerBackfill() {
       wouldCreate: wouldCreate,
       wouldFlagSecondLocation: wouldFlag,
       wouldFillMissingAddress: wouldFill,
+      wouldRepairSplitRename: wouldRepair,
       ambiguousLocationFamily: ambiguousCount,
       okNoAction: okCount,
       skippedBlankNameRows: aggregation.skippedBlankNameRows,
@@ -161,6 +172,7 @@ function reconcileCustomerBackfill() {
       ", wouldCreate=" + wouldCreate +
       ", wouldFlagSecondLocation=" + wouldFlag +
       ", wouldFillMissingAddress=" + wouldFill +
+      ", wouldRepairSplitRename=" + wouldRepair +
       ", ambiguousLocationFamily=" + ambiguousCount +
       ", ok=" + okCount +
       ", skippedBlankNameRows=" + aggregation.skippedBlankNameRows +
@@ -173,6 +185,7 @@ function reconcileCustomerBackfill() {
       wouldCreate: wouldCreate,
       wouldFlagSecondLocation: wouldFlag,
       wouldFillMissingAddress: wouldFill,
+      wouldRepairSplitRename: wouldRepair,
       ambiguousLocationFamily: ambiguousCount,
       okNoAction: okCount,
       skippedBlankNameRows: aggregation.skippedBlankNameRows,
@@ -330,6 +343,22 @@ function mergeCustomerEntryAddresses_(aggregates, rows, header) {
 }
 
 /**
+ * Canonical family "base key" for name: the "- N" suffix stripped, then
+ * canonicalized the same way every family-membership check in this file
+ * uses. Centralizing this is the fix for a gap Codex found in the previous
+ * revision: isSuffixLocationFamily_/hasEstablishedSuffixConvention_ were
+ * canonicalized, but familyAddressesFor_ and nextCustomerLocationSuffix_
+ * still compared raw/simple-normalized base names — so a punctuation-variant
+ * candidate ("Acme Co Inc") could pass the ambiguity check (recognized as
+ * the "Acme Co, Inc. - 1/-2" family) yet still see no addresses on file for
+ * that family and get numbered as a fresh "- 1", instead of correctly
+ * landing on "- 3" and recognizing addresses already on file (PR #92).
+ */
+function canonicalFamilyBaseKey_(name) {
+  return normalizeWmsCustomerKey_(canonicalWmsCustomer_(stripCustomerLocationSuffix_(name)));
+}
+
+/**
  * True when 2+ existing TRUCKING records already share customerValue's base
  * name (ignoring any "- N" suffix) once BOTH sides are canonicalized the
  * same way — not just simple-normalized. A sibling's stripped base name is
@@ -344,10 +373,10 @@ function mergeCustomerEntryAddresses_(aggregates, rows, header) {
  * hasEstablishedSuffixConvention_ below, which is deliberately narrower.
  */
 function isSuffixLocationFamily_(customerValue, records) {
-  var canonicalKey = normalizeWmsCustomerKey_(canonicalWmsCustomer_(customerValue));
+  var canonicalKey = canonicalFamilyBaseKey_(customerValue);
   if (!canonicalKey) return false;
   var suffixMatches = records.filter(function (r) {
-    return normalizeWmsCustomerKey_(canonicalWmsCustomer_(stripCustomerLocationSuffix_(r.name))) === canonicalKey;
+    return canonicalFamilyBaseKey_(r.name) === canonicalKey;
   });
   return suffixMatches.length > 1;
 }
@@ -365,11 +394,11 @@ function isSuffixLocationFamily_(customerValue, records) {
  * convention the sheet doesn't use, not just extend an existing one.
  */
 function hasEstablishedSuffixConvention_(customerValue, records) {
-  var canonicalKey = normalizeWmsCustomerKey_(canonicalWmsCustomer_(customerValue));
+  var canonicalKey = canonicalFamilyBaseKey_(customerValue);
   if (!canonicalKey) return false;
   return records.some(function (r) {
     if (!/^(.*?)\s*-\s*(\d+)\s*$/.test(r.name)) return false;
-    return normalizeWmsCustomerKey_(canonicalWmsCustomer_(stripCustomerLocationSuffix_(r.name))) === canonicalKey;
+    return canonicalFamilyBaseKey_(r.name) === canonicalKey;
   });
 }
 
@@ -389,10 +418,10 @@ function isAmbiguousLocationFamily_(customerValue, records) {
  * doesn't match one particular sibling location, and vice versa.
  */
 function familyAddressesFor_(name, records) {
-  var baseKey = stripCustomerLocationSuffix_(name).toUpperCase().replace(/\s+/g, " ").trim();
+  var baseKey = canonicalFamilyBaseKey_(name);
   var addresses = [];
   records.forEach(function (r) {
-    if (stripCustomerLocationSuffix_(r.name).toUpperCase().replace(/\s+/g, " ").trim() !== baseKey) return;
+    if (canonicalFamilyBaseKey_(r.name) !== baseKey) return;
     if (r.address && addresses.indexOf(r.address) === -1) addresses.push(r.address);
   });
   return addresses;
@@ -402,6 +431,10 @@ function familyAddressesFor_(name, records) {
  * The core reconciliation decision for one distinct customer name:
  *  - matches 2+ existing locations already -> "ambiguous-location-family"
  *  - no TRUCKING match at all               -> "would-create"
+ *  - matched an unsuffixed record that has
+ *    a suffixed sibling in its family       -> "would-repair-split-rename"
+ *    (a prior flagBackfillSecondLocation_ append succeeded but its rename
+ *    didn't — repairs the partial write, see below)
  *  - matched, TRUCKING has no address on file
  *    but the log/Customer Entry has one     -> "would-fill-missing-address"
  *  - matched, one or more observed addresses
@@ -458,6 +491,34 @@ function classifyCustomerCandidate_(name, aggregate, truckingRecords) {
       proposedAddress: allAddresses[0] || "",
       pendingAddresses: [],
       existingAddress: null,
+      addressVariants: allAddresses,
+      sourcesUsed: sourcesUsed
+    };
+  }
+
+  // Recovers a partial flagBackfillSecondLocation_ write: if the append
+  // succeeded but the follow-up "- 1" rename failed (transient Sheets
+  // error), matchedRecord here exact-matches the still-unsuffixed original,
+  // and familyAddressesFor_ already sees the appended sibling's address —
+  // so without this check it would silently resolve as "ok-no-action"
+  // forever, leaving a "<name>" + "<name> - N" pair that a later bare-name
+  // lookup treats as an unambiguous single location instead of the split
+  // family it actually is (Codex review on PR #92). Detect it directly:
+  // this matched record itself carries no suffix, yet a sibling sharing its
+  // canonical base already does — that can only happen mid-split.
+  var needsSplitRepair = !/^(.*?)\s*-\s*(\d+)\s*$/.test(matchedRecord.name) &&
+    truckingRecords.some(function (r) {
+      return r !== matchedRecord &&
+        /^(.*?)\s*-\s*(\d+)\s*$/.test(r.name) &&
+        canonicalFamilyBaseKey_(r.name) === canonicalFamilyBaseKey_(matchedRecord.name);
+    });
+  if (needsSplitRepair) {
+    return {
+      classification: "would-repair-split-rename",
+      matchedRecord: matchedRecord,
+      proposedAddress: "",
+      pendingAddresses: [],
+      existingAddress: matchedRecord.address || "",
       addressVariants: allAddresses,
       sourcesUsed: sourcesUsed
     };
@@ -524,12 +585,12 @@ function stripCustomerLocationSuffix_(name) {
  * seen rather than filling a gap, so numbering only ever grows.
  */
 function nextCustomerLocationSuffix_(baseName, records) {
-  var baseKey = baseName.toUpperCase().replace(/\s+/g, " ").trim();
+  var baseKey = canonicalFamilyBaseKey_(baseName);
   var used = [0];
   records.forEach(function (record) {
     var match = /^(.*?)\s*-\s*(\d+)\s*$/.exec(record.name);
-    var recordBase = (match ? match[1] : record.name).toUpperCase().replace(/\s+/g, " ").trim();
-    if (recordBase !== baseKey) return;
+    var recordBaseKey = canonicalFamilyBaseKey_(match ? match[1] : record.name);
+    if (recordBaseKey !== baseKey) return;
     used.push(match ? parseInt(match[2], 10) : 1);
   });
   return Math.max.apply(null, used) + 1;
@@ -598,13 +659,26 @@ function flagBackfillSecondLocation_(truckingSheet, header, truckingRecords, mat
   appendBackfillCustomer_(truckingSheet, header, newName, newAddress, targetRow);
 
   if (!alreadySuffixed) {
-    var renamed = baseName + " - 1";
-    truckingSheet.getRange(matchedRecord.rowNumber, header.map["CUSTOMER NAME"] + 1).setValue(renamed);
-    matchedRecord.name = renamed;
-    matchedRecord.exactKey = renamed.toUpperCase().replace(/\s+/g, " ");
+    renameToFirstLocation_(truckingSheet, header, matchedRecord);
   }
 
   return newName;
+}
+
+/**
+ * Renames matchedRecord's TRUCKING row in place to its "- 1" implicit-
+ * first-location name, updating the in-memory record to match. Shared by
+ * flagBackfillSecondLocation_'s normal split and repairSplitRename_'s
+ * recovery of a partial split (see classifyCustomerCandidate_'s
+ * "would-repair-split-rename" outcome) — the same rename either way.
+ */
+function renameToFirstLocation_(truckingSheet, header, matchedRecord) {
+  var baseName = stripCustomerLocationSuffix_(matchedRecord.name);
+  var renamed = baseName + " - 1";
+  truckingSheet.getRange(matchedRecord.rowNumber, header.map["CUSTOMER NAME"] + 1).setValue(renamed);
+  matchedRecord.name = renamed;
+  matchedRecord.exactKey = renamed.toUpperCase().replace(/\s+/g, " ");
+  return renamed;
 }
 
 /**

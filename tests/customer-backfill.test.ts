@@ -43,6 +43,7 @@ type BackfillHelpers = {
       | "would-create"
       | "would-flag-second-location"
       | "would-fill-missing-address"
+      | "would-repair-split-rename"
       | "ambiguous-location-family"
       | "ok-no-action";
     matchedRecord: CustomerRecord | null;
@@ -75,6 +76,7 @@ type BackfillHelpers = {
     newAddress: string,
     targetRow: number,
   ) => string;
+  renameToFirstLocation_: (sheet: FakeSheet, header: Header, matchedRecord: CustomerRecord) => string;
 };
 
 function loadBackfillHelpers(): BackfillHelpers {
@@ -89,7 +91,7 @@ function loadBackfillHelpers(): BackfillHelpers {
       "matchBackfillCustomerRecord_,classifyCustomerCandidate_,stripCustomerLocationSuffix_," +
       "nextCustomerLocationSuffix_,appendBackfillCustomer_,fillBackfillCustomerAddress_," +
       "flagBackfillSecondLocation_,isAmbiguousLocationFamily_,isSuffixLocationFamily_," +
-      "hasEstablishedSuffixConvention_,appendNewFamilyLocation_};",
+      "hasEstablishedSuffixConvention_,appendNewFamilyLocation_,renameToFirstLocation_};",
     context,
   );
   return context.__backfill as BackfillHelpers;
@@ -473,6 +475,82 @@ describe("customer backfill: live writes (2026-08-24 rollout)", () => {
     const result = helpers.classifyCustomerCandidate_("Mega Mart", aggregate, records);
     expect(result.classification).toBe("ambiguous-location-family");
     expect(result.pendingAddresses).toEqual([]);
+  });
+
+  // Round 3 (2026-08-24, Codex review on PR #92 commit f2cb740): the
+  // ambiguity checks were canonicalized, but familyAddressesFor_ and
+  // nextCustomerLocationSuffix_ still compared raw/simple-normalized base
+  // names — a punctuation-variant candidate could pass the ambiguity check
+  // yet still see no addresses on file for its family and get misnumbered.
+  it("recognizes an address already on file for a punctuation-variant suffix family (not just spelled identically)", () => {
+    const rows = makeTruckingRows([
+      { name: "Acme Co, Inc. - 1", address: "1 First Loc" },
+      { name: "Acme Co, Inc. - 2", address: "2 Second Loc" },
+    ]);
+    const header = helpers.findBackfillCustomerDbHeader_(rows);
+    const records = helpers.buildBackfillCustomerRecords_(rows, header);
+    // B2B log spells it without punctuation, and reports an address already
+    // on file for "- 1" plus one genuinely new address.
+    const aggregate = makeFamilyAggregate_("Acme Co Inc", {
+      "B2B/E-COM TRUCKING": ["1 First Loc", "3 Third Loc"],
+    });
+
+    const result = helpers.classifyCustomerCandidate_("Acme Co Inc", aggregate, records);
+    expect(result.classification).toBe("ambiguous-location-family");
+    // Only the genuinely new address is pending — "1 First Loc" is already
+    // on file for "- 1" and must not be re-flagged.
+    expect(result.pendingAddresses).toEqual(["3 Third Loc"]);
+  });
+
+  it("numbers a new location after the highest existing suffix even when the query has different punctuation", () => {
+    const records = [
+      { name: "Acme Co, Inc. - 1" } as CustomerRecord,
+      { name: "Acme Co, Inc. - 2" } as CustomerRecord,
+    ];
+    // Without canonicalizing the base key, this would wrongly return 1
+    // (reading "Acme Co Inc" as an unrelated, un-suffixed base) instead of 3.
+    expect(helpers.nextCustomerLocationSuffix_("Acme Co Inc", records)).toBe(3);
+  });
+
+  // Round 3, second finding: recovering from a flagBackfillSecondLocation_
+  // call whose append succeeded but whose follow-up rename failed.
+  describe("recovering a partial split (append succeeded, rename didn't)", () => {
+    it("classifies an unsuffixed matched record with an already-suffixed sibling as needing a repair rename", () => {
+      const rows = makeTruckingRows([
+        { name: "Acme Co", address: "1 First Loc" },
+        { name: "Acme Co - 2", address: "2 Second Loc" },
+      ]);
+      const header = helpers.findBackfillCustomerDbHeader_(rows);
+      const records = helpers.buildBackfillCustomerRecords_(rows, header);
+      // The B2B log's own address is already on file (for "- 2") — proving
+      // this isn't reachable via the normal would-flag-second-location path.
+      const aggregate = makeFamilyAggregate_("Acme Co", { "B2B/E-COM TRUCKING": ["2 Second Loc"] });
+
+      const result = helpers.classifyCustomerCandidate_("Acme Co", aggregate, records);
+      expect(result.classification).toBe("would-repair-split-rename");
+      expect(result.matchedRecord?.name).toBe("Acme Co");
+    });
+
+    it("renameToFirstLocation_ writes only the rename, matching flagBackfillSecondLocation_'s own rename write", () => {
+      const sheet = makeFakeSheet();
+      const matched = { rowNumber: 5, name: "Acme Co", exactKey: "ACME CO" } as CustomerRecord;
+
+      const renamed = helpers.renameToFirstLocation_(sheet, TRUCKING_HEADER, matched);
+
+      expect(renamed).toBe("Acme Co - 1");
+      expect(matched.name).toBe("Acme Co - 1");
+      expect(sheet.writes).toEqual([{ row: 5, col: 1, numRows: 1, numCols: 1, value: "Acme Co - 1" }]);
+    });
+
+    it("does not misclassify a normal single-location match with no suffixed sibling as needing repair", () => {
+      const rows = makeTruckingRows([{ name: "Solo Co", address: "1 Solo Loc" }]);
+      const header = helpers.findBackfillCustomerDbHeader_(rows);
+      const records = helpers.buildBackfillCustomerRecords_(rows, header);
+      const aggregate = makeFamilyAggregate_("Solo Co", { "B2B/E-COM TRUCKING": ["1 Solo Loc"] });
+
+      const result = helpers.classifyCustomerCandidate_("Solo Co", aggregate, records);
+      expect(result.classification).toBe("ok-no-action");
+    });
   });
 });
 

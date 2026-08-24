@@ -130,6 +130,13 @@ describe("Apps Script production integrity", () => {
     expect(backfill).toContain("function appendNewFamilyLocation_(");
     expect(backfill).toContain("function isSuffixLocationFamily_(");
     expect(backfill).toContain("function hasEstablishedSuffixConvention_(");
+    // Round 3 of the same review: family-membership checks must all use one
+    // canonicalized base-key helper (not a mix of canonicalized ambiguity
+    // checks and raw-normalized address/numbering helpers), and a partial
+    // append-then-rename write must be repairable on the next run.
+    expect(backfill).toContain("function canonicalFamilyBaseKey_(");
+    expect(backfill).toContain("function renameToFirstLocation_(");
+    expect(backfill).toContain('"would-repair-split-rename"');
   });
 
   it("registers the WH Trucking Request customer-lookup edit handler as a fully-authorized installable trigger", () => {
