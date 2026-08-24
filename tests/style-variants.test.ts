@@ -19,31 +19,17 @@ describe("live dashboard style variants", () => {
     expect(source).not.toContain("function VariantNav");
   });
 
-<<<<<<< HEAD
-  test("root layout exposes the same five-way style switcher on every route", () => {
-=======
   test("root layout exposes the StyleKorean/SKWarehouse/SKControl platform links on every route, not the old Appearance switcher", () => {
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
     const layout = read("app/layout.tsx");
     const switcher = read("app/style-switcher.tsx");
     expect(layout).toContain('import { StyleSwitcher } from "./style-switcher"');
     expect(layout).toContain("<StyleSwitcher />");
-<<<<<<< HEAD
-    expect(switcher).toContain('{ href: "/", label: "Original" }');
-    expect(switcher).toContain('{ href: "/light-skin", label: "Light Skin" }');
-    expect(switcher).toContain('{ href: "/light", label: "Light Control Tower" }');
-    expect(switcher).toContain('{ href: "/light-full", label: "Light Full" }');
-    expect(switcher).toContain('{ href: "/fulfillment-style", label: "Fulfillment" }');
-    expect(switcher).toContain("usePathname");
-    expect(switcher).toContain("aria-current={active ? \"page\" : undefined}");
-=======
     expect(switcher).toContain('{ href: "https://stylekorean.dpdns.org", label: "StyleKorean", key: "stylekorean" }');
     expect(switcher).toContain('{ href: "https://skwarehouse.dpdns.org", label: "SKWarehouse", key: "skwarehouse" }');
     expect(switcher).toContain('{ href: "https://skwbp.dpdns.org", label: "SKControl", key: "skwbp" }');
     expect(switcher).toContain('target="_blank"');
     expect(switcher).not.toContain("APPEARANCE");
     expect(switcher).not.toContain("usePathname");
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   });
 
   test("variant CSS places TK after the outbound trucking board", () => {
@@ -93,16 +79,10 @@ describe("live dashboard style variants", () => {
     expect(source).toContain("shippingMethod: resolvedCarrier");
   });
 
-<<<<<<< HEAD
-  test("outbound parcel cards use the customer while tracking is pending", () => {
-    const source = read("app/page.tsx");
-    expect(source).toContain('tracking || item.customer || item.title || "Customer pending"');
-=======
   test("parcel cards headline the customer and show tracking# as its own labeled field", () => {
     const source = read("app/page.tsx");
     expect(source).toContain('{item.customer || item.title || "Customer pending"}');
     expect(source).toContain('Tracking# {trackingNumber}');
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
     expect(source).not.toContain('tracking || "Tracking pending"');
   });
 

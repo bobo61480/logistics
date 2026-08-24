@@ -155,15 +155,7 @@ function readWmsContainerLog_() {
  */
 function readAllocationIncoming_(startedAt) {
   var CHANNELS = ["CAWH", "IHERB", "HQ IHERB PO", "NATIONAL", "BK", "US_OFFICIAL", "MOIDA", "NY"];
-<<<<<<< HEAD
-<<<<<<< HEAD
-  var completedShipments = getCompletedImportShipments_();
-=======
   var activeShipments = getActiveImportShipments_();
->>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
-=======
-  var activeShipments = getActiveImportShipments_();
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   var ss = SpreadsheetApp.openById(INVENTORY_SYNC.allocationId);
   var sheets = ss.getSheets();
   var bySku = {};
@@ -175,15 +167,7 @@ function readAllocationIncoming_(startedAt) {
     var sheet = sheets[s];
     if (sheet.getLastRow() < 2 || sheet.getLastColumn() < 4) continue;
     if (sheet.getLastColumn() > 40) continue; // skip the wide per-shipment tracker tab
-<<<<<<< HEAD
-<<<<<<< HEAD
-    if (completedShipments.has(sheet.getName().trim().toUpperCase())) continue;
-=======
     if (!allocationSheetMatchesActiveImport_(sheet.getName(), activeShipments)) continue;
->>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
-=======
-    if (!allocationSheetMatchesActiveImport_(sheet.getName(), activeShipments)) continue;
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 
     var data = sheet.getRange(1, 1, Math.min(sheet.getLastRow(), 300), Math.min(sheet.getLastColumn(), 16)).getDisplayValues();
     // Header can be on row 1 or 2; require SKU + Cnfm Qty to treat the tab as an allocation sheet.
@@ -229,156 +213,6 @@ function channelQty_(value) {
   return m ? num_(m[1]) : 0;
 }
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-var TERMINAL_STATUSES_ = new Set(["SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED"]);
-=======
-var TERMINAL_STATUSES_ = new Set(["DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED", "FINISHED", "CLOSED", "PUTAWAY"]);
-var IMPORT_CUTOFF_DATE_ = new Date(2026, 6, 1); // July 1, 2026 (local script time)
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
-
-/**
- * Builds an allow-list from IMPORTS. Only non-grey, non-terminal shipments
- * dated July 1, 2026 or later are eligible to contribute inbound inventory.
- */
-function findImportSectionMarkerIndex_(data, marker) {
-  var wanted = String(marker || "").trim().toUpperCase();
-  for (var r = 0; r < data.length; r++) {
-    if (String(data[r][0] || "").trim().toUpperCase() === wanted) return r;
-  }
-  return -1;
-}
-
-function getActiveImportShipments_() {
-  var active = new Set();
-  var ss = SpreadsheetApp.openById(INVENTORY_SYNC.masterId);
-  var sheet = ss.getSheetByName(INVENTORY_SYNC.importsTab);
-  if (!sheet || sheet.getLastRow() < 2) return active;
-
-  var range = sheet.getDataRange();
-  var data = range.getDisplayValues();
-  var backgrounds = range.getBackgrounds();
-  var headerIdx = findHeaderRowIdx_(data);
-  if (headerIdx < 0) return active;
-  var map = headerMap_(data[headerIdx]);
-  var schedulingIdx = findImportSectionMarkerIndex_(data, "SCHEDULING");
-  var endIdx = schedulingIdx === -1 ? data.length : schedulingIdx;
-
-  var statusCol = firstMappedColumn_(map, ["WEBSITE STATUS", "STATUS", "SHIPMENT STATUS"]);
-  var etaCol = map["ETA"];
-  if (etaCol === undefined) return active;
-  var idCols = ["SHIPMENT", "SHIPMENT #", "SHIPMENT NO", "SHIPMENT NO.", "DOCS",
-    "INVOICE", "MBL", "HBL", "차수", "CONTAINER", "CONTAINER #", "CONTAINER NO",
-    "ENTRY NUMBER", "CONTAINER RAW (SYSTEM)"]
-    .map(function (name) { return map[name]; })
-    .filter(function (index, position, list) { return index !== undefined && list.indexOf(index) === position; });
-
-  for (var r = headerIdx + 1; r < endIdx; r++) {
-    var row = data[r];
-    if (isGreyedImportRow_(backgrounds[r] || [])) continue;
-
-    var status = statusCol === null ? "" : String(row[statusCol] || "").trim().toUpperCase();
-    if (TERMINAL_STATUSES_.has(status)) continue;
-
-    // The website's Import Schedule is based strictly on IMPORTS ETA (column O).
-    // Inventory uses the same allow-list so historical/ETD/delivery-date rows cannot leak in.
-    var scheduledDate = parseImportDate_(row[etaCol]);
-    if (!scheduledDate || scheduledDate < IMPORT_CUTOFF_DATE_) continue;
-
-    for (var i = 0; i < idCols.length; i++) {
-      splitImportIdentifiers_(row[idCols[i]]).forEach(function (identifier) {
-        active.add(normalizeImportIdentifier_(identifier));
-      });
-    }
-  }
-  return active;
-}
-
-function allocationSheetMatchesActiveImport_(sheetName, active) {
-  var normalized = normalizeImportIdentifier_(sheetName);
-  if (!normalized || !active.size) return false;
-  if (active.has(normalized)) return true;
-  var matched = false;
-  active.forEach(function (identifier) {
-    if (!matched && identifier.length >= 3 &&
-        (normalized.indexOf(identifier) !== -1 || identifier.indexOf(normalized) !== -1)) {
-      matched = true;
-    }
-  });
-  return matched;
-}
-
-function firstMappedColumn_(map, names) {
-  for (var i = 0; i < names.length; i++) {
-    if (map[names[i]] !== undefined) return map[names[i]];
-  }
-  return null;
-}
-
-function splitImportIdentifiers_(value) {
-  return String(value || "")
-    .split(/[\r\n,;|/]+/)
-    .map(function (part) { return part.trim(); })
-    .filter(Boolean);
-}
-
-function normalizeImportIdentifier_(value) {
-  return String(value || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-}
-
-function parseImportDate_(value) {
-  var text = String(value || "").trim();
-  if (!text) return null;
-  var parsed = new Date(text);
-  if (!isNaN(parsed.getTime())) return parsed;
-  var match = text.match(/(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/);
-  if (!match) return null;
-  var year = match[3] ? Number(match[3]) : 2026;
-  if (year < 100) year += 2000;
-  parsed = new Date(year, Number(match[1]) - 1, Number(match[2]));
-  return isNaN(parsed.getTime()) ? null : parsed;
-}
-
-function isGreyedImportRow_(backgrounds) {
-  var grey = {
-    "#cccccc": true, "#d3d3d3": true, "#e8eaed": true,
-    "#b7b7b7": true, "#c9c9c9": true, "#999999": true
-  };
-  var greyCells = 0;
-  for (var i = 0; i < Math.min(backgrounds.length, 18); i++) {
-    if (grey[String(backgrounds[i] || "").toLowerCase()]) greyCells++;
-  }
-  return greyCells >= 3;
-}
-
-/**
- * Backward-compatible terminal-set helper used by other inventory routines.
- * The allow-list above is authoritative for inbound inventory.
- */
-function getCompletedImportShipments_() {
-  var active = getActiveImportShipments_();
-  var excluded = new Set();
-  try {
-    var ss = SpreadsheetApp.openById(INVENTORY_SYNC.masterId);
-    var sheet = ss.getSheetByName(INVENTORY_SYNC.importsTab);
-    if (!sheet) return excluded;
-    var data = sheet.getDataRange().getDisplayValues();
-    var headerIdx = findHeaderRowIdx_(data);
-    var map = headerMap_(data[headerIdx]);
-    var idCols = ["SHIPMENT", "DOCS", "INVOICE", "MBL", "HBL", "CONTAINER", "CONTAINER RAW (SYSTEM)"]
-      .map(function (name) { return map[name]; }).filter(function (index) { return index !== undefined; });
-    for (var r = headerIdx + 1; r < data.length; r++) {
-      for (var i = 0; i < idCols.length; i++) {
-        splitImportIdentifiers_(data[r][idCols[i]]).forEach(function (identifier) {
-          var normalized = normalizeImportIdentifier_(identifier);
-          if (normalized && !active.has(normalized)) excluded.add(String(identifier).trim().toUpperCase());
-        });
-      }
-    }
-<<<<<<< HEAD
-  } catch (e) { /* non-fatal: if IMPORTS is unreadable, process all tabs */ }
-  return result;
-=======
 var TERMINAL_STATUSES_ = new Set(["DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED", "FINISHED", "CLOSED", "PUTAWAY"]);
 var IMPORT_CUTOFF_DATE_ = new Date(2026, 6, 1); // July 1, 2026 (local script time)
 
@@ -522,11 +356,6 @@ function getCompletedImportShipments_() {
     }
   } catch (e) { Logger.log("Could not build completed import compatibility set: " + e.message); }
   return excluded;
->>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
-=======
-  } catch (e) { Logger.log("Could not build completed import compatibility set: " + e.message); }
-  return excluded;
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 }
 
 /* ------------------------------------------------------------------ */
@@ -694,48 +523,6 @@ function num_(value) {
  * 
  * Updates are pulled from email notifications, carrier tracking, and manual sources.
  */
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-var SMALL_PARCEL_TRIGGER_VERSION_ = "hourly-v3-outbound-20260811";
-
-function ensureHourlySmallParcelTrigger_() {
-  var props = PropertiesService.getScriptProperties();
-  if (props.getProperty("SMALL_PARCEL_TRIGGER_VERSION") === SMALL_PARCEL_TRIGGER_VERSION_) return;
-  ScriptApp.getProjectTriggers().forEach(function (trigger) {
-    if (trigger.getHandlerFunction() === "trackSmallParcelsStatusUpdates") ScriptApp.deleteTrigger(trigger);
-  });
-  ScriptApp.newTrigger("trackSmallParcelsStatusUpdates").timeBased().everyHours(1).create();
-  props.setProperty("SMALL_PARCEL_TRIGGER_VERSION", SMALL_PARCEL_TRIGGER_VERSION_);
-  Logger.log("Small parcel tracker migrated to hourly trigger.");
-}
-
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
-function trackSmallParcelsStatusUpdates() {
-  var ss;
-  try {
-    ensureHourlySmallParcelTrigger_();
-    ss = SpreadsheetApp.openById(INVENTORY_SYNC.masterId);
-    var results = { checked: 0, updated: 0, errors: [] };
-
-    results.skwUpdates = trackSkwInboundStatus_(ss);
-    results.checked += results.skwUpdates.checked;
-    results.updated += results.skwUpdates.updated;
-
-    results.importsUpdates = trackImportsParcelStatus_(ss);
-    results.checked += results.importsUpdates.checked;
-    results.updated += results.importsUpdates.updated;
-
-    results.outboundUpdates = trackOutboundShipmentStatus_();
-    results.checked += results.outboundUpdates.checked;
-    results.updated += results.outboundUpdates.updated;
-
-    var summary = "Tracked small parcels hourly: " + results.checked + " packages, " + results.updated + " source rows updated";
-    Logger.log(summary);
-    appendPipelineLog_(ss, summary, "SMALL_PARCEL_TRACKING");
-<<<<<<< HEAD
-    
-=======
 var SMALL_PARCEL_TRIGGER_VERSION_ = "hourly-v3-outbound-20260811";
 
 function ensureHourlySmallParcelTrigger_() {
@@ -771,136 +558,16 @@ function trackSmallParcelsStatusUpdates() {
     var summary = "Tracked small parcels hourly: " + results.checked + " packages, " + results.updated + " source rows updated";
     Logger.log(summary);
     appendPipelineLog_(ss, summary, "SMALL_PARCEL_TRACKING");
->>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
-=======
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
     return results;
   } catch (err) {
     var msg = "trackSmallParcelsStatusUpdates error: " + err.toString();
     Logger.log(msg);
-<<<<<<< HEAD
-<<<<<<< HEAD
-    appendPipelineLog_(ss, msg, "ERROR");
-=======
     if (ss) appendPipelineLog_(ss, msg, "ERROR");
->>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
-=======
-    if (ss) appendPipelineLog_(ss, msg, "ERROR");
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
     throw err;
   }
 }
 
 /**
-<<<<<<< HEAD
-<<<<<<< HEAD
- * Scans SKW_Inbound sheet for SCHEDULED packages and checks for status updates.
- * Marks packages as SHIPPED/DELIVERED when their status changes.
-=======
- * Tracks every active Stylekorean outbound row carrying a parcel tracking
- * number or freight PRO number. Exact-number carrier emails are always checked;
- * UPS/FedEx/USPS/DHL parcels also use the official carrier page.
- *
- * The update is stored in ISSUE as a replaceable [AUTO TRACK ...] marker. The
- * dashboard reads that marker as the live schedule status without overwriting
- * a user's existing issue note.
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
- */
-function trackOutboundShipmentStatus_() {
-  var workbook = SpreadsheetApp.openById(WMS_SPREADSHEET_ID);
-  var sheet = workbook.getSheetByName("Stylekorean");
-  if (!sheet) return { checked: 0, updated: 0 };
-  var data = sheet.getDataRange().getDisplayValues();
-  var header = findWmsTruckingHeader_(data);
-  var map = header.map;
-  var issueCol = map["ISSUE"] !== undefined ? map["ISSUE"] : 7;
-  var methodCol = map["SHIPPING METHOD"] !== undefined ? map["SHIPPING METHOD"] : 5;
-  var checked = 0, updated = 0;
-
-  for (var r = header.rowIndex + 1; r < data.length; r++) {
-    var method = String(data[r][methodCol] || "").trim();
-    if (!/UPS|FEDEX|FED EX|USPS|DHL|AMAZON|TRUCK|LTL|FTL/i.test(method)) continue;
-    var tracking = outboundTrackingCandidate_(data[r], map);
-    if (!tracking) continue;
-    var existing = String(data[r][issueCol] || "").trim();
-    var currentStatus = parcelStatusFromText_(existing) || "Scheduled";
-    if (/^(DELIVERED|RECEIVED|COMPLETED|CANCELLED)$/i.test(currentStatus)) continue;
-    checked++;
-
-    var carrier = outboundCarrier_(method, tracking);
-    var signal = lookupParcelTrackingUpdate_(carrier, tracking, existing);
-    if (!signal.status && !signal.eta) continue;
-    var statusChanged = signal.status && shouldApplyParcelStatus_(currentStatus, signal.status);
-    var etaChanged = signal.eta && signal.eta !== parcelCurrentEta_(existing);
-    if (!statusChanged && !etaChanged) continue;
-    var next = mergeParcelAutoTrackingNote_(existing, {
-      status: signal.status || currentStatus,
-      eta: signal.eta,
-      source: signal.source
-    });
-    if (next === existing) continue;
-    sheet.getRange(r + 1, issueCol + 1).setValue(next);
-    data[r][issueCol] = next;
-    updated++;
-    Logger.log("Stylekorean outbound row " + (r + 1) + " " + tracking + " -> " + (signal.status || currentStatus) + " via " + signal.source);
-  }
-  if (updated) SpreadsheetApp.flush();
-  return { checked: checked, updated: updated };
-}
-
-function outboundTrackingCandidate_(row, map) {
-  var named = ["TRACKING#", "TRACKING #", "TRACKING NUMBER", "PRO#", "PRO #", "PRO NUMBER", "BOL#", "BOL"];
-  var values = [];
-  named.forEach(function (name) {
-    if (map[name] !== undefined) values.push(row[map[name]]);
-  });
-  // The WMS export sometimes places tracking/PRO data in unnamed columns I:AF.
-  for (var c = 8; c < Math.min(row.length, 32); c++) values.push(row[c]);
-  for (var i = 0; i < values.length; i++) {
-    var text = String(values[i] || "").trim();
-    if (!text) continue;
-    var match = text.match(/\b(1Z[A-Z0-9]{16}|\d{12,30}|[A-Z]{2}\d{9}[A-Z]{2}|[A-Z0-9][A-Z0-9-]{7,39})\b/i);
-    if (match && !/^(YES|NO|PENDING|ISSUE|SCHEDULED|TRUCKING)$/i.test(match[1])) return match[1].toUpperCase();
-  }
-  return "";
-}
-
-function outboundCarrier_(method, tracking) {
-  var text = String(method || "").toUpperCase();
-  var number = String(tracking || "").toUpperCase();
-  if (/^1Z/.test(number) || /UPS/.test(text)) return "UPS";
-  if (/FEDEX|FED EX/.test(text) || /^\d{12}$/.test(number)) return "FEDEX";
-  if (/USPS/.test(text) || /^\d{20,22}$/.test(number) || /^[A-Z]{2}\d{9}US$/.test(number)) return "USPS";
-  if (/DHL/.test(text)) return "DHL";
-  return ""; // Freight PROs are tracked through exact-number email signals.
-}
-
-function trackSkwInboundStatus_(ss) {
-  var sheet = ss.getSheetByName("SKW_Inbound");
-  if (!sheet) return { checked: 0, updated: 0 };
-  var data = sheet.getDataRange().getDisplayValues();
-  var headerIdx = findHeaderRowIdx_(data);
-  if (headerIdx === -1) return { checked: 0, updated: 0 };
-  var map = headerMap_(data[headerIdx]);
-  var statusCol = map["STATUS"] !== undefined ? map["STATUS"] :
-                  map["WEBSITE STATUS"] !== undefined ? map["WEBSITE STATUS"] : -1;
-  var dateReceivedCol = map["DATE_RECEIVED"] !== undefined ? map["DATE_RECEIVED"] :
-                        map["RECEIVED_DATE"] !== undefined ? map["RECEIVED_DATE"] : -1;
-  if (statusCol === -1) return { checked: 0, updated: 0 };
-  var checked = 0, updated = 0;
-  for (var r = headerIdx + 1; r < data.length; r++) {
-    var currentStatus = String(data[r][statusCol] || "").trim().toUpperCase();
-    if (currentStatus !== "SCHEDULED" && currentStatus !== "WORK IN PROGRESS") continue;
-    checked++;
-    var dateReceived = dateReceivedCol !== -1 ? data[r][dateReceivedCol] : "";
-    if (dateReceived) {
-      sheet.getRange(r + 1, statusCol + 1).setValue("DELIVERED");
-      updated++;
-    }
-  }
-<<<<<<< HEAD
-  
-=======
  * Tracks every active Stylekorean outbound row carrying a parcel tracking
  * number or freight PRO number. Exact-number carrier emails are always checked;
  * UPS/FedEx/USPS/DHL parcels also use the official carrier page.
@@ -1001,8 +668,6 @@ function trackSkwInboundStatus_(ss) {
       updated++;
     }
   }
-=======
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   return { checked: checked, updated: updated };
 }
 
@@ -1239,9 +904,5 @@ function trackImportsParcelStatus_(ss) {
     }
   }
   if (updated) SpreadsheetApp.flush();
-<<<<<<< HEAD
->>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
-=======
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   return { checked: checked, updated: updated };
 }

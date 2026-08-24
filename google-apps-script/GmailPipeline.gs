@@ -22,20 +22,10 @@ var GMAIL_PIPELINE = {
   masterId: "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc",
   inboundSheet: "IMPORTS",
   outboundSheet: "WH Trucking Request",
-<<<<<<< HEAD
-<<<<<<< HEAD
-  driveRootName: "SK Logistics Email Archive",
-=======
-=======
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   driveRootName: "SK Logistics Email Archive", // legacy helper compatibility
   // Canonical shared-drive destinations used by the live IMPORTS document links.
   warehouseDocumentsFolderId: "1YBWV9lXAasRt7JolWxk199dPkGbx60M9",
   importShipmentsFolderId: "1AhGI2qM2pGFXSb406OY6dsOaN8unlGDM",
-<<<<<<< HEAD
->>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
-=======
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   labels: {
     processed: "sk-logistics/processed",
     pending: "sk-logistics/pending-verification",
@@ -60,192 +50,9 @@ var GMAIL_PIPELINE = {
 
 /** Entry point — run from a 15-minute time-driven trigger. */
 function processLogisticsEmails() {
-<<<<<<< HEAD
-<<<<<<< HEAD
-  var lock = LockService.getScriptLock();
-  if (!lock.tryLock(5000)) return;
-  try {
-    ensureLabels_();
-    ensurePendingSheet_(); // Validation.gs
-    var threads = GmailApp.search(GMAIL_PIPELINE.query, 0, GMAIL_PIPELINE.maxThreadsPerRun);
-    var summary = { threads: threads.length, committed: 0, pending: 0, archived: 0, errors: 0 };
-
-    threads.forEach(function (thread) {
-      try {
-        var result = processThread_(thread);
-        summary.committed += result.committed;
-        summary.pending += result.pending;
-        summary.archived += result.archived;
-        thread.addLabel(getLabel_(GMAIL_PIPELINE.labels.processed));
-        if (result.pending > 0) thread.addLabel(getLabel_(GMAIL_PIPELINE.labels.pending));
-      } catch (err) {
-        summary.errors++;
-        thread.addLabel(getLabel_(GMAIL_PIPELINE.labels.error));
-        logPipeline_("THREAD ERROR", thread.getFirstMessageSubject(), String(err && err.message || err));
-      }
-    });
-
-    logPipeline_("RUN COMPLETE", JSON.stringify(summary), "");
-    return summary;
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-/** Processes every message and attachment in one thread. */
-function processThread_(thread) {
-  var out = { committed: 0, pending: 0, archived: 0 };
-  thread.getMessages().forEach(function (message) {
-    var meta = {
-      subject: message.getSubject() || "",
-      sender: message.getFrom() || "",
-      date: message.getDate(),
-      messageId: message.getId(),
-      permalink: "https://mail.google.com/mail/u/0/#all/" + message.getId()
-    };
-    var category = classifyText_(meta.subject);
-
-    message.getAttachments({ includeInlineImages: false }).forEach(function (attachment) {
-      var name = attachment.getName() || "attachment";
-      if (/\.(png|jpe?g|gif|ics|vcf)$/i.test(name)) return; // skip signatures/calendar noise
-      var fileCategory = classifyText_(name) !== "OTHER" ? classifyText_(name) : category;
-
-      // 1) Archive raw file to Drive: <root>/<YYYY>/<MM>/<Category>/
-      var folder = archiveFolderFor_(meta.date, fileCategory);
-      var file = folder.createFile(attachment.copyBlob().setName(stampName_(name, meta.date)));
-      out.archived++;
-
-      // 2) Extract candidate records
-      var records = [];
-      try {
-        records = extractRecords_(attachment, name, fileCategory, meta);
-      } catch (err) {
-        records = [];
-        addPendingRow_({
-          kind: guessKind_(fileCategory, meta.subject),
-          record: { parseError: String(err && err.message || err) },
-          issues: ["Attachment could not be parsed automatically."],
-          meta: meta, driveUrl: file.getUrl()
-        });
-        out.pending++;
-      }
-
-      // 3) Validate and commit or park each record
-      records.forEach(function (record) {
-        record._sourceEmail = meta.permalink;
-        record._driveFile = file.getUrl();
-        var kind = record.kind || guessKind_(fileCategory, meta.subject);
-        var verdict = validateRecord_(record, kind); // Validation.gs
-        if (verdict.ok) {
-          var committed = kind === "inbound"
-            ? upsertInboundRow_(record)
-            : upsertOutboundRow_(record);
-          if (committed) { out.committed++; }
-          else {
-            addPendingRow_({ kind: kind, record: record, issues: ["Possible duplicate — matching row already exists."], meta: meta, driveUrl: file.getUrl() });
-            out.pending++;
-          }
-        } else {
-          addPendingRow_({ kind: kind, record: record, issues: verdict.issues, meta: meta, driveUrl: file.getUrl() });
-          out.pending++;
-        }
-      });
-    });
-  });
-  return out;
-}
-
-/* ------------------------------------------------------------------ */
-/* Extraction                                                          */
-/* ------------------------------------------------------------------ */
-
-function extractRecords_(attachment, name, category, meta) {
-  var lower = name.toLowerCase();
-  if (/\.csv$|\.tsv$/.test(lower)) {
-    return tabularToRecords_(Utilities.parseCsv(attachment.getDataAsString("UTF-8"), /\.tsv$/.test(lower) ? "\t" : ","), category, meta);
-  }
-  if (/\.xlsx?$|\.xlsm$/.test(lower)) {
-    return tabularToRecords_(xlsxToRows_(attachment), category, meta);
-  }
-  if (/\.pdf$/.test(lower)) {
-    var text = pdfToText_(attachment);
-    var record = pdfTextToRecord_(text, category, meta);
-    return record ? [record] : [];
-  }
-  return [];
-}
-
-/** Converts an XLSX blob to a 2D array via a temporary Google Sheet. */
-function xlsxToRows_(attachment) {
-  var resource = { name: "TMP-import-" + Date.now(), mimeType: MimeType.GOOGLE_SHEETS };
-  var tmp = Drive.Files.create(resource, attachment.copyBlob(), { fields: "id" });
-  try {
-    var sheet = SpreadsheetApp.openById(tmp.id).getSheets()[0];
-    return sheet.getDataRange().getDisplayValues();
-  } finally {
-    Drive.Files.remove(tmp.id);
-  }
-}
-
-/** Extracts text from a PDF using Drive OCR (best effort). */
-function pdfToText_(attachment) {
-  var resource = { name: "TMP-ocr-" + Date.now(), mimeType: MimeType.GOOGLE_DOCS };
-  var tmp = Drive.Files.create(resource, attachment.copyBlob(), { fields: "id", ocrLanguage: "en" });
-  try {
-    return DocumentApp.openById(tmp.id).getBody().getText() || "";
-  } finally {
-    Drive.Files.remove(tmp.id);
-  }
-}
-
-/**
- * Maps a parsed spreadsheet (header row + data rows) into normalized records
- * using a column-alias dictionary (English + Korean headers).
- */
-function tabularToRecords_(rows, category, meta) {
-  if (!rows || rows.length < 2) return [];
-  var aliases = {
-    customer: ["CUSTOMER", "CLIENT", "ACCOUNT", "SHIP TO", "거래처", "고객사"],
-    invoice: ["INVOICE", "INVOICE NO.", "INVOICE #", "PO#", "PO NUMBER", "인보이스", "PI NO.", "PI NO"],
-    shipDate: ["SHIP DATE", "PU DATE", "DATE", "ETD", "출고일", "선적일"],
-    eta: ["ETA", "ARRIVAL", "ARRIVAL DATE", "입고일", "도착일", "도착예정일"],
-    qty: ["QTY", "QUANTITY", "수량", "CARTONS", "CTN"],
-    pallets: ["PALLET", "PALLETS", "PLT", "팔렛", "파렛트"],
-    carrier: ["CARRIER", "TRUCKING", "운송사", "선사", "FORWARDER"],
-    pro: ["PRO#", "PRO", "TRACKING", "BOL", "BOL#", "B/L", "BL NO", "B/L NO.", "HBL", "MBL"],
-    container: ["CONTAINER", "CONTAINER NO", "CNTR", "컨테이너"],
-    vessel: ["VESSEL", "VESSEL/VOY", "FLIGHT", "모선", "선명"],
-    sku: ["SKU", "상품코드", "ITEM CODE", "품번"],
-    note: ["NOTE", "REMARK", "MEMO", "비고", "ISSUE"]
-  };
-
-  // Find header row within the first 5 rows.
-  var headerRowIdx = -1, map = {};
-  for (var r = 0; r < Math.min(5, rows.length); r++) {
-    var candidate = headerAliasMap_(rows[r], aliases);
-    if (Object.keys(candidate).length >= 2) { headerRowIdx = r; map = candidate; break; }
-  }
-  if (headerRowIdx === -1) throw new Error("No recognizable header row.");
-
-  var records = [];
-  for (var i = headerRowIdx + 1; i < rows.length; i++) {
-    var row = rows[i];
-    if (!row.join("").trim()) continue;
-    var rec = { kind: guessKind_(category, meta.subject) };
-    Object.keys(map).forEach(function (field) { rec[field] = String(row[map[field]] || "").trim(); });
-    if (rec.customer || rec.invoice || rec.pro || rec.container) records.push(rec);
-  }
-  return records;
-=======
   // Compatibility entry point for any pre-existing trigger. V2 owns message-level
   // dedupe, broader logistics discovery, source-row updates, and trigger migration.
   return processLogisticsEmailsV2();
->>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
-=======
-  // Compatibility entry point for any pre-existing trigger. V2 owns message-level
-  // dedupe, broader logistics discovery, source-row updates, and trigger migration.
-  return processLogisticsEmailsV2();
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 }
 
 function headerAliasMap_(headerRow, aliases) {
@@ -327,13 +134,6 @@ function upsertInboundRow_(record) {
   put(["INVOICE", "INVOICE NO.", "PI NO.", "ENTRY NO"], record.invoice);
   put(["QTY", "CTNS", "CARTONS", "수량"], record.qty);
   put(["MODE", "TYPE"], record.mode);
-<<<<<<< HEAD
-<<<<<<< HEAD
-  put(["NOTE", "REMARK", "비고"], (record.note || "") + " [auto: " + (record._sourceEmail || "email") + "]");
-=======
->>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
-=======
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   put(["WEBSITE STATUS", "STATUS"], "SCHEDULED");
   sheet.appendRow(newRow);
   markAutoRow_(sheet, sheet.getLastRow());
@@ -372,13 +172,6 @@ function upsertOutboundRow_(record) {
   put(["PALLET TYPE", "PALLETS", "PLT"], record.pallets);
   put(["CARRIER"], record.carrier || "Trucking");
   put(["PRO#", "PRO"], record.pro);
-<<<<<<< HEAD
-<<<<<<< HEAD
-  put(["NOTE", "REMARK"], (record.note || "Imported from email") + " [auto: " + (record._sourceEmail || "email") + "]");
-=======
->>>>>>> 469241b300fe0aacf2c1ca2f59e316291ea5b49b
-=======
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   put(["WEBSITE STATUS", "STATUS"], "WORK IN PROGRESS");
   sheet.appendRow(newRow);
   markAutoRow_(sheet, sheet.getLastRow());

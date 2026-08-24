@@ -1,7 +1,2 @@
-<<<<<<< HEAD
-Production redeploy requested 2026-08-11T07:09:00-07:00
-Purpose: publish updated Fulfillment TK source-style integration to stylekorean.dpdns.org
-=======
 Production redeploy requested 2026-08-23T04:54:14Z
 Purpose: restore the pre-wipe Worker/D1/multi-skin codebase and reconcile the AD/AB status-column fix, Control Tower cards, and font-size unification into it
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481

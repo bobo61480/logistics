@@ -69,14 +69,6 @@ describe("control tower Worker routing", () => {
     expect(worker).toContain("x-frame-options");
   });
 
-<<<<<<< HEAD
-  it("does not merge distinct trucking source rows in the browser", () => {
-    const page = read("app/page.tsx");
-
-    expect(page).not.toContain("consolidateTruckingItems");
-    expect(page).not.toContain('invoices.join("\\n")');
-    expect(page).toContain("Each source row remains its own operational move");
-=======
   it("only merges same-customer, same-date trucking rows, and keeps status writes pinned to their real source row", () => {
     // A 2026-08-12 incident removed customer+date trucking consolidation because it could
     // hide distinct operational moves. Control Tower reintroduced it deliberately (2026-08-23)
@@ -91,6 +83,5 @@ describe("control tower Worker routing", () => {
       "The status dropdown and \"source row\" link act on primary's row",
     );
     expect(page).toContain('editable: statusSource === primary ? primary.editable : false');
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   });
 });

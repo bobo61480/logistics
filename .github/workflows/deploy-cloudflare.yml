@@ -1,8 +1,5 @@
 name: Deploy canonical logistics site to Cloudflare
-<<<<<<< HEAD
-=======
 # Production redeploy requested 2026-08-14
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 
 on:
   push:
@@ -11,10 +8,7 @@ on:
 
 permissions:
   contents: read
-<<<<<<< HEAD
-=======
   issues: write
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 
 concurrency:
   group: cloudflare-production
@@ -54,81 +48,13 @@ jobs:
           test -f out/light-full/index.html
           test -f out/fulfillment-style/index.html
 
-<<<<<<< HEAD
-      - name: Prepare production D1 binding when permitted
-        id: database
-=======
       - name: Apply D1 migrations
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -uo pipefail
-<<<<<<< HEAD
-          database_name="stylekorean-logistics-read-model"
-          production_config=".wrangler.production.toml"
-          database_config=".wrangler.database.toml"
-          cp wrangler.toml "$production_config"
-          cp wrangler.toml "$database_config"
-
-          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] || [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
-            echo "::warning::CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID must both be configured; deploying the verified Google Sheets fallback without a database binding."
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if ! databases="$(npx wrangler d1 list --json 2>/tmp/d1-list.log)"; then
-            echo "::warning::D1 permission is unavailable; the token must contain Account > D1 > Edit and target the same account as CLOUDFLARE_ACCOUNT_ID. Deploying the verified Google Sheets fallback without a database binding."
-            sed -n '1,80p' /tmp/d1-list.log
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          database_id="$(DATABASES="$databases" DATABASE_NAME="$database_name" node -e 'const rows=JSON.parse(process.env.DATABASES); const match=rows.find((row)=>row.name===process.env.DATABASE_NAME); process.stdout.write(match?.uuid || "")')"
-
-          if [ -z "$database_id" ]; then
-            if ! npx wrangler d1 create "$database_name" --location wnam; then
-              echo "::warning::D1 creation was rejected; deploying the verified Google Sheets fallback without a database binding."
-              echo "configured=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            if ! databases="$(npx wrangler d1 list --json)"; then
-              echo "::warning::D1 could not be read after creation; deploying without a database binding."
-              echo "configured=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            database_id="$(DATABASES="$databases" DATABASE_NAME="$database_name" node -e 'const rows=JSON.parse(process.env.DATABASES); const match=rows.find((row)=>row.name===process.env.DATABASE_NAME); process.stdout.write(match?.uuid || "")')"
-          fi
-
-          if [ -z "$database_id" ]; then
-            echo "::warning::D1 database UUID was not returned; deploying without a database binding."
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          cat >> "$database_config" <<EOF
-
-          [[d1_databases]]
-          binding = "DB"
-          database_name = "$database_name"
-          database_id = "$database_id"
-          migrations_dir = "./migrations"
-
-          [triggers]
-          crons = ["*/15 * * * *"]
-          EOF
-          if ! npx wrangler d1 migrations apply "$database_name" --remote --config "$database_config"; then
-            echo "::warning::D1 migrations failed; deploying without the unsafe or incomplete database binding."
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          mv "$database_config" "$production_config"
-          echo "configured=true" >> "$GITHUB_OUTPUT"
-
-      - name: Deploy canonical Worker version without mutating its existing route
-=======
           # wrangler.toml declares the D1 binding statically (both this workflow
           # and Cloudflare's native Workers Builds Git integration deploy from
           # the same file, so the binding must not depend on a runtime probe).
@@ -145,51 +71,12 @@ jobs:
           fi
 
       - name: Deploy canonical Worker and restore production route
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -euo pipefail
-<<<<<<< HEAD
-          production_config=".wrangler.production.toml"
-          version_config=".wrangler.version.toml"
-          release_tag="release-${GITHUB_SHA}-attempt-${GITHUB_RUN_ATTEMPT}"
-
-          # The production route already targets this Worker. Version uploads and
-          # deployments do not need zone-write authority, so keep route lifecycle
-          # separate from routine code/data releases.
-          awk '
-            /^\[\[routes\]\]$/ { skip_route = 1; next }
-            skip_route && /^\[/ { skip_route = 0 }
-            !skip_route { print }
-          ' "$production_config" > "$version_config"
-
-          if grep -q '^\[\[routes\]\]$' "$version_config"; then
-            echo "::error::The version deployment config still contains a route block."
-            exit 1
-          fi
-
-          npx wrangler versions upload \
-            --config "$version_config" \
-            --tag "$release_tag" \
-            --message "StyleKorean release ${GITHUB_SHA}"
-          npx wrangler versions deploy \
-            --config "$version_config" \
-            --version-tag "$release_tag" \
-            --percentage 100 \
-            --message "StyleKorean production ${GITHUB_SHA}" \
-            --yes
-          npx wrangler triggers deploy \
-            --config "$version_config" \
-            --triggers "*/15 * * * *"
-
-      - name: Verify live custom domain, appearance routes, and Worker APIs
-        shell: bash
-        env:
-          EXPECTED_DATABASE_CONFIGURED: ${{ steps.database.outputs.configured }}
-=======
           # A version-only deployment cannot recover a detached zone route.
           # Canonical deploy validates and restores the configured route, assets,
           # D1 binding, rate limiter, and Worker code together.
@@ -219,7 +106,6 @@ jobs:
           # successful deploy always carries it — there is no more
           # runtime-probed fallback state to read from a prior step.
           EXPECTED_DATABASE_CONFIGURED: "true"
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
         run: |
           set -euo pipefail
           fetch_route() {

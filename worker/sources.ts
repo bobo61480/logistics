@@ -37,10 +37,7 @@ type AppsScriptSnapshot = {
     inventoryDashboardTable?: string[][];
     skwInboundTable?: string[][];
     skwStockTable?: string[][];
-<<<<<<< HEAD
-=======
     pendingVerification?: string[][];
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   };
 };
 
@@ -142,20 +139,12 @@ export function selectOutboundSource(
   scheduleRows: string[][] | null,
   truckingRows: string[][] | null,
 ): { rows: string[][] | null; meta: OutboundSourceMeta } {
-<<<<<<< HEAD
-  const scheduleRowCount = populatedOutboundRows(scheduleRows, 3);
-=======
   const scheduleRowCount = populatedOutboundRows(scheduleRows, 1);
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   const truckingRowCount = populatedOutboundRows(truckingRows, 2);
   if (scheduleRowCount > 0) {
     return {
       rows: scheduleRows,
-<<<<<<< HEAD
-      meta: { sheetName: "Outbound Shipping Schedule", headerRow: 3, rowCount: scheduleRowCount, fallback: false },
-=======
       meta: { sheetName: "Outbound Shipping Schedule", headerRow: 1, rowCount: scheduleRowCount, fallback: false },
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
     };
   }
   if (truckingRowCount > 0) {
@@ -174,11 +163,7 @@ export function selectOutboundSource(
     rows: scheduleRows ?? truckingRows,
     meta: {
       sheetName: scheduleRows ? "Outbound Shipping Schedule" : "WH Trucking Request",
-<<<<<<< HEAD
-      headerRow: scheduleRows ? 3 : 2,
-=======
       headerRow: scheduleRows ? 1 : 2,
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
       rowCount: 0,
       fallback: Boolean(truckingRows),
       reason: "No populated outbound shipment rows are available",
@@ -186,8 +171,6 @@ export function selectOutboundSource(
   };
 }
 
-<<<<<<< HEAD
-=======
 // PENDING VERIFICATION read: columns A..N only — column O holds Raw JSON
 // (up to 5k chars of raw extraction text: email subjects, message ids,
 // document excerpts) which must never leave the backend, and the feed only
@@ -238,7 +221,6 @@ async function fetchPendingVerificationDirect(): Promise<SourceResult<GvizTable>
   };
 }
 
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
 async function timedFetch(name: string, url: URL, maxBytes = MAX_SOURCE_BYTES, timeoutMs = 20_000): Promise<SourceResult<string>> {
   const started = Date.now();
   const controller = new AbortController();
@@ -263,21 +245,13 @@ export async function fetchCsvSource(name: string, spreadsheetId: string, gid: n
   catch (error) { return { data: null, health: { ...result.health, ok: false, error: String(error) } }; }
 }
 
-<<<<<<< HEAD
-export async function fetchGvizSource(name: string, spreadsheetId: string, options: { gid?: number; sheet?: string; range: string; headers?: number }): Promise<SourceResult<GvizTable>> {
-=======
 export async function fetchGvizSource(name: string, spreadsheetId: string, options: { gid?: number; sheet?: string; range?: string; headers?: number; tq?: string }): Promise<SourceResult<GvizTable>> {
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   const url = new URL(`https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq`);
   url.searchParams.set("tqx", "out:json");
   if (options.gid !== undefined) url.searchParams.set("gid", String(options.gid));
   if (options.sheet) url.searchParams.set("sheet", options.sheet);
-<<<<<<< HEAD
-  url.searchParams.set("range", options.range);
-=======
   if (options.range) url.searchParams.set("range", options.range);
   if (options.tq) url.searchParams.set("tq", options.tq);
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   url.searchParams.set("headers", String(options.headers ?? 1));
   url.searchParams.set("_", String(Date.now()));
   const result = await timedFetch(name, url);
@@ -329,8 +303,6 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
       const inventoryTable = rowsToGvizTable(raw.inventoryDashboardTable);
       const inboundTable = rowsToGvizTable(raw.skwInboundTable);
       const stockTable = rowsToGvizTable(raw.skwStockTable);
-<<<<<<< HEAD
-=======
       // Code.gs returns pendingVerification in the snapshot; until the deployed
       // Apps Script catches up, fall back to reading the tab directly so review
       // events don't vanish from the feed in the meantime.
@@ -340,7 +312,6 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
       const pendingTable = raw.pendingVerification
         ? rowsToGvizTable(raw.pendingVerification)
         : pendingFallback!.data;
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
       return {
         sourceHealth: [
           healthFor("IMPORTS", raw.imports),
@@ -352,10 +323,7 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
           healthFor("Inventory", inventoryTable),
           healthFor("SKW Inbound", inboundTable),
           healthFor("SKW Stock", stockTable),
-<<<<<<< HEAD
-=======
           pendingFallback ? pendingFallback.health : healthFor("Pending Verification", pendingTable),
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
         ],
         sources: {
           imports: raw.imports ? normalizeImportsParcelRows(raw.imports) : null,
@@ -366,8 +334,6 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
           inventoryDashboardTable: inventoryTable,
           skwInboundTable: inboundTable,
           skwStockTable: stockTable,
-<<<<<<< HEAD
-=======
           // null (feed unavailable, shown as such by the card) when the pending
           // read failed — never an empty array, which would misreport "nothing
           // to review" and could be persisted to D1 over the last good feed.
@@ -378,7 +344,6 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
                 pendingVerificationTable: pendingTable,
               })
             : null,
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
         },
         kpiRows: {
           nationalRows: raw.nationalOutbound ?? [],
@@ -390,11 +355,7 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
     }
   }
 
-<<<<<<< HEAD
-  const [imports, outbound, trucking, transfers, nationalOutbound, salesOutbound, inventoryDashboardTable, skwInboundTable, skwStockTable] = await Promise.all([
-=======
   const [imports, outbound, trucking, transfers, nationalOutbound, salesOutbound, inventoryDashboardTable, skwInboundTable, skwStockTable, pendingVerification] = await Promise.all([
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
     fetchCsvSource("IMPORTS", LOGISTICS_MASTER_ID, IMPORTS_GID),
     fetchCsvSource("Outbound Shipping Schedule", LOGISTICS_MASTER_ID, OUTBOUND_GID),
     fetchCsvSource("WH Trucking Request", LOGISTICS_MASTER_ID, TRUCKING_GID),
@@ -404,10 +365,7 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
     fetchGvizSource("Inventory", LOGISTICS_MASTER_ID, { sheet: "INVENTORY", range: "A1:O6500", headers: 1 }),
     fetchGvizSource("SKW Inbound", LOGISTICS_MASTER_ID, { sheet: "SKW_Inbound", range: "A1:R2500", headers: 1 }),
     fetchGvizSource("SKW Stock", LOGISTICS_MASTER_ID, { sheet: "SKW_Stock", range: "A1:J2500", headers: 1 }),
-<<<<<<< HEAD
-=======
     fetchPendingVerificationDirect(),
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   ]);
 
   const effectiveOutbound = selectOutboundSource(outbound.data, trucking.data);
@@ -420,11 +378,7 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
     : outbound.health;
 
   return {
-<<<<<<< HEAD
-    sourceHealth: [imports, { health: outboundHealth }, trucking, transfers, nationalOutbound, salesOutbound, inventoryDashboardTable, skwInboundTable, skwStockTable].map((entry) => entry.health),
-=======
     sourceHealth: [imports, { health: outboundHealth }, trucking, transfers, nationalOutbound, salesOutbound, inventoryDashboardTable, skwInboundTable, skwStockTable, pendingVerification].map((entry) => entry.health),
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
     sources: {
       imports: imports.data ? normalizeImportsParcelRows(imports.data) : null,
       outbound: effectiveOutbound.rows,
@@ -434,8 +388,6 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
       inventoryDashboardTable: inventoryDashboardTable.data,
       skwInboundTable: skwInboundTable.data,
       skwStockTable: skwStockTable.data,
-<<<<<<< HEAD
-=======
       // null when the pending read failed (its sourceHealth entry carries the
       // error) — an empty array would misreport "nothing to review".
       gmailIngestion: pendingVerification.data
@@ -445,7 +397,6 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
             pendingVerificationTable: pendingVerification.data,
           })
         : null,
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
     },
     kpiRows: {
       nationalRows: gvizTableRows(nationalOutbound.data),
@@ -455,8 +406,6 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
     },
   };
 }
-<<<<<<< HEAD
-=======
 
 // --- Gmail ingestion feed ----------------------------------------------------
 // Derived entirely from data the pipeline already writes: GmailPipeline.gs tags
@@ -627,4 +576,3 @@ export function deriveGmailIngestion(input: {
   // after pending.
   return [...actionable, ...resolved, ...committed].slice(0, 200);
 }
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481

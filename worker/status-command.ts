@@ -22,11 +22,8 @@ type StatusCommand = {
   customer?: string;
   shipDate?: string;
   currentStatus?: string;
-<<<<<<< HEAD
-=======
   isSmallParcel?: boolean;
   trackingNumber?: string;
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
   status: string;
 };
 

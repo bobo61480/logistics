@@ -88,8 +88,6 @@ GitHub Pages is not a production target. Keep the repository's Pages feature dis
 ## Migration Notes
 
 See [CANONICAL_NEXTJS_MIGRATION.md](./CANONICAL_NEXTJS_MIGRATION.md) for the history of migrating from the legacy static site to this Next.js app.
-<<<<<<< HEAD
-=======
 
 <!-- BEGIN:nextjs-agent-rules -->
 
@@ -100,4 +98,3 @@ This version has breaking changes — APIs, conventions, and file structure may 
 This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
 
 <!-- END:nextjs-agent-rules -->
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481

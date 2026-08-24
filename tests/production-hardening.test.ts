@@ -20,19 +20,6 @@ describe("production hardening", () => {
     expect(workflow).toContain("sourceHealth");
     expect(workflow).toContain("worker-v8-public-guardrails");
     expect(workflow).toContain("d1 migrations apply");
-<<<<<<< HEAD
-    expect(workflow).toContain('binding = "DB"');
-    expect(workflow).toContain("wrangler versions upload");
-    expect(workflow).toContain("wrangler versions deploy");
-    expect(workflow).toContain("wrangler triggers deploy");
-    expect(workflow).toContain('release_tag="release-${GITHUB_SHA}-attempt-${GITHUB_RUN_ATTEMPT}"');
-    expect(workflow).toContain("The version deployment config still contains a route block");
-    expect(workflow).not.toContain("wrangler deploy --config .wrangler.production.toml");
-    expect(workflow).toContain("EXPECTED_DATABASE_CONFIGURED");
-    expect(workflow).toContain("D1 permission is unavailable");
-    expect(workflow).toContain("Account > D1 > Edit");
-    expect(workflow).toContain("same account as CLOUDFLARE_ACCOUNT_ID");
-=======
     // The versions-based release flow was replaced by a canonical
     // `wrangler deploy` (see "Restore Cloudflare production route during
     // deploy"): a version-only deployment cannot recover a detached zone
@@ -48,13 +35,10 @@ describe("production hardening", () => {
     // Cloudflare's native Workers Builds Git integration), not injected
     // dynamically per-run, so the live smoke test always expects it bound.
     expect(workflow).toContain('EXPECTED_DATABASE_CONFIGURED: "true"');
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
     expect(workflow).toContain('snapshot.storage!=="d1"');
     expect(workflow).toContain("Number(health.databaseAgeSeconds)>30*60");
     expect(workflow).toContain("snapshot.stale===true");
     expect(workflow).toContain("x-content-type-options: nosniff");
-<<<<<<< HEAD
-=======
 
     const wranglerConfig = read("wrangler.toml");
     expect(wranglerConfig).toContain("[[d1_databases]]");
@@ -64,7 +48,6 @@ describe("production hardening", () => {
     expect(wranglerConfig).toContain("[triggers]");
     expect(wranglerConfig).toContain('crons = ["*/15 * * * *"]');
 
->>>>>>> 3073244f36fcf87c014806c9f3289c04cd8fd481
     const worker = read("worker/index.ts");
     expect(worker).toContain('databaseState: "unbound" | "initializing" | "ready" | "unavailable"');
     expect(worker).toContain('databaseReady: databaseState === "ready"');
