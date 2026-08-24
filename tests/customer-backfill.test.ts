@@ -39,15 +39,22 @@ type BackfillHelpers = {
     aggregate: Aggregate,
     truckingRecords: CustomerRecord[],
   ) => {
-    classification: "would-create" | "would-flag-second-location" | "would-fill-missing-address" | "ok-no-action";
+    classification:
+      | "would-create"
+      | "would-flag-second-location"
+      | "would-fill-missing-address"
+      | "ambiguous-location-family"
+      | "ok-no-action";
     matchedRecord: CustomerRecord | null;
     proposedAddress: string;
+    pendingAddresses: string[];
     existingAddress: string | null;
     addressVariants: string[];
     sourcesUsed: string[];
   };
   stripCustomerLocationSuffix_: (name: string) => string;
   nextCustomerLocationSuffix_: (baseName: string, records: CustomerRecord[]) => number;
+  isAmbiguousLocationFamily_: (customerValue: string, records: CustomerRecord[]) => boolean;
   appendBackfillCustomer_: (sheet: FakeSheet, header: Header, name: string, address: string, targetRow: number) => void;
   fillBackfillCustomerAddress_: (sheet: FakeSheet, header: Header, matchedRecord: CustomerRecord, address: string) => void;
   flagBackfillSecondLocation_: (
@@ -71,7 +78,7 @@ function loadBackfillHelpers(): BackfillHelpers {
       "mergeCustomerEntryAddresses_,findBackfillCustomerDbHeader_,buildBackfillCustomerRecords_," +
       "matchBackfillCustomerRecord_,classifyCustomerCandidate_,stripCustomerLocationSuffix_," +
       "nextCustomerLocationSuffix_,appendBackfillCustomer_,fillBackfillCustomerAddress_," +
-      "flagBackfillSecondLocation_};",
+      "flagBackfillSecondLocation_,isAmbiguousLocationFamily_};",
     context,
   );
   return context.__backfill as BackfillHelpers;
@@ -231,8 +238,12 @@ describe("customer backfill: candidate classification", () => {
   // regardless of a location suffix — so two distinct per-location TRUCKING
   // records (e.g. "Mega Mart (Palo Alto)" and "Mega Mart - Fremont") share
   // one canonical key. A log entry for that brand must never be silently
-  // matched to either location.
-  it("never guesses between two TRUCKING records sharing a canonical key — treats it as a new candidate", () => {
+  // matched to either location — and, since 2026-08-24's live-write rollout
+  // (Codex review on PR #92), must also never be treated as "no match at
+  // all" and created as a fresh blank duplicate; it's classified as its own
+  // "ambiguous-location-family" outcome instead, logged for a human, never
+  // written.
+  it("never guesses between two TRUCKING records sharing a canonical key — flags it as ambiguous, never creates", () => {
     const rows = makeTruckingRows([
       { name: "Mega Mart (Palo Alto)", address: "1 First Loc" },
       { name: "Mega Mart - Fremont", address: "2 Second Loc" },
@@ -242,12 +253,79 @@ describe("customer backfill: candidate classification", () => {
     const aggregate = makeAggregate("Mega Mart", { "B2B/E-COM TRUCKING": ["3 Third Loc"] });
 
     const result = helpers.classifyCustomerCandidate_("Mega Mart", aggregate, records);
-    expect(result.classification).toBe("would-create");
+    expect(result.classification).toBe("ambiguous-location-family");
     expect(result.matchedRecord).toBeNull();
+  });
+
+  it("flags a base name already split into numbered locations as ambiguous rather than creating another duplicate", () => {
+    // The exact scenario the fix addresses: after flagBackfillSecondLocation_
+    // renames "Acme Co" to "Acme Co - 1" and appends "Acme Co - 2", the bare
+    // "Acme Co" name (which will keep appearing in the B2B log every day)
+    // must never again read as "no match at all".
+    const rows = makeTruckingRows([
+      { name: "Acme Co - 1", address: "1 First Loc" },
+      { name: "Acme Co - 2", address: "2 Second Loc" },
+    ]);
+    const header = helpers.findBackfillCustomerDbHeader_(rows);
+    const records = helpers.buildBackfillCustomerRecords_(rows, header);
+    const aggregate = makeAggregate("Acme Co", { "B2B/E-COM TRUCKING": ["1 First Loc"] });
+
+    const result = helpers.classifyCustomerCandidate_("Acme Co", aggregate, records);
+    expect(result.classification).toBe("ambiguous-location-family");
+  });
+
+  it("processes every distinct address not yet on file anywhere in the family, not just the first", () => {
+    const rows = makeTruckingRows([{ name: "Multi Co", address: "1 Known St" }]);
+    const header = helpers.findBackfillCustomerDbHeader_(rows);
+    const records = helpers.buildBackfillCustomerRecords_(rows, header);
+    const aggregate = makeAggregate("Multi Co", {
+      "B2B/E-COM TRUCKING": ["1 Known St", "2 New St"],
+      "Customer Entry": ["3 Also New St"],
+    });
+
+    const result = helpers.classifyCustomerCandidate_("Multi Co", aggregate, records);
+    expect(result.classification).toBe("would-flag-second-location");
+    expect(result.pendingAddresses).toEqual(["2 New St", "3 Also New St"]);
+  });
+
+  it("does not re-flag an address that's already on file for a sibling location in the same family", () => {
+    const rows = makeTruckingRows([
+      { name: "Sibling Co - 1", address: "1 First Loc" },
+      { name: "Sibling Co - 2", address: "2 Second Loc" },
+    ]);
+    const header = helpers.findBackfillCustomerDbHeader_(rows);
+    const records = helpers.buildBackfillCustomerRecords_(rows, header);
+    // Matches "Sibling Co - 1" exactly; the observed address is already on
+    // file for the sibling "- 2" location, not a genuinely new one.
+    const aggregate = makeAggregate("Sibling Co - 1", { "B2B/E-COM TRUCKING": ["2 Second Loc"] });
+
+    const result = helpers.classifyCustomerCandidate_("Sibling Co - 1", aggregate, records);
+    expect(result.classification).toBe("ok-no-action");
   });
 });
 
 describe("customer backfill: live writes (2026-08-24 rollout)", () => {
+  it("flags ambiguity via the '- N' suffix family, independent of canonical aliasing", () => {
+    const records = [
+      { name: "Acme Co - 1" } as CustomerRecord,
+      { name: "Acme Co - 2" } as CustomerRecord,
+    ];
+    expect(helpers.isAmbiguousLocationFamily_("Acme Co", records)).toBe(true);
+  });
+
+  it("flags ambiguity via canonical-key aliasing (e.g. MEGA MART), independent of suffix stripping", () => {
+    const records = [
+      { name: "Mega Mart (Palo Alto)", canonicalKey: "MEGA MART" } as CustomerRecord,
+      { name: "Mega Mart - Fremont", canonicalKey: "MEGA MART" } as CustomerRecord,
+    ];
+    expect(helpers.isAmbiguousLocationFamily_("Mega Mart", records)).toBe(true);
+  });
+
+  it("is not ambiguous for a single, unrelated record", () => {
+    const records = [{ name: "Someone Else Co", canonicalKey: "SOMEONE ELSE CO" } as CustomerRecord];
+    expect(helpers.isAmbiguousLocationFamily_("Acme Co", records)).toBe(false);
+  });
+
   it("strips a trailing numeric location suffix, leaving unsuffixed names untouched", () => {
     expect(helpers.stripCustomerLocationSuffix_("OVER N OVER Over Beauty - 2")).toBe("OVER N OVER Over Beauty");
     expect(helpers.stripCustomerLocationSuffix_("Plain Customer Co")).toBe("Plain Customer Co");

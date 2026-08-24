@@ -89,12 +89,18 @@ function reconcileCustomerBackfill() {
     var wouldCreate = 0;
     var wouldFlag = 0;
     var wouldFill = 0;
+    var ambiguousCount = 0;
     var okCount = 0;
 
     aggregation.aggregates.forEach(function (aggregate, exactKey) {
       var classification = classifyCustomerCandidate_(aggregate.name, aggregate, truckingRecords);
 
-      if (classification.classification === "would-create") {
+      if (classification.classification === "ambiguous-location-family") {
+        // Already split into 2+ known locations — never guess which one,
+        // never pile a new blank duplicate on top. Log only.
+        ambiguousCount++;
+        logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
+      } else if (classification.classification === "would-create") {
         wouldCreate++;
         logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
         if (!CUSTOMER_BACKFILL_DRY_RUN) {
@@ -106,12 +112,16 @@ function reconcileCustomerBackfill() {
         wouldFlag++;
         logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
         if (!CUSTOMER_BACKFILL_DRY_RUN) {
-          var newName = flagBackfillSecondLocation_(
-            truckingSheet, truckingHeader, truckingRecords, classification.matchedRecord,
-            classification.proposedAddress, nextTruckingRow
-          );
-          truckingRecords.push(makeBackfillRecord_(nextTruckingRow, newName, classification.proposedAddress));
-          nextTruckingRow++;
+          // One append per distinct address not yet on file anywhere in this
+          // customer's location family — not just the first one — so no
+          // known-different address is silently dropped.
+          classification.pendingAddresses.forEach(function (address) {
+            var newName = flagBackfillSecondLocation_(
+              truckingSheet, truckingHeader, truckingRecords, classification.matchedRecord, address, nextTruckingRow
+            );
+            truckingRecords.push(makeBackfillRecord_(nextTruckingRow, newName, address));
+            nextTruckingRow++;
+          });
         }
       } else if (classification.classification === "would-fill-missing-address") {
         wouldFill++;
@@ -130,6 +140,7 @@ function reconcileCustomerBackfill() {
       wouldCreate: wouldCreate,
       wouldFlagSecondLocation: wouldFlag,
       wouldFillMissingAddress: wouldFill,
+      ambiguousLocationFamily: ambiguousCount,
       okNoAction: okCount,
       skippedBlankNameRows: aggregation.skippedBlankNameRows,
       dryRun: CUSTOMER_BACKFILL_DRY_RUN
@@ -140,6 +151,7 @@ function reconcileCustomerBackfill() {
       ", wouldCreate=" + wouldCreate +
       ", wouldFlagSecondLocation=" + wouldFlag +
       ", wouldFillMissingAddress=" + wouldFill +
+      ", ambiguousLocationFamily=" + ambiguousCount +
       ", ok=" + okCount +
       ", skippedBlankNameRows=" + aggregation.skippedBlankNameRows +
       ", dryRun=" + CUSTOMER_BACKFILL_DRY_RUN
@@ -151,6 +163,7 @@ function reconcileCustomerBackfill() {
       wouldCreate: wouldCreate,
       wouldFlagSecondLocation: wouldFlag,
       wouldFillMissingAddress: wouldFill,
+      ambiguousLocationFamily: ambiguousCount,
       okNoAction: okCount,
       skippedBlankNameRows: aggregation.skippedBlankNameRows,
       dryRun: CUSTOMER_BACKFILL_DRY_RUN
@@ -307,12 +320,59 @@ function mergeCustomerEntryAddresses_(aggregates, rows, header) {
 }
 
 /**
+ * True when customerValue is ambiguous against the existing TRUCKING
+ * records in either of two ways matchBackfillCustomerRecord_ already
+ * treats as "no usable match" (never guess) but that matter differently
+ * to a live-write caller than a genuinely brand-new customer:
+ *  - base name (ignoring any "- N" suffix) matches 2+ records — a family
+ *    this job itself already split into numbered locations. Without this
+ *    check the bare brand name matches neither "- 1" nor "- 2" and reads
+ *    as "no match at all" on every subsequent run, appending a fresh blank
+ *    duplicate forever.
+ *  - canonical key (Code.gs's brand-alias handling, e.g. MEGA MART/
+ *    TOKTOK BEAUTY/ROYAL IMEX, or two records that otherwise happen to
+ *    canonicalize the same) matches 2+ records — the exact "multiple
+ *    per-location entries" case matchBackfillCustomerRecord_'s own doc
+ *    comment describes, which must never be treated as "absent" and
+ *    created fresh.
+ */
+function isAmbiguousLocationFamily_(customerValue, records) {
+  var exactKey = customerValue.toUpperCase().replace(/\s+/g, " ").trim();
+  var suffixMatches = records.filter(function (r) {
+    return stripCustomerLocationSuffix_(r.name).toUpperCase().replace(/\s+/g, " ").trim() === exactKey;
+  });
+  if (suffixMatches.length > 1) return true;
+
+  var canonicalKey = normalizeWmsCustomerKey_(canonicalWmsCustomer_(customerValue));
+  if (!canonicalKey) return false;
+  var canonicalMatches = records.filter(function (r) { return r.canonicalKey === canonicalKey; });
+  return canonicalMatches.length > 1;
+}
+
+/**
+ * Every distinct, non-blank address already on file across the WHOLE
+ * location family sharing name's base (not just one matched record) — so a
+ * genuinely new address is never mistaken for "new" just because it
+ * doesn't match one particular sibling location, and vice versa.
+ */
+function familyAddressesFor_(name, records) {
+  var baseKey = stripCustomerLocationSuffix_(name).toUpperCase().replace(/\s+/g, " ").trim();
+  var addresses = [];
+  records.forEach(function (r) {
+    if (stripCustomerLocationSuffix_(r.name).toUpperCase().replace(/\s+/g, " ").trim() !== baseKey) return;
+    if (r.address && addresses.indexOf(r.address) === -1) addresses.push(r.address);
+  });
+  return addresses;
+}
+
+/**
  * The core reconciliation decision for one distinct customer name:
+ *  - matches 2+ existing locations already -> "ambiguous-location-family"
  *  - no TRUCKING match at all               -> "would-create"
  *  - matched, TRUCKING has no address on file
  *    but the log/Customer Entry has one     -> "would-fill-missing-address"
- *  - matched, TRUCKING's address differs
- *    from a non-blank observed address      -> "would-flag-second-location"
+ *  - matched, one or more observed addresses
+ *    aren't on file anywhere in the family  -> "would-flag-second-location"
  *  - matched, addresses agree (or nothing
  *    new to compare)                        -> "ok-no-action"
  * Address comparison is a plain trimmed string comparison — no
@@ -332,10 +392,22 @@ function classifyCustomerCandidate_(name, aggregate, truckingRecords) {
   });
 
   if (!matchedRecord) {
+    if (isAmbiguousLocationFamily_(name, truckingRecords)) {
+      return {
+        classification: "ambiguous-location-family",
+        matchedRecord: null,
+        proposedAddress: allAddresses[0] || "",
+        pendingAddresses: [],
+        existingAddress: null,
+        addressVariants: allAddresses,
+        sourcesUsed: sourcesUsed
+      };
+    }
     return {
       classification: "would-create",
       matchedRecord: null,
       proposedAddress: allAddresses[0] || "",
+      pendingAddresses: [],
       existingAddress: null,
       addressVariants: allAddresses,
       sourcesUsed: sourcesUsed
@@ -349,21 +421,24 @@ function classifyCustomerCandidate_(name, aggregate, truckingRecords) {
       classification: "would-fill-missing-address",
       matchedRecord: matchedRecord,
       proposedAddress: allAddresses[0],
+      pendingAddresses: [],
       existingAddress: "",
       addressVariants: allAddresses,
       sourcesUsed: sourcesUsed
     };
   }
 
-  var conflicting = allAddresses.filter(function (address) {
-    return address && existingAddress && address !== existingAddress;
+  var familyAddresses = familyAddressesFor_(matchedRecord.name, truckingRecords);
+  var pendingAddresses = allAddresses.filter(function (address) {
+    return address && familyAddresses.indexOf(address) === -1;
   });
 
-  if (conflicting.length > 0) {
+  if (pendingAddresses.length > 0) {
     return {
       classification: "would-flag-second-location",
       matchedRecord: matchedRecord,
-      proposedAddress: conflicting[0],
+      proposedAddress: pendingAddresses[0],
+      pendingAddresses: pendingAddresses,
       existingAddress: existingAddress,
       addressVariants: allAddresses,
       sourcesUsed: sourcesUsed
@@ -374,6 +449,7 @@ function classifyCustomerCandidate_(name, aggregate, truckingRecords) {
     classification: "ok-no-action",
     matchedRecord: matchedRecord,
     proposedAddress: allAddresses[0] || "",
+    pendingAddresses: [],
     existingAddress: existingAddress,
     addressVariants: allAddresses,
     sourcesUsed: sourcesUsed
@@ -484,6 +560,7 @@ function logCustomerBackfillCandidate_(name, aggregate, classification) {
       customer: name,
       occurrenceCount: aggregate.occurrenceCount,
       proposedAddress: classification.proposedAddress,
+      pendingAddresses: classification.pendingAddresses,
       existingAddress: classification.existingAddress,
       existingTruckingRow: classification.matchedRecord ? classification.matchedRecord.rowNumber : null,
       sources: classification.sourcesUsed,

@@ -17,6 +17,8 @@ type CustomerLookupHelpers = {
   buildCustomerNoteText_: (record: CustomerRecord) => string;
   canonicalWmsCustomer_: (value: unknown) => string;
   normalizeWmsCustomerKey_: (value: unknown) => string;
+  stripCustomerLocationSuffix_: (name: string) => string;
+  isAmbiguousLocationFamily_: (customerValue: string, records: CustomerRecord[]) => boolean;
 };
 
 function loadCustomerLookupHelpers(): CustomerLookupHelpers {
@@ -31,7 +33,8 @@ function loadCustomerLookupHelpers(): CustomerLookupHelpers {
 
   vm.runInContext(
     `${code}\n${customerLookup}\n;globalThis.__cust = {` +
-      "matchCustomerRecord_,buildCustomerNoteText_,canonicalWmsCustomer_,normalizeWmsCustomerKey_};",
+      "matchCustomerRecord_,buildCustomerNoteText_,canonicalWmsCustomer_,normalizeWmsCustomerKey_," +
+      "stripCustomerLocationSuffix_,isAmbiguousLocationFamily_};",
     context,
   );
   return context.__cust as CustomerLookupHelpers;
@@ -105,5 +108,35 @@ describe("WH Trucking Request customer lookup", () => {
   it("omits empty sections instead of leaving stray separators", () => {
     const record = makeRecord({ name: "No Data Customer" });
     expect(helpers.buildCustomerNoteText_(record)).toBe("");
+  });
+});
+
+// Live-write rollout (2026-08-24, Codex review on PR #92): matchCustomerRecord_
+// already refuses to guess for a "- N" family or a canonical-alias family,
+// but the live-write caller must distinguish that from a genuinely absent
+// customer, or it creates a fresh blank duplicate on top of already-known
+// locations every time the bare brand name is typed.
+describe("WH Trucking Request customer lookup: ambiguous-family detection for live writes", () => {
+  it("flags ambiguity via the '- N' suffix family a prior live write already created", () => {
+    const records = [makeRecord({ name: "Acme Co - 1" }), makeRecord({ name: "Acme Co - 2" })];
+    expect(helpers.isAmbiguousLocationFamily_("Acme Co", records)).toBe(true);
+  });
+
+  it("flags ambiguity via canonical-key aliasing (e.g. MEGA MART)", () => {
+    const records = [
+      makeRecord({ name: "MEGA MART (PALO ALTO)" }),
+      makeRecord({ name: "MEGA MART (FREMONT)" }),
+    ];
+    expect(helpers.isAmbiguousLocationFamily_("MEGA MART", records)).toBe(true);
+  });
+
+  it("is not ambiguous when the name matches nothing at all", () => {
+    const records = [makeRecord({ name: "Someone Else Co" })];
+    expect(helpers.isAmbiguousLocationFamily_("Brand New Customer", records)).toBe(false);
+  });
+
+  it("is not ambiguous for a normal single exact match", () => {
+    const records = [makeRecord({ name: "Acme Co" })];
+    expect(helpers.isAmbiguousLocationFamily_("Acme Co", records)).toBe(false);
   });
 });

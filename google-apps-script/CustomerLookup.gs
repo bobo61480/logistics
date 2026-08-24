@@ -70,29 +70,53 @@ function handleWhTruckingCustomerEdit_(e) {
   var numRows = e.range.getNumRows();
   if (startRow <= whHeader.rowIndex + 1) return;
 
-  var dbSheet = e.source.getSheetByName(CUSTOMER_DB_SHEET_NAME);
-  if (!dbSheet) return;
-  var dbValues = dbSheet.getDataRange().getDisplayValues();
-  var dbHeader = findCustomerDbHeader_(dbValues);
-  var records = buildCustomerRecords_(dbValues, dbHeader);
-  // Mutable insertion cursor — a single edit event can cover several pasted
-  // rows, and each new customer created live must land on its own row
-  // rather than every proposal in the batch overwriting the same one.
-  var nextDbRow = dbValues.length + 1;
+  // Live writes touch the same TRUCKING sheet reconcileCustomerBackfill()
+  // does, and a multi-row paste can trigger this handler more than once in
+  // close succession — take the same script lock so a concurrent edit or an
+  // overlapping backfill run can never pick the same insertion row.
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) {
+    Logger.log("Customer lookup: lock timeout, skipping this edit.");
+    return;
+  }
 
-  for (var i = 0; i < numRows; i++) {
-    var rowNumber = startRow + i;
-    var customerValue = String(sheet.getRange(rowNumber, customerCol).getDisplayValue() || "").trim();
-    if (!customerValue) continue;
+  try {
+    var dbSheet = e.source.getSheetByName(CUSTOMER_DB_SHEET_NAME);
+    if (!dbSheet) return;
+    var dbValues = dbSheet.getDataRange().getDisplayValues();
+    var dbHeader = findCustomerDbHeader_(dbValues);
+    // Mutable — a single edit event can cover several pasted rows, and both
+    // the insertion row and the in-memory record list must stay in sync as
+    // each row in the batch is processed, or the same never-seen-before
+    // customer appearing twice in one paste creates two duplicate rows
+    // instead of the second occurrence matching the first's new row.
+    var records = buildCustomerRecords_(dbValues, dbHeader);
+    var nextDbRow = dbValues.length + 1;
 
-    var record = matchCustomerRecord_(customerValue, records);
-    if (record) {
-      appendCustomerNote_(sheet, rowNumber, noteCol, record);
-    } else {
-      var seedAddress = addressCol ? String(sheet.getRange(rowNumber, addressCol).getDisplayValue() || "").trim() : "";
-      proposeNewCustomer_(customerValue, seedAddress, rowNumber, dbSheet, dbHeader, nextDbRow);
-      if (!CUSTOMER_CREATE_DRY_RUN) nextDbRow += 1;
+    for (var i = 0; i < numRows; i++) {
+      var rowNumber = startRow + i;
+      var customerValue = String(sheet.getRange(rowNumber, customerCol).getDisplayValue() || "").trim();
+      if (!customerValue) continue;
+
+      var record = matchCustomerRecord_(customerValue, records);
+      if (record) {
+        appendCustomerNote_(sheet, rowNumber, noteCol, record);
+      } else if (isAmbiguousLocationFamily_(customerValue, records)) {
+        // Multiple existing TRUCKING rows already share this base name
+        // (distinct locations) — never guess which one, and never pile a
+        // new blank duplicate on top. Log for a human, write nothing.
+        logAmbiguousCustomerFamily_(customerValue, rowNumber);
+      } else {
+        var seedAddress = addressCol ? String(sheet.getRange(rowNumber, addressCol).getDisplayValue() || "").trim() : "";
+        proposeNewCustomer_(customerValue, seedAddress, rowNumber, dbSheet, dbHeader, nextDbRow);
+        if (!CUSTOMER_CREATE_DRY_RUN) {
+          records.push(makeCustomerRecord_(nextDbRow, customerValue, seedAddress));
+          nextDbRow += 1;
+        }
+      }
     }
+  } finally {
+    lock.releaseLock();
   }
 }
 
@@ -145,6 +169,71 @@ function matchCustomerRecord_(customerValue, records) {
   if (!canonicalKey) return null;
   var canonical = records.filter(function (r) { return r.canonicalKey === canonicalKey; });
   return canonical.length === 1 ? canonical[0] : null;
+}
+
+/**
+ * Strips a trailing " - <N>" location-disambiguation suffix (the sheet's
+ * existing convention, e.g. "OVER N OVER Over Beauty - 1/-2/-3", also
+ * written live by CustomerBackfill.gs) from a customer name, returning the
+ * bare base name shared by every location of the same brand. A name with
+ * no suffix is returned unchanged.
+ */
+function stripCustomerLocationSuffix_(name) {
+  var match = /^(.*?)\s*-\s*(\d+)\s*$/.exec(name);
+  return match ? match[1].trim() : name;
+}
+
+/**
+ * True when customerValue is ambiguous against the existing TRUCKING
+ * records in either of two ways matchCustomerRecord_ already treats as "no
+ * usable match" (never guess) but that matter differently to a live-write
+ * caller than a genuinely brand-new customer:
+ *  - base name (ignoring any "- N" suffix) matches 2+ records — a family
+ *    CustomerBackfill.gs (or a prior live edit) already split into
+ *    numbered locations. Without this check the bare brand name matches
+ *    neither "- 1" nor "- 2" and reads as "no match at all", creating a
+ *    new blank duplicate on top of two already-known locations.
+ *  - canonical key (Code.gs's brand-alias handling, e.g. MEGA MART/
+ *    TOKTOK BEAUTY/ROYAL IMEX, or two records that otherwise happen to
+ *    canonicalize the same) matches 2+ records — the exact "multiple
+ *    per-location entries" case matchCustomerRecord_'s own doc comment
+ *    describes, which must never be treated as "absent" and created fresh.
+ */
+function isAmbiguousLocationFamily_(customerValue, records) {
+  var exactKey = customerValue.toUpperCase().replace(/\s+/g, " ").trim();
+  var suffixMatches = records.filter(function (r) {
+    return stripCustomerLocationSuffix_(r.name).toUpperCase().replace(/\s+/g, " ").trim() === exactKey;
+  });
+  if (suffixMatches.length > 1) return true;
+
+  var canonicalKey = normalizeWmsCustomerKey_(canonicalWmsCustomer_(customerValue));
+  if (!canonicalKey) return false;
+  var canonicalMatches = records.filter(function (r) { return r.canonicalKey === canonicalKey; });
+  return canonicalMatches.length > 1;
+}
+
+function makeCustomerRecord_(rowNumber, name, address) {
+  return {
+    rowNumber: rowNumber,
+    name: name,
+    exactKey: name.toUpperCase().replace(/\s+/g, " "),
+    canonicalKey: normalizeWmsCustomerKey_(canonicalWmsCustomer_(name)),
+    address: address || "",
+    contact: "",
+    services: []
+  };
+}
+
+function logAmbiguousCustomerFamily_(customerValue, whTruckingRow) {
+  try {
+    logPipeline_("CUSTOMER LOOKUP AMBIGUOUS", customerValue, JSON.stringify({
+      action: "ambiguous-location-family",
+      customer: customerValue,
+      whTruckingRow: whTruckingRow
+    }));
+  } catch (e) {
+    Logger.log("logAmbiguousCustomerFamily_ failed: " + e.message);
+  }
 }
 
 function buildCustomerNoteText_(record) {

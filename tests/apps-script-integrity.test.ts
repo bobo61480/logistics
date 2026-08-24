@@ -88,6 +88,14 @@ describe("Apps Script production integrity", () => {
     const lookup = read("google-apps-script/CustomerLookup.gs");
     expect(lookup).toContain("var CUSTOMER_LOOKUP_ENABLED = true;");
     expect(lookup).toContain("var CUSTOMER_CREATE_DRY_RUN = false;");
+    // Codex review on PR #92: a live-write caller must not treat an
+    // ambiguous match (multiple existing locations for the same brand) the
+    // same as a genuinely absent customer, or it creates a fresh blank
+    // duplicate on top of already-known locations. Both files below guard
+    // the same class of bug independently (see the NOTE ON DUPLICATED
+    // HELPERS convention in CustomerBackfill.gs).
+    expect(lookup).toContain("function isAmbiguousLocationFamily_(");
+    expect(lookup).toContain("LockService.getScriptLock()");
   });
 
   it("runs the customer backfill batch job live, with the '- 1'/'- 2' second-location write path implemented", () => {
@@ -97,6 +105,8 @@ describe("Apps Script production integrity", () => {
     expect(backfill).toContain("function appendBackfillCustomer_(");
     expect(backfill).toContain("function fillBackfillCustomerAddress_(");
     expect(backfill).toContain("function flagBackfillSecondLocation_(");
+    expect(backfill).toContain("function isAmbiguousLocationFamily_(");
+    expect(backfill).toContain('"ambiguous-location-family"');
     // Every candidate is still logged to PIPELINE LOG regardless of dry-run
     // state, live or not — the audit trail must never be silently dropped.
     expect(backfill).toContain("function logCustomerBackfillCandidate_(");
