@@ -26,6 +26,13 @@
  * E-Com transaction-log tabs (with duplicate-address disambiguation) lives
  * in the separate CustomerBackfill.gs batch job, not here — this file only
  * handles the live per-edit lookup + create described above.
+ *
+ * IMPORTANT — OPERATIONAL: the handler is customerLookupOnEdit(e), not a
+ * bare onEdit(e), and only runs once Triggers.gs's setupAllTriggers() has
+ * been run at least once to register it as an installable onEdit trigger
+ * (see Triggers.gs's EDIT_TRIGGER_PLAN and that function's header comment
+ * for why). If setupAllTriggers() has never been run since this file was
+ * added, this automation is not doing anything yet.
  */
 
 var CUSTOMER_DB_SHEET_NAME = "TRUCKING";
@@ -42,11 +49,19 @@ var CUSTOMER_SERVICE_FLAGS = [
   ["APPOINTMENT", "Appointment required"]
 ];
 
-function onEdit(e) {
+// NOT named onEdit(e): a bare top-level onEdit is auto-installed by Apps
+// Script as a restricted "simple trigger" that cannot call authorization-
+// requiring services — including SpreadsheetApp.openById, which logPipeline_
+// uses (Codex review on PR #92). Registered instead as a full installable
+// onEdit trigger in Triggers.gs's EDIT_TRIGGER_PLAN, which runs with the
+// same authorization as any other installable trigger. Naming it onEdit
+// here as well would double-fire it (once as a simple trigger, once as the
+// installable one) — keep this name.
+function customerLookupOnEdit(e) {
   try {
     handleWhTruckingCustomerEdit_(e);
   } catch (err) {
-    Logger.log("onEdit customer lookup failed: " + (err && err.message || err));
+    Logger.log("customerLookupOnEdit failed: " + (err && err.message || err));
   }
 }
 
@@ -77,6 +92,19 @@ function handleWhTruckingCustomerEdit_(e) {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) {
     Logger.log("Customer lookup: lock timeout, skipping this edit.");
+    // A dropped edit is otherwise invisible outside the Apps Script
+    // executions log — surface it in PIPELINE LOG so a busy paste that loses
+    // the lock race doesn't silently go unreviewed (Codex review on PR #92).
+    try {
+      logPipeline_("CUSTOMER LOOKUP LOCK TIMEOUT", "", JSON.stringify({
+        action: "lock-timeout",
+        sheet: sheet.getName(),
+        startRow: startRow,
+        numRows: numRows
+      }));
+    } catch (e) {
+      Logger.log("Customer lookup lock-timeout logging failed: " + (e && e.message || e));
+    }
     return;
   }
 
@@ -98,16 +126,26 @@ function handleWhTruckingCustomerEdit_(e) {
       var customerValue = String(sheet.getRange(rowNumber, customerCol).getDisplayValue() || "").trim();
       if (!customerValue) continue;
 
+      var seedAddress = addressCol ? String(sheet.getRange(rowNumber, addressCol).getDisplayValue() || "").trim() : "";
       var record = matchCustomerRecord_(customerValue, records);
       if (record) {
-        appendCustomerNote_(sheet, rowNumber, noteCol, record);
+        // A record matched here can be one created earlier in this SAME
+        // batch (records[] is mutated as rows are processed) — if this
+        // row's own typed address disagrees with that record's address,
+        // blindly applying the record's note would silently attach the
+        // wrong address to this shipment. Flag instead of guessing (Codex
+        // review on PR #92).
+        if (customerAddressConflicts_(record, seedAddress)) {
+          logCustomerAddressConflict_(customerValue, rowNumber, record, seedAddress);
+        } else {
+          appendCustomerNote_(sheet, rowNumber, noteCol, record);
+        }
       } else if (isAmbiguousLocationFamily_(customerValue, records)) {
         // Multiple existing TRUCKING rows already share this base name
         // (distinct locations) — never guess which one, and never pile a
         // new blank duplicate on top. Log for a human, write nothing.
         logAmbiguousCustomerFamily_(customerValue, rowNumber);
       } else {
-        var seedAddress = addressCol ? String(sheet.getRange(rowNumber, addressCol).getDisplayValue() || "").trim() : "";
         proposeNewCustomer_(customerValue, seedAddress, rowNumber, dbSheet, dbHeader, nextDbRow);
         if (!CUSTOMER_CREATE_DRY_RUN) {
           records.push(makeCustomerRecord_(nextDbRow, customerValue, seedAddress));
@@ -200,14 +238,19 @@ function stripCustomerLocationSuffix_(name) {
  *    describes, which must never be treated as "absent" and created fresh.
  */
 function isAmbiguousLocationFamily_(customerValue, records) {
-  var exactKey = customerValue.toUpperCase().replace(/\s+/g, " ").trim();
+  var canonicalKey = normalizeWmsCustomerKey_(canonicalWmsCustomer_(customerValue));
+  if (!canonicalKey) return false;
+
+  // Canonicalize each sibling's stripped base name the same way the query
+  // itself is canonicalized below, not just simple-normalized — otherwise a
+  // punctuation/legal-suffix variant of an already-split family's base name
+  // ("Acme Co, Inc." vs "Acme Co Inc") fails to match and reads as "no
+  // family at all", creating a fresh blank duplicate on top of it.
   var suffixMatches = records.filter(function (r) {
-    return stripCustomerLocationSuffix_(r.name).toUpperCase().replace(/\s+/g, " ").trim() === exactKey;
+    return normalizeWmsCustomerKey_(canonicalWmsCustomer_(stripCustomerLocationSuffix_(r.name))) === canonicalKey;
   });
   if (suffixMatches.length > 1) return true;
 
-  var canonicalKey = normalizeWmsCustomerKey_(canonicalWmsCustomer_(customerValue));
-  if (!canonicalKey) return false;
   var canonicalMatches = records.filter(function (r) { return r.canonicalKey === canonicalKey; });
   return canonicalMatches.length > 1;
 }
@@ -222,6 +265,32 @@ function makeCustomerRecord_(rowNumber, name, address) {
     contact: "",
     services: []
   };
+}
+
+/**
+ * True when this row's own typed address disagrees with the matched
+ * record's address on file — a plain trimmed string comparison, same "never
+ * normalize away a real difference" rule CustomerBackfill.gs's address
+ * comparison uses. Blank on either side is never a conflict: there is
+ * nothing to disagree with.
+ */
+function customerAddressConflicts_(record, seedAddress) {
+  return !!(seedAddress && record.address && seedAddress !== record.address);
+}
+
+function logCustomerAddressConflict_(customerValue, whTruckingRow, record, seedAddress) {
+  try {
+    logPipeline_("CUSTOMER LOOKUP ADDRESS CONFLICT", customerValue, JSON.stringify({
+      action: "address-conflict",
+      customer: customerValue,
+      whTruckingRow: whTruckingRow,
+      matchedTruckingRow: record.rowNumber,
+      existingAddress: record.address,
+      seedAddress: seedAddress
+    }));
+  } catch (e) {
+    Logger.log("logCustomerAddressConflict_ failed: " + e.message);
+  }
 }
 
 function logAmbiguousCustomerFamily_(customerValue, whTruckingRow) {

@@ -96,6 +96,18 @@ describe("Apps Script production integrity", () => {
     // HELPERS convention in CustomerBackfill.gs).
     expect(lookup).toContain("function isAmbiguousLocationFamily_(");
     expect(lookup).toContain("LockService.getScriptLock()");
+    // Round 2 of the same review: matching a record created earlier in the
+    // same paste must not blindly apply its address to a row with a
+    // different actual address, and a dropped edit on lock timeout must be
+    // observable in PIPELINE LOG, not just the executions log.
+    expect(lookup).toContain("function customerAddressConflicts_(");
+    expect(lookup).toContain("CUSTOMER LOOKUP LOCK TIMEOUT");
+    // The handler is NOT a bare onEdit(e): that auto-installs as a
+    // restricted simple trigger that can't call SpreadsheetApp.openById
+    // (which logPipeline_ needs). It's customerLookupOnEdit(e), registered
+    // as a full installable trigger in Triggers.gs instead.
+    expect(lookup).toContain("function customerLookupOnEdit(e)");
+    expect(lookup).not.toMatch(/function\s+onEdit\s*\(/);
   });
 
   it("runs the customer backfill batch job live, with the '- 1'/'- 2' second-location write path implemented", () => {
@@ -110,5 +122,26 @@ describe("Apps Script production integrity", () => {
     // Every candidate is still logged to PIPELINE LOG regardless of dry-run
     // state, live or not — the audit trail must never be silently dropped.
     expect(backfill).toContain("function logCustomerBackfillCandidate_(");
+    // Round 2 of Codex's PR #92 review: appending the new numbered location
+    // must happen BEFORE renaming the original to "- 1", so a partial-write
+    // failure self-heals instead of orphaning an unmatchable row; and an
+    // already-ambiguous suffix family must still be able to append a
+    // genuinely new address via appendNewFamilyLocation_/isSuffixLocationFamily_.
+    expect(backfill).toContain("function appendNewFamilyLocation_(");
+    expect(backfill).toContain("function isSuffixLocationFamily_(");
+    expect(backfill).toContain("function hasEstablishedSuffixConvention_(");
+  });
+
+  it("registers the WH Trucking Request customer-lookup edit handler as a fully-authorized installable trigger", () => {
+    const triggers = read("google-apps-script/Triggers.gs");
+    // Codex review on PR #92: a bare global onEdit(e) auto-installs as a
+    // restricted simple trigger that can't call SpreadsheetApp.openById
+    // (which CustomerLookup.gs's ambiguous/lock-timeout logging needs) — it
+    // must instead be a normal installable trigger like every other handler
+    // here.
+    expect(triggers).toContain('{ handler: "customerLookupOnEdit" }');
+    expect(triggers).toContain("EDIT_TRIGGER_PLAN");
+    expect(triggers).toContain(".forSpreadsheet(SPREADSHEET_ID).onEdit().create()");
+    expect(triggers).toContain('"customerLookupOnEdit"');
   });
 });

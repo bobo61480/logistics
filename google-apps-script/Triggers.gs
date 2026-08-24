@@ -21,6 +21,18 @@ var TRIGGER_PLAN = [
   { handler: "reconcileCustomerBackfill", daily: 5 }
 ];
 
+// Installable onEdit triggers, kept separate from TRIGGER_PLAN's time-based
+// jobs since they're provisioned via a different ScriptApp builder chain
+// (.forSpreadsheet(...).onEdit() instead of .timeBased()). customerLookupOnEdit
+// (CustomerLookup.gs) is deliberately NOT a bare global `onEdit` — that would
+// auto-install as a restricted "simple trigger" that can't call
+// SpreadsheetApp.openById (which logPipeline_ needs) — see that file's
+// comment on the function. This is the trigger that gives it full
+// authorization instead.
+var EDIT_TRIGGER_PLAN = [
+  { handler: "customerLookupOnEdit" }
+];
+
 var TRIGGER_CLEANUP_HANDLERS = [
   "processLogisticsEmails",
   "processLogisticsEmailsV2",
@@ -30,6 +42,7 @@ var TRIGGER_CLEANUP_HANDLERS = [
   "syncInventoryModule",
   "enrichImportsFromContainerLog",
   "reconcileCustomerBackfill",
+  "customerLookupOnEdit",
   "requestSiteRedeploy"
 ];
 
@@ -47,8 +60,15 @@ function setupAllTriggers() {
     else builder.everyDays(1).atHour(t.daily).create();
   });
 
-  Logger.log("Provisioned " + TRIGGER_PLAN.length + " canonical triggers.");
-  return TRIGGER_PLAN;
+  EDIT_TRIGGER_PLAN.forEach(function (t) {
+    ScriptApp.newTrigger(t.handler).forSpreadsheet(SPREADSHEET_ID).onEdit().create();
+  });
+
+  Logger.log(
+    "Provisioned " + TRIGGER_PLAN.length + " canonical triggers and " +
+    EDIT_TRIGGER_PLAN.length + " edit trigger(s)."
+  );
+  return TRIGGER_PLAN.concat(EDIT_TRIGGER_PLAN);
 }
 
 /**

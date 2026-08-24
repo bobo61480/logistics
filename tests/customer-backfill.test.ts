@@ -55,6 +55,8 @@ type BackfillHelpers = {
   stripCustomerLocationSuffix_: (name: string) => string;
   nextCustomerLocationSuffix_: (baseName: string, records: CustomerRecord[]) => number;
   isAmbiguousLocationFamily_: (customerValue: string, records: CustomerRecord[]) => boolean;
+  isSuffixLocationFamily_: (customerValue: string, records: CustomerRecord[]) => boolean;
+  hasEstablishedSuffixConvention_: (customerValue: string, records: CustomerRecord[]) => boolean;
   appendBackfillCustomer_: (sheet: FakeSheet, header: Header, name: string, address: string, targetRow: number) => void;
   fillBackfillCustomerAddress_: (sheet: FakeSheet, header: Header, matchedRecord: CustomerRecord, address: string) => void;
   flagBackfillSecondLocation_: (
@@ -62,6 +64,14 @@ type BackfillHelpers = {
     header: Header,
     records: CustomerRecord[],
     matchedRecord: CustomerRecord,
+    newAddress: string,
+    targetRow: number,
+  ) => string;
+  appendNewFamilyLocation_: (
+    sheet: FakeSheet,
+    header: Header,
+    baseName: string,
+    records: CustomerRecord[],
     newAddress: string,
     targetRow: number,
   ) => string;
@@ -78,7 +88,8 @@ function loadBackfillHelpers(): BackfillHelpers {
       "mergeCustomerEntryAddresses_,findBackfillCustomerDbHeader_,buildBackfillCustomerRecords_," +
       "matchBackfillCustomerRecord_,classifyCustomerCandidate_,stripCustomerLocationSuffix_," +
       "nextCustomerLocationSuffix_,appendBackfillCustomer_,fillBackfillCustomerAddress_," +
-      "flagBackfillSecondLocation_,isAmbiguousLocationFamily_};",
+      "flagBackfillSecondLocation_,isAmbiguousLocationFamily_,isSuffixLocationFamily_," +
+      "hasEstablishedSuffixConvention_,appendNewFamilyLocation_};",
     context,
   );
   return context.__backfill as BackfillHelpers;
@@ -362,7 +373,11 @@ describe("customer backfill: live writes (2026-08-24 rollout)", () => {
     expect(sheet.writes).toEqual([{ row: 7, col: 2, numRows: 1, numCols: 1, value: "9 Fill St" }]);
   });
 
-  it("renames an unsuffixed matched row to '- 1' and appends the new location as '- 2'", () => {
+  // Round 2 (2026-08-24, Codex review on PR #92): the new row is appended
+  // BEFORE the rename, not after — so a partial-write failure leaves the
+  // original row's name untouched (still exact-matchable on a later run)
+  // instead of orphaning a renamed "- 1" row that nothing can find again.
+  it("appends the new location before renaming an unsuffixed matched row to '- 1'", () => {
     const sheet = makeFakeSheet();
     const matched = { rowNumber: 5, name: "Acme Co", exactKey: "ACME CO" } as CustomerRecord;
     const otherRecords = [matched];
@@ -372,8 +387,8 @@ describe("customer backfill: live writes (2026-08-24 rollout)", () => {
     expect(newName).toBe("Acme Co - 2");
     expect(matched.name).toBe("Acme Co - 1");
     expect(sheet.writes).toEqual([
-      { row: 5, col: 1, numRows: 1, numCols: 1, value: "Acme Co - 1" },
       { row: 99, col: 1, numRows: 1, numCols: 2, values: [["Acme Co - 2", "2 Second Loc"]] },
+      { row: 5, col: 1, numRows: 1, numCols: 1, value: "Acme Co - 1" },
     ]);
   });
 
@@ -389,4 +404,78 @@ describe("customer backfill: live writes (2026-08-24 rollout)", () => {
     // Only the new-row append happens — no rename write for an already-suffixed row.
     expect(sheet.writes).toEqual([{ row: 100, col: 1, numRows: 1, numCols: 2, values: [["Acme Co - 2", "3 Third Loc"]] }]);
   });
+
+  it("appends a new numbered location for an already-suffixed family without any rename", () => {
+    const sheet = makeFakeSheet();
+    const records = [
+      { name: "Acme Co - 1" } as CustomerRecord,
+      { name: "Acme Co - 2" } as CustomerRecord,
+    ];
+
+    const newName = helpers.appendNewFamilyLocation_(sheet, TRUCKING_HEADER, "Acme Co", records, "3 Third Loc", 101);
+
+    expect(newName).toBe("Acme Co - 3");
+    expect(sheet.writes).toEqual([{ row: 101, col: 1, numRows: 1, numCols: 2, values: [["Acme Co - 3", "3 Third Loc"]] }]);
+  });
+
+  it("recognizes a suffix family even when the query has different punctuation than the stored records", () => {
+    const records = [
+      { name: "Acme Co, Inc. - 1", canonicalKey: "" } as CustomerRecord,
+      { name: "Acme Co, Inc. - 2", canonicalKey: "" } as CustomerRecord,
+    ];
+    expect(helpers.isSuffixLocationFamily_("Acme Co Inc", records)).toBe(true);
+  });
+
+  it("hasEstablishedSuffixConvention_ is true only when a sibling literally carries a '- N' suffix", () => {
+    const suffixed = [
+      { name: "Acme Co - 1" } as CustomerRecord,
+      { name: "Acme Co - 2" } as CustomerRecord,
+    ];
+    expect(helpers.hasEstablishedSuffixConvention_("Acme Co", suffixed)).toBe(true);
+
+    // Same canonical brand, but neither sibling has ever used "- N" naming —
+    // isSuffixLocationFamily_/isAmbiguousLocationFamily_ still flag this as
+    // ambiguous (never guess which location), but it's not safe to invent a
+    // "- N" convention the sheet has never used for this family.
+    const aliasOnly = [
+      { name: "Mega Mart (Palo Alto)", canonicalKey: "MEGA MART" } as CustomerRecord,
+      { name: "Mega Mart - Fremont", canonicalKey: "MEGA MART" } as CustomerRecord,
+    ];
+    expect(helpers.hasEstablishedSuffixConvention_("Mega Mart", aliasOnly)).toBe(false);
+  });
+
+  // Round 2 (2026-08-24): an ambiguous "- N" suffix family must still surface
+  // (and, live, append) an address that's genuinely new to the whole family —
+  // not hardcode pendingAddresses to empty and never write.
+  it("surfaces a genuinely new address for an already-ambiguous suffix family instead of dropping it", () => {
+    const rows = makeTruckingRows([
+      { name: "Acme Co - 1", address: "1 First Loc" },
+      { name: "Acme Co - 2", address: "2 Second Loc" },
+    ]);
+    const header = helpers.findBackfillCustomerDbHeader_(rows);
+    const records = helpers.buildBackfillCustomerRecords_(rows, header);
+    const aggregate = makeFamilyAggregate_("Acme Co", { "B2B/E-COM TRUCKING": ["3 Third Loc"] });
+
+    const result = helpers.classifyCustomerCandidate_("Acme Co", aggregate, records);
+    expect(result.classification).toBe("ambiguous-location-family");
+    expect(result.pendingAddresses).toEqual(["3 Third Loc"]);
+  });
+
+  it("does not surface a pending address for an alias-only ambiguous family with no suffix convention", () => {
+    const rows = makeTruckingRows([
+      { name: "Mega Mart (Palo Alto)", address: "1 First Loc" },
+      { name: "Mega Mart - Fremont", address: "2 Second Loc" },
+    ]);
+    const header = helpers.findBackfillCustomerDbHeader_(rows);
+    const records = helpers.buildBackfillCustomerRecords_(rows, header);
+    const aggregate = makeFamilyAggregate_("Mega Mart", { "B2B/E-COM TRUCKING": ["3 Third Loc"] });
+
+    const result = helpers.classifyCustomerCandidate_("Mega Mart", aggregate, records);
+    expect(result.classification).toBe("ambiguous-location-family");
+    expect(result.pendingAddresses).toEqual([]);
+  });
 });
+
+function makeFamilyAggregate_(name: string, addresses: Record<string, string[]> = {}): Aggregate {
+  return { name, occurrenceCount: 1, addressesBySource: addresses, sampleRows: [10] };
+}

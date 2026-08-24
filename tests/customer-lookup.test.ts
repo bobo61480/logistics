@@ -19,6 +19,7 @@ type CustomerLookupHelpers = {
   normalizeWmsCustomerKey_: (value: unknown) => string;
   stripCustomerLocationSuffix_: (name: string) => string;
   isAmbiguousLocationFamily_: (customerValue: string, records: CustomerRecord[]) => boolean;
+  customerAddressConflicts_: (record: CustomerRecord, seedAddress: string) => boolean;
 };
 
 function loadCustomerLookupHelpers(): CustomerLookupHelpers {
@@ -34,7 +35,7 @@ function loadCustomerLookupHelpers(): CustomerLookupHelpers {
   vm.runInContext(
     `${code}\n${customerLookup}\n;globalThis.__cust = {` +
       "matchCustomerRecord_,buildCustomerNoteText_,canonicalWmsCustomer_,normalizeWmsCustomerKey_," +
-      "stripCustomerLocationSuffix_,isAmbiguousLocationFamily_};",
+      "stripCustomerLocationSuffix_,isAmbiguousLocationFamily_,customerAddressConflicts_};",
     context,
   );
   return context.__cust as CustomerLookupHelpers;
@@ -138,5 +139,41 @@ describe("WH Trucking Request customer lookup: ambiguous-family detection for li
   it("is not ambiguous for a normal single exact match", () => {
     const records = [makeRecord({ name: "Acme Co" })];
     expect(helpers.isAmbiguousLocationFamily_("Acme Co", records)).toBe(false);
+  });
+
+  // Round 2 (2026-08-24): the suffix-family check must canonicalize each
+  // sibling's stripped base name, not just simple-normalize it, or a
+  // punctuation/legal-suffix variant of an already-split family's base name
+  // silently fails to match and reads as "no family at all".
+  it("recognizes a suffix family even when the query has different punctuation than the stored records", () => {
+    const records = [
+      makeRecord({ name: "Acme Co, Inc. - 1" }),
+      makeRecord({ name: "Acme Co, Inc. - 2" }),
+    ];
+    expect(helpers.isAmbiguousLocationFamily_("Acme Co Inc", records)).toBe(true);
+  });
+});
+
+// Round 2 (2026-08-24, Codex review on PR #92): a record matched in
+// handleWhTruckingCustomerEdit_ can be one this very batch already created —
+// if the current row's own typed address disagrees with that record's
+// address, applying the note blindly would silently attach the wrong
+// address to a different shipment.
+describe("WH Trucking Request customer lookup: same-batch address conflict detection", () => {
+  it("flags a conflict when the row's own address disagrees with the matched record's address", () => {
+    const record = makeRecord({ name: "Acme Co", address: "123 Main St" });
+    expect(helpers.customerAddressConflicts_(record, "456 Oak St")).toBe(true);
+  });
+
+  it("is not a conflict when the addresses agree", () => {
+    const record = makeRecord({ name: "Acme Co", address: "123 Main St" });
+    expect(helpers.customerAddressConflicts_(record, "123 Main St")).toBe(false);
+  });
+
+  it("is not a conflict when either side is blank", () => {
+    const withAddress = makeRecord({ name: "Acme Co", address: "123 Main St" });
+    const withoutAddress = makeRecord({ name: "Acme Co", address: "" });
+    expect(helpers.customerAddressConflicts_(withAddress, "")).toBe(false);
+    expect(helpers.customerAddressConflicts_(withoutAddress, "456 Oak St")).toBe(false);
   });
 });

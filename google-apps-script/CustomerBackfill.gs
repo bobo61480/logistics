@@ -96,10 +96,20 @@ function reconcileCustomerBackfill() {
       var classification = classifyCustomerCandidate_(aggregate.name, aggregate, truckingRecords);
 
       if (classification.classification === "ambiguous-location-family") {
-        // Already split into 2+ known locations — never guess which one,
-        // never pile a new blank duplicate on top. Log only.
+        // Already split into 2+ known locations — never guess WHICH one,
+        // but an address that's on file for none of them is unambiguously
+        // new (only computed/populated for an established "- N" suffix
+        // family — see classifyCustomerCandidate_).
         ambiguousCount++;
         logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
+        if (!CUSTOMER_BACKFILL_DRY_RUN) {
+          var baseName = stripCustomerLocationSuffix_(aggregate.name);
+          classification.pendingAddresses.forEach(function (address) {
+            var newName = appendNewFamilyLocation_(truckingSheet, truckingHeader, baseName, truckingRecords, address, nextTruckingRow);
+            truckingRecords.push(makeBackfillRecord_(nextTruckingRow, newName, address));
+            nextTruckingRow++;
+          });
+        }
       } else if (classification.classification === "would-create") {
         wouldCreate++;
         logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
@@ -320,28 +330,51 @@ function mergeCustomerEntryAddresses_(aggregates, rows, header) {
 }
 
 /**
- * True when customerValue is ambiguous against the existing TRUCKING
- * records in either of two ways matchBackfillCustomerRecord_ already
- * treats as "no usable match" (never guess) but that matter differently
- * to a live-write caller than a genuinely brand-new customer:
- *  - base name (ignoring any "- N" suffix) matches 2+ records — a family
- *    this job itself already split into numbered locations. Without this
- *    check the bare brand name matches neither "- 1" nor "- 2" and reads
- *    as "no match at all" on every subsequent run, appending a fresh blank
- *    duplicate forever.
- *  - canonical key (Code.gs's brand-alias handling, e.g. MEGA MART/
- *    TOKTOK BEAUTY/ROYAL IMEX, or two records that otherwise happen to
- *    canonicalize the same) matches 2+ records — the exact "multiple
- *    per-location entries" case matchBackfillCustomerRecord_'s own doc
- *    comment describes, which must never be treated as "absent" and
- *    created fresh.
+ * True when 2+ existing TRUCKING records already share customerValue's base
+ * name (ignoring any "- N" suffix) once BOTH sides are canonicalized the
+ * same way — not just simple-normalized. A sibling's stripped base name is
+ * canonicalized (not just uppercase/whitespace-collapsed) so a punctuation
+ * or legal-suffix variant of an already-split family's base ("Acme Co,
+ * Inc." vs "Acme Co Inc") still counts as the same family (Codex review on
+ * PR #92) instead of reading as "no family at all" and getting a fresh
+ * blank duplicate appended on every run. Note this also catches a purely
+ * canonical-alias family with no literal "- N" on any record (e.g. MEGA
+ * MART's differently-named locations) — for the write-safety question of
+ * whether it's safe to APPEND a new "- N" row, see
+ * hasEstablishedSuffixConvention_ below, which is deliberately narrower.
  */
-function isAmbiguousLocationFamily_(customerValue, records) {
-  var exactKey = customerValue.toUpperCase().replace(/\s+/g, " ").trim();
+function isSuffixLocationFamily_(customerValue, records) {
+  var canonicalKey = normalizeWmsCustomerKey_(canonicalWmsCustomer_(customerValue));
+  if (!canonicalKey) return false;
   var suffixMatches = records.filter(function (r) {
-    return stripCustomerLocationSuffix_(r.name).toUpperCase().replace(/\s+/g, " ").trim() === exactKey;
+    return normalizeWmsCustomerKey_(canonicalWmsCustomer_(stripCustomerLocationSuffix_(r.name))) === canonicalKey;
   });
-  if (suffixMatches.length > 1) return true;
+  return suffixMatches.length > 1;
+}
+
+/**
+ * True when at least one existing TRUCKING record ALREADY carries a literal
+ * "- N" suffix (not just canonicalizes the same after stripping one) whose
+ * stripped, canonicalized base matches customerValue's canonical key. Used
+ * to gate live writes for an ambiguous-location-family candidate: it's only
+ * safe to append a new "<base> - N" row without guessing when that numbering
+ * convention is demonstrably already in use for this exact family, as
+ * opposed to a purely canonical-alias family (e.g. MEGA MART's
+ * differently-named "(Palo Alto)"/"- Fremont" locations) that has never used
+ * "- N" naming at all — appending "MEGA MART - 3" there would invent a
+ * convention the sheet doesn't use, not just extend an existing one.
+ */
+function hasEstablishedSuffixConvention_(customerValue, records) {
+  var canonicalKey = normalizeWmsCustomerKey_(canonicalWmsCustomer_(customerValue));
+  if (!canonicalKey) return false;
+  return records.some(function (r) {
+    if (!/^(.*?)\s*-\s*(\d+)\s*$/.test(r.name)) return false;
+    return normalizeWmsCustomerKey_(canonicalWmsCustomer_(stripCustomerLocationSuffix_(r.name))) === canonicalKey;
+  });
+}
+
+function isAmbiguousLocationFamily_(customerValue, records) {
+  if (isSuffixLocationFamily_(customerValue, records)) return true;
 
   var canonicalKey = normalizeWmsCustomerKey_(canonicalWmsCustomer_(customerValue));
   if (!canonicalKey) return false;
@@ -393,11 +426,27 @@ function classifyCustomerCandidate_(name, aggregate, truckingRecords) {
 
   if (!matchedRecord) {
     if (isAmbiguousLocationFamily_(name, truckingRecords)) {
+      // The name itself is ambiguous (2+ candidate locations), but WHICH
+      // address is new is not, when the family already uses the explicit
+      // "- N" suffix convention: every sibling sharing name's stripped base
+      // is known, so an address not on file for any of them is a genuinely
+      // new location regardless of which existing sibling this shipment
+      // happens to be near. Only compute/act on this for suffix families —
+      // an alias-only ambiguous family (e.g. MEGA MART's differently-named
+      // locations) has no established numbering convention to append into
+      // safely, so it stays log-only exactly as before (Codex review on
+      // PR #92: "still identify and append genuinely new addresses" without
+      // reintroducing a guess for the alias-only case).
+      var isSuffixFamily = hasEstablishedSuffixConvention_(name, truckingRecords);
+      var knownFamilyAddresses = isSuffixFamily ? familyAddressesFor_(name, truckingRecords) : [];
+      var pendingFamilyAddresses = isSuffixFamily
+        ? allAddresses.filter(function (address) { return address && knownFamilyAddresses.indexOf(address) === -1; })
+        : [];
       return {
         classification: "ambiguous-location-family",
         matchedRecord: null,
-        proposedAddress: allAddresses[0] || "",
-        pendingAddresses: [],
+        proposedAddress: pendingFamilyAddresses[0] || allAddresses[0] || "",
+        pendingAddresses: pendingFamilyAddresses,
         existingAddress: null,
         addressVariants: allAddresses,
         sourcesUsed: sourcesUsed
@@ -527,12 +576,26 @@ function fillBackfillCustomerAddress_(truckingSheet, header, matchedRecord, addr
  * the exact discipline that fixed the 2026-08-12 KORHEIM incident, applied
  * here as "mark 1 or 2" per an explicit product decision. If the existing
  * matched row has no location suffix yet, it is renamed in place to
- * "<name> - 1" (its implicit first location) before the new location is
- * appended as "<name> - <next>". Returns the new row's name.
+ * "<name> - 1" (its implicit first location).
+ *
+ * The new row is appended BEFORE the rename, not after (Codex review on
+ * PR #92): if the two writes only partially complete, appending first
+ * leaves the original row's name untouched, so it's still found by an
+ * exact-name match on a later run — self-healing (the row just still
+ * needs its "- 1" rename, which the next run's own alreadySuffixed check
+ * would still perform). Appending AFTER a completed rename would instead
+ * orphan a "<name> - 1" row that nothing can exact-match anymore, and that
+ * isAmbiguousLocationFamily_ can't yet recognize as a family (only 1 known
+ * sibling) — reclassifying the bare name as "would-create" and appending
+ * an unsuffixed duplicate on top of it forever. Returns the new row's name.
  */
 function flagBackfillSecondLocation_(truckingSheet, header, truckingRecords, matchedRecord, newAddress, targetRow) {
   var baseName = stripCustomerLocationSuffix_(matchedRecord.name);
   var alreadySuffixed = /^(.*?)\s*-\s*(\d+)\s*$/.test(matchedRecord.name);
+
+  var nextSuffix = nextCustomerLocationSuffix_(baseName, truckingRecords);
+  var newName = baseName + " - " + nextSuffix;
+  appendBackfillCustomer_(truckingSheet, header, newName, newAddress, targetRow);
 
   if (!alreadySuffixed) {
     var renamed = baseName + " - 1";
@@ -541,6 +604,18 @@ function flagBackfillSecondLocation_(truckingSheet, header, truckingRecords, mat
     matchedRecord.exactKey = renamed.toUpperCase().replace(/\s+/g, " ");
   }
 
+  return newName;
+}
+
+/**
+ * Appends a new numbered location for an already-ambiguous "- N" suffix
+ * family, without needing a single matchedRecord to rename — by
+ * construction (see classifyCustomerCandidate_), every record in an
+ * ambiguous suffix family is already explicitly suffixed, since an
+ * unsuffixed sibling would have exact-matched and never reached this
+ * branch. Nothing to rename; just append the next number.
+ */
+function appendNewFamilyLocation_(truckingSheet, header, baseName, truckingRecords, newAddress, targetRow) {
   var nextSuffix = nextCustomerLocationSuffix_(baseName, truckingRecords);
   var newName = baseName + " - " + nextSuffix;
   appendBackfillCustomer_(truckingSheet, header, newName, newAddress, targetRow);
