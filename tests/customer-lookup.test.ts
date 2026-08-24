@@ -23,6 +23,12 @@ type CustomerLookupHelpers = {
   customerAddressFillable_: (record: CustomerRecord, seedAddress: string) => boolean;
   matchedByExactName_: (customerValue: string, record: CustomerRecord) => boolean;
   fillCustomerAddress_: (sheet: FakeDbSheet, header: DbHeader, record: CustomerRecord, address: string) => void;
+  shouldProcessCustomerLookupEdit_: (
+    customerCol: number,
+    addressCol: number | null,
+    editedColStart: number,
+    editedColEnd: number,
+  ) => boolean;
   logPipelineFromBoundSpreadsheet_: (
     spreadsheet: FakeSpreadsheet,
     event: string,
@@ -95,7 +101,7 @@ function loadCustomerLookupHelpers(): CustomerLookupHelpers {
       "matchCustomerRecord_,buildCustomerNoteText_,canonicalWmsCustomer_,normalizeWmsCustomerKey_," +
       "stripCustomerLocationSuffix_,isAmbiguousLocationFamily_,customerAddressConflicts_," +
       "customerAddressFillable_,matchedByExactName_,fillCustomerAddress_," +
-      "logPipelineFromBoundSpreadsheet_};",
+      "shouldProcessCustomerLookupEdit_,logPipelineFromBoundSpreadsheet_};",
     context,
   );
   return context.__cust as CustomerLookupHelpers;
@@ -286,6 +292,38 @@ describe("WH Trucking Request customer lookup: exact-vs-canonical match distinct
   it("is not an exact match when only the canonical/brand-alias key agrees", () => {
     const record = makeRecord({ name: "MEGA MART (PALO ALTO)" });
     expect(helpers.matchedByExactName_("MEGA MART (FREMONT)", record)).toBe(false);
+  });
+});
+
+// Round 6 (2026-08-24, Codex review on PR #92): staff commonly type the
+// customer name and its address as two SEPARATE edits (type name, tab/click
+// to the address cell, type address) — each its own onEdit event. Gating on
+// the customer column alone meant the second, address-only edit never
+// reached customerAddressFillable_ at all, so a customer created with a
+// blank address by the first edit stayed permanently addressless.
+describe("WH Trucking Request customer lookup: processing address-only edits", () => {
+  const CUSTOMER_COL = 1;
+  const ADDRESS_COL = 3;
+  const UNRELATED_COL = 10;
+
+  it("processes an edit that touches only the customer column", () => {
+    expect(helpers.shouldProcessCustomerLookupEdit_(CUSTOMER_COL, ADDRESS_COL, CUSTOMER_COL, CUSTOMER_COL)).toBe(true);
+  });
+
+  it("processes an edit that touches only the address column", () => {
+    expect(helpers.shouldProcessCustomerLookupEdit_(CUSTOMER_COL, ADDRESS_COL, ADDRESS_COL, ADDRESS_COL)).toBe(true);
+  });
+
+  it("processes a multi-column edit spanning both", () => {
+    expect(helpers.shouldProcessCustomerLookupEdit_(CUSTOMER_COL, ADDRESS_COL, CUSTOMER_COL, ADDRESS_COL)).toBe(true);
+  });
+
+  it("ignores an edit that touches neither column", () => {
+    expect(helpers.shouldProcessCustomerLookupEdit_(CUSTOMER_COL, ADDRESS_COL, UNRELATED_COL, UNRELATED_COL)).toBe(false);
+  });
+
+  it("ignores an edit to an unrelated column even when there is no ADDRESS column at all", () => {
+    expect(helpers.shouldProcessCustomerLookupEdit_(CUSTOMER_COL, null, UNRELATED_COL, UNRELATED_COL)).toBe(false);
   });
 });
 

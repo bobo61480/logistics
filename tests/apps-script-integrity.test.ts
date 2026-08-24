@@ -122,6 +122,11 @@ describe("Apps Script production integrity", () => {
     expect(lookup).toContain("function customerAddressFillable_(");
     expect(lookup).toContain("function fillCustomerAddress_(");
     expect(lookup).toContain("function matchedByExactName_(");
+    // Round 6 of the same review: staff commonly type the customer name and
+    // its address as two SEPARATE edits, each its own onEdit event — gating
+    // on the customer column alone meant the address-only edit never
+    // reached customerAddressFillable_ at all.
+    expect(lookup).toContain("function shouldProcessCustomerLookupEdit_(");
   });
 
   it("runs the customer backfill batch job live, with the '- 1'/'- 2' second-location write path implemented", () => {
@@ -183,6 +188,18 @@ describe("Apps Script production integrity", () => {
     // explicit failure tag when the write throws), not before — see
     // logCustomerBackfillCandidate_'s writeError parameter.
     expect(backfill).toContain("CUSTOMER BACKFILL WRITE FAILED");
+    // Round 6 of the same review: a write failure must stop the whole batch
+    // (not just skip to the next candidate), since a failed write can leave
+    // nextTruckingRow/truckingRecords out of sync with what's actually
+    // persisted — continuing on a stale cursor risks a later write landing
+    // on and overwriting a row a prior candidate just successfully wrote.
+    // A regular for-of (not Map.forEach) so the loop can actually break.
+    expect(backfill).toContain("batchStoppedEarly");
+    expect(backfill).toMatch(/for\s*\(\s*var\s+entry\s+of\s+aggregation\.aggregates\s*\)/);
+    // And: a brand-new customer created with 2+ known locations in one pass
+    // must have its primary row renamed to "- 1" immediately, not left
+    // unsuffixed until a later repair run catches it.
+    expect(backfill).toContain("function createBackfillCustomerWithLocations_(");
   });
 
   it("does not provision an installable onEdit trigger for customer lookup (deploy-apps-script.yml never runs setupAllTriggers)", () => {

@@ -78,6 +78,14 @@ type BackfillHelpers = {
     targetRow: number,
   ) => string;
   renameToFirstLocation_: (sheet: FakeSheet, header: Header, matchedRecord: CustomerRecord) => string;
+  createBackfillCustomerWithLocations_: (
+    sheet: FakeSheet,
+    header: Header,
+    records: CustomerRecord[],
+    name: string,
+    addresses: string[],
+    targetRow: number,
+  ) => number;
   matchedByExactBackfillName_: (customerValue: string, record: CustomerRecord) => boolean;
   logCustomerBackfillCandidate_: (
     name: string,
@@ -115,7 +123,7 @@ function loadBackfillHelpers(loggedCalls?: LoggedCall[]): BackfillHelpers {
       "nextCustomerLocationSuffix_,appendBackfillCustomer_,fillBackfillCustomerAddress_," +
       "flagBackfillSecondLocation_,isBackfillAmbiguousLocationFamily_,isSuffixLocationFamily_," +
       "hasEstablishedSuffixConvention_,appendNewFamilyLocation_,renameToFirstLocation_," +
-      "matchedByExactBackfillName_,logCustomerBackfillCandidate_};",
+      "createBackfillCustomerWithLocations_,matchedByExactBackfillName_,logCustomerBackfillCandidate_};",
     context,
   );
   return context.__backfill as BackfillHelpers;
@@ -650,6 +658,48 @@ describe("customer backfill: live writes (2026-08-24 rollout)", () => {
       const result = helpers.classifyCustomerCandidate_("Brand New Single Co", aggregate, []);
       expect(result.classification).toBe("would-create");
       expect(result.pendingAddresses).toEqual([]);
+    });
+  });
+
+  // Round 6 (2026-08-24, Codex review on PR #92): the round-5 multi-location
+  // would-create fix created "<name>" plus "<name> - 2/-3..." but never
+  // renamed the primary row to "- 1" — until a later run's repair path
+  // caught it, a live bare-name lookup would exact-match the still-
+  // unsuffixed primary as the sole location and misapply its info to a
+  // request meant for a different known location.
+  describe("createBackfillCustomerWithLocations_", () => {
+    it("creates a single-address customer unsuffixed, with no rename", () => {
+      const sheet = makeFakeSheet();
+      const records: CustomerRecord[] = [];
+
+      const nextRow = helpers.createBackfillCustomerWithLocations_(
+        sheet, TRUCKING_HEADER, records, "Solo Co", ["1 Solo Loc"], 50,
+      );
+
+      expect(nextRow).toBe(51);
+      expect(sheet.writes).toEqual([{ row: 50, col: 1, numRows: 1, numCols: 2, values: [["Solo Co", "1 Solo Loc"]] }]);
+      expect(records).toHaveLength(1);
+      expect(records[0].name).toBe("Solo Co");
+    });
+
+    it("renames the primary row to '- 1' before appending the remaining locations", () => {
+      const sheet = makeFakeSheet();
+      const records: CustomerRecord[] = [];
+
+      const nextRow = helpers.createBackfillCustomerWithLocations_(
+        sheet, TRUCKING_HEADER, records, "Multi Co", ["1 First Loc", "2 Second Loc", "3 Third Loc"], 50,
+      );
+
+      expect(nextRow).toBe(53);
+      expect(sheet.writes).toEqual([
+        { row: 50, col: 1, numRows: 1, numCols: 2, values: [["Multi Co", "1 First Loc"]] },
+        { row: 50, col: 1, numRows: 1, numCols: 1, value: "Multi Co - 1" },
+        { row: 51, col: 1, numRows: 1, numCols: 2, values: [["Multi Co - 2", "2 Second Loc"]] },
+        { row: 52, col: 1, numRows: 1, numCols: 2, values: [["Multi Co - 3", "3 Third Loc"]] },
+      ]);
+      // No unsuffixed record left behind — a bare-name lookup can no longer
+      // exact-match a single "obviously the only location" record.
+      expect(records.map((r) => r.name)).toEqual(["Multi Co - 1", "Multi Co - 2", "Multi Co - 3"]);
     });
   });
 });

@@ -87,6 +87,26 @@ function logPipelineFromBoundSpreadsheet_(spreadsheet, event, subject, detail) {
   }
 }
 
+/**
+ * True when this edit is worth processing: it touches the CUSTOMER column
+ * (the original trigger — a new/changed name) OR the ADDRESS column (staff
+ * commonly type the customer name and its address as two SEPARATE edits —
+ * type name, tab/click to the address cell, type address — each its own
+ * onEdit event). Gating on the customer column alone meant an address-only
+ * edit never reached customerAddressFillable_ at all, so a customer created
+ * blank-address by the first edit stayed permanently addressless (Codex
+ * review on PR #92, round 6; round 5's fix only covered the narrower
+ * same-batch-paste case). The per-row loop in handleWhTruckingCustomerEdit_
+ * already re-reads the customer name fresh from the sheet regardless of
+ * which column triggered the event, so widening this gate is sufficient —
+ * no other branching needed.
+ */
+function shouldProcessCustomerLookupEdit_(customerCol, addressCol, editedColStart, editedColEnd) {
+  var touchesCustomerCol = customerCol >= editedColStart && customerCol <= editedColEnd;
+  var touchesAddressCol = addressCol !== null && addressCol >= editedColStart && addressCol <= editedColEnd;
+  return touchesCustomerCol || touchesAddressCol;
+}
+
 function handleWhTruckingCustomerEdit_(e) {
   if (!CUSTOMER_LOOKUP_ENABLED || !e || !e.range) return;
   var sheet = e.range.getSheet();
@@ -101,7 +121,7 @@ function handleWhTruckingCustomerEdit_(e) {
 
   var editedColStart = e.range.getColumn();
   var editedColEnd = editedColStart + e.range.getNumColumns() - 1;
-  if (customerCol < editedColStart || customerCol > editedColEnd) return;
+  if (!shouldProcessCustomerLookupEdit_(customerCol, addressCol, editedColStart, editedColEnd)) return;
 
   var startRow = e.range.getRow();
   var numRows = e.range.getNumRows();

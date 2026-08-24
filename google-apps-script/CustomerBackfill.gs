@@ -93,6 +93,7 @@ function reconcileCustomerBackfill() {
     var ambiguousCount = 0;
     var needsReviewCount = 0;
     var okCount = 0;
+    var batchStoppedEarly = false;
 
     // Every mutating branch below logs AFTER its write(s) succeed, not
     // before — logging first (the previous ordering) would record a
@@ -101,7 +102,19 @@ function reconcileCustomerBackfill() {
     // on PR #92 round 5). A caught write failure logs an explicit
     // "CUSTOMER BACKFILL WRITE FAILED" entry instead, so the audit trail
     // never silently overstates what this run did.
-    aggregation.aggregates.forEach(function (aggregate, exactKey) {
+    //
+    // A regular for-of (not aggregates.forEach) so a write failure can
+    // break the whole loop, not just skip to the next candidate. A failed
+    // write can leave nextTruckingRow/truckingRecords out of sync with what
+    // actually got persisted (e.g. an append succeeded but a follow-up
+    // rename threw) — continuing to the next candidate on a stale cursor
+    // risks a later write landing on and silently overwriting the row a
+    // prior candidate just successfully wrote (Codex review, round 6).
+    // Everything not yet reached this run is simply picked up by tomorrow's
+    // scheduled run, untouched.
+    for (var entry of aggregation.aggregates) {
+      var exactKey = entry[0];
+      var aggregate = entry[1];
       var classification = classifyCustomerCandidate_(aggregate.name, aggregate, truckingRecords);
 
       if (classification.classification === "ambiguous-location-family") {
@@ -121,6 +134,8 @@ function reconcileCustomerBackfill() {
             logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
           } catch (writeError) {
             logCustomerBackfillCandidate_(aggregate.name, aggregate, classification, writeError);
+            batchStoppedEarly = true;
+            break;
           }
         } else {
           logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
@@ -129,21 +144,21 @@ function reconcileCustomerBackfill() {
         wouldCreate++;
         if (!CUSTOMER_BACKFILL_DRY_RUN) {
           try {
-            appendBackfillCustomer_(truckingSheet, truckingHeader, aggregate.name, classification.proposedAddress, nextTruckingRow);
-            truckingRecords.push(makeBackfillRecord_(nextTruckingRow, aggregate.name, classification.proposedAddress));
-            nextTruckingRow++;
             // A brand-new customer whose very first pass already shows 2+
             // distinct addresses gets every one of them created now, not
-            // just the first — same "- N" numbering the ambiguous-family/
-            // second-location paths already use (Codex review, round 5).
-            classification.pendingAddresses.forEach(function (address) {
-              var newName = appendNewFamilyLocation_(truckingSheet, truckingHeader, aggregate.name, truckingRecords, address, nextTruckingRow);
-              truckingRecords.push(makeBackfillRecord_(nextTruckingRow, newName, address));
-              nextTruckingRow++;
-            });
+            // just the first, with the primary row renamed to "- 1" so a
+            // live bare-name lookup never treats it as the sole location
+            // while siblings exist (Codex review, rounds 5 and 6).
+            nextTruckingRow = createBackfillCustomerWithLocations_(
+              truckingSheet, truckingHeader, truckingRecords, aggregate.name,
+              [classification.proposedAddress].concat(classification.pendingAddresses),
+              nextTruckingRow
+            );
             logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
           } catch (writeError) {
             logCustomerBackfillCandidate_(aggregate.name, aggregate, classification, writeError);
+            batchStoppedEarly = true;
+            break;
           }
         } else {
           logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
@@ -165,6 +180,8 @@ function reconcileCustomerBackfill() {
             logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
           } catch (writeError) {
             logCustomerBackfillCandidate_(aggregate.name, aggregate, classification, writeError);
+            batchStoppedEarly = true;
+            break;
           }
         } else {
           logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
@@ -178,6 +195,8 @@ function reconcileCustomerBackfill() {
             logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
           } catch (writeError) {
             logCustomerBackfillCandidate_(aggregate.name, aggregate, classification, writeError);
+            batchStoppedEarly = true;
+            break;
           }
         } else {
           logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
@@ -193,6 +212,8 @@ function reconcileCustomerBackfill() {
             logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
           } catch (writeError) {
             logCustomerBackfillCandidate_(aggregate.name, aggregate, classification, writeError);
+            batchStoppedEarly = true;
+            break;
           }
         } else {
           logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
@@ -208,7 +229,7 @@ function reconcileCustomerBackfill() {
       } else {
         okCount++;
       }
-    });
+    }
 
     logPipeline_("CUSTOMER BACKFILL SUMMARY", "", JSON.stringify({
       scannedNames: aggregation.aggregates.size,
@@ -220,6 +241,7 @@ function reconcileCustomerBackfill() {
       canonicalMatchNeedsReview: needsReviewCount,
       okNoAction: okCount,
       skippedBlankNameRows: aggregation.skippedBlankNameRows,
+      batchStoppedEarly: batchStoppedEarly,
       dryRun: CUSTOMER_BACKFILL_DRY_RUN
     }));
 
@@ -233,6 +255,7 @@ function reconcileCustomerBackfill() {
       ", canonicalMatchNeedsReview=" + needsReviewCount +
       ", ok=" + okCount +
       ", skippedBlankNameRows=" + aggregation.skippedBlankNameRows +
+      ", batchStoppedEarly=" + batchStoppedEarly +
       ", dryRun=" + CUSTOMER_BACKFILL_DRY_RUN
     );
 
@@ -247,6 +270,7 @@ function reconcileCustomerBackfill() {
       canonicalMatchNeedsReview: needsReviewCount,
       okNoAction: okCount,
       skippedBlankNameRows: aggregation.skippedBlankNameRows,
+      batchStoppedEarly: batchStoppedEarly,
       dryRun: CUSTOMER_BACKFILL_DRY_RUN
     };
   } catch (error) {
@@ -790,6 +814,39 @@ function appendNewFamilyLocation_(truckingSheet, header, baseName, truckingRecor
   var newName = baseName + " - " + nextSuffix;
   appendBackfillCustomer_(truckingSheet, header, newName, newAddress, targetRow);
   return newName;
+}
+
+/**
+ * Creates a brand-new customer with one or more known locations in a single
+ * pass. The primary row uses addresses[0]; when there are more addresses,
+ * the primary row is immediately renamed to "- 1" (same as
+ * flagBackfillSecondLocation_'s own discipline) BEFORE the remaining
+ * addresses are appended as "- 2", "- 3", etc. — never left unsuffixed
+ * while siblings exist. Without this, a live bare-name lookup
+ * (CustomerLookup.gs) would exact-match the still-unsuffixed primary row as
+ * the sole, unambiguous location and apply ITS address/contact/services to
+ * a request that might be intended for a different known location (Codex
+ * review on PR #92, round 6). When there's only one address, the primary
+ * row is created unsuffixed and left alone — nothing to disambiguate.
+ * Returns the row number just past the last one written, for the caller to
+ * resume its own row cursor from.
+ */
+function createBackfillCustomerWithLocations_(truckingSheet, header, truckingRecords, name, addresses, targetRow) {
+  appendBackfillCustomer_(truckingSheet, header, name, addresses[0], targetRow);
+  var primaryRecord = makeBackfillRecord_(targetRow, name, addresses[0]);
+  truckingRecords.push(primaryRecord);
+  var nextRow = targetRow + 1;
+
+  if (addresses.length > 1) {
+    renameToFirstLocation_(truckingSheet, header, primaryRecord);
+    for (var i = 1; i < addresses.length; i++) {
+      var newName = appendNewFamilyLocation_(truckingSheet, header, name, truckingRecords, addresses[i], nextRow);
+      truckingRecords.push(makeBackfillRecord_(nextRow, newName, addresses[i]));
+      nextRow++;
+    }
+  }
+
+  return nextRow;
 }
 
 /**
