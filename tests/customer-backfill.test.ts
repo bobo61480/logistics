@@ -45,6 +45,7 @@ type BackfillHelpers = {
       | "would-fill-missing-address"
       | "would-repair-split-rename"
       | "ambiguous-location-family"
+      | "canonical-match-needs-review"
       | "ok-no-action";
     matchedRecord: CustomerRecord | null;
     proposedAddress: string;
@@ -77,12 +78,34 @@ type BackfillHelpers = {
     targetRow: number,
   ) => string;
   renameToFirstLocation_: (sheet: FakeSheet, header: Header, matchedRecord: CustomerRecord) => string;
+  matchedByExactBackfillName_: (customerValue: string, record: CustomerRecord) => boolean;
+  logCustomerBackfillCandidate_: (
+    name: string,
+    aggregate: Aggregate,
+    classification: unknown,
+    writeError?: Error,
+  ) => void;
 };
 
-function loadBackfillHelpers(): BackfillHelpers {
+type LoggedCall = { tag: string; subject: string; detail: unknown };
+
+function loadBackfillHelpers(loggedCalls?: LoggedCall[]): BackfillHelpers {
   const codeSource = readFileSync("google-apps-script/Code.gs", "utf8");
   const backfillSource = readFileSync("google-apps-script/CustomerBackfill.gs", "utf8");
-  const context = vm.createContext({ Map, Set, Object, console });
+  // logPipeline_ lives in GmailPipeline.gs (not concatenated here) and
+  // Logger is a real Apps Script global — stub both so
+  // logCustomerBackfillCandidate_'s try/catch body can actually run instead
+  // of throwing a ReferenceError before any test can observe its behavior.
+  const context = vm.createContext({
+    Map,
+    Set,
+    Object,
+    console,
+    Logger: { log: () => {} },
+    logPipeline_: (tag: string, subject: string, detail: unknown) => {
+      loggedCalls?.push({ tag, subject, detail });
+    },
+  });
 
   vm.runInContext(
     `${codeSource}\n${backfillSource}\n;globalThis.__backfill = {` +
@@ -91,7 +114,8 @@ function loadBackfillHelpers(): BackfillHelpers {
       "matchBackfillCustomerRecord_,classifyCustomerCandidate_,stripBackfillLocationSuffix_," +
       "nextCustomerLocationSuffix_,appendBackfillCustomer_,fillBackfillCustomerAddress_," +
       "flagBackfillSecondLocation_,isBackfillAmbiguousLocationFamily_,isSuffixLocationFamily_," +
-      "hasEstablishedSuffixConvention_,appendNewFamilyLocation_,renameToFirstLocation_};",
+      "hasEstablishedSuffixConvention_,appendNewFamilyLocation_,renameToFirstLocation_," +
+      "matchedByExactBackfillName_,logCustomerBackfillCandidate_};",
     context,
   );
   return context.__backfill as BackfillHelpers;
@@ -551,6 +575,112 @@ describe("customer backfill: live writes (2026-08-24 rollout)", () => {
       const result = helpers.classifyCustomerCandidate_("Solo Co", aggregate, records);
       expect(result.classification).toBe("ok-no-action");
     });
+  });
+
+  // Round 5 (2026-08-24, Codex review on PR #92): a canonical-only match
+  // (e.g. "MEGA MART (FREMONT)" resolving to the lone existing "MEGA MART
+  // (PALO ALTO)" row because Fremont doesn't have its own row yet) must
+  // never be trusted enough to fill/rename/flag an existing row — it could
+  // be a genuinely different physical location under the same multi-
+  // location brand, and mutating it would corrupt that other location's
+  // data. Only a literal exact-name match is trusted to write.
+  describe("exact-vs-canonical match distinction (write safety)", () => {
+    it("matchedByExactBackfillName_ is true only for a literal name match, not a canonical/brand-alias match", () => {
+      const record = { name: "MEGA MART (PALO ALTO)", exactKey: "MEGA MART (PALO ALTO)" } as CustomerRecord;
+      expect(helpers.matchedByExactBackfillName_("  mega mart (palo alto)  ", record)).toBe(true);
+      expect(helpers.matchedByExactBackfillName_("MEGA MART (FREMONT)", record)).toBe(false);
+    });
+
+    it("routes a canonical-only match to review instead of filling the wrong location's address", () => {
+      const rows = makeTruckingRows([{ name: "MEGA MART (PALO ALTO)", address: "" }]);
+      const header = helpers.findBackfillCustomerDbHeader_(rows);
+      const records = helpers.buildBackfillCustomerRecords_(rows, header);
+      const aggregate = makeFamilyAggregate_("MEGA MART (FREMONT)", { "B2B/E-COM TRUCKING": ["1 Fremont Way"] });
+
+      const result = helpers.classifyCustomerCandidate_("MEGA MART (FREMONT)", aggregate, records);
+      expect(result.classification).toBe("canonical-match-needs-review");
+      expect(result.matchedRecord?.name).toBe("MEGA MART (PALO ALTO)");
+    });
+
+    it("still fills a missing address for a genuine exact-name match", () => {
+      const rows = makeTruckingRows([{ name: "Blank Address Co", address: "" }]);
+      const header = helpers.findBackfillCustomerDbHeader_(rows);
+      const records = helpers.buildBackfillCustomerRecords_(rows, header);
+      const aggregate = makeFamilyAggregate_("Blank Address Co", { "B2B/E-COM TRUCKING": ["77 Fill Me In Dr"] });
+
+      const result = helpers.classifyCustomerCandidate_("Blank Address Co", aggregate, records);
+      expect(result.classification).toBe("would-fill-missing-address");
+    });
+
+    it("still fills a missing address for a punctuation-variant canonical match of the SAME single location", () => {
+      // "Royal Imex, Inc." vs "ROYAL IMEX INC" is genuinely the same brand
+      // with no known second location — matchedByExactBackfillName_ would say false
+      // here too, so this documents the accepted tradeoff: a legitimate
+      // spelling-variant match now also routes to review rather than
+      // auto-filling, in exchange for never risking a cross-location write.
+      const rows = makeTruckingRows([{ name: "ROYAL IMEX INC", address: "" }]);
+      const header = helpers.findBackfillCustomerDbHeader_(rows);
+      const records = helpers.buildBackfillCustomerRecords_(rows, header);
+      const aggregate = makeFamilyAggregate_("Royal Imex, Inc.", { "B2B/E-COM TRUCKING": ["1 Depot Rd"] });
+
+      const result = helpers.classifyCustomerCandidate_("Royal Imex, Inc.", aggregate, records);
+      expect(result.classification).toBe("canonical-match-needs-review");
+    });
+  });
+
+  // Round 5: a brand-new customer whose very first reconciliation pass
+  // already shows 2+ distinct addresses must have every location created
+  // now, not just the first — the rest were previously left to "whenever
+  // the job happens to run again".
+  describe("creating every known location for a brand-new customer in one pass", () => {
+    it("surfaces every address beyond the first as pending on the would-create classification", () => {
+      const aggregate = makeFamilyAggregate_("Brand New Multi Co", {
+        "B2B/E-COM TRUCKING": ["1 First Loc", "2 Second Loc"],
+        "Customer Entry": ["3 Third Loc"],
+      });
+
+      const result = helpers.classifyCustomerCandidate_("Brand New Multi Co", aggregate, []);
+      expect(result.classification).toBe("would-create");
+      expect(result.proposedAddress).toBe("1 First Loc");
+      expect(result.pendingAddresses).toEqual(["2 Second Loc", "3 Third Loc"]);
+    });
+
+    it("leaves pendingAddresses empty when the brand-new customer only has one observed address", () => {
+      const aggregate = makeFamilyAggregate_("Brand New Single Co", { "B2B/E-COM TRUCKING": ["1 Only Loc"] });
+      const result = helpers.classifyCustomerCandidate_("Brand New Single Co", aggregate, []);
+      expect(result.classification).toBe("would-create");
+      expect(result.pendingAddresses).toEqual([]);
+    });
+  });
+});
+
+// Round 5: logging must happen AFTER a live write succeeds, not before —
+// and record an explicit failure outcome (not silence, not a false
+// success) when the write throws.
+describe("customer backfill: log-after-write ordering and failure reporting", () => {
+  it("tags a normal live log with CUSTOMER BACKFILL LIVE", () => {
+    const calls: LoggedCall[] = [];
+    const h = loadBackfillHelpers(calls);
+    const aggregate = makeFamilyAggregate_("Acme Co", { "B2B/E-COM TRUCKING": ["1 Main St"] });
+    const classification = h.classifyCustomerCandidate_("Acme Co", aggregate, []);
+
+    h.logCustomerBackfillCandidate_("Acme Co", aggregate, classification);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].tag).toBe("CUSTOMER BACKFILL LIVE");
+  });
+
+  it("tags a failed write with CUSTOMER BACKFILL WRITE FAILED and includes the error", () => {
+    const calls: LoggedCall[] = [];
+    const h = loadBackfillHelpers(calls);
+    const aggregate = makeFamilyAggregate_("Acme Co", { "B2B/E-COM TRUCKING": ["1 Main St"] });
+    const classification = h.classifyCustomerCandidate_("Acme Co", aggregate, []);
+
+    h.logCustomerBackfillCandidate_("Acme Co", aggregate, classification, new Error("Sheets quota exceeded"));
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].tag).toBe("CUSTOMER BACKFILL WRITE FAILED");
+    expect(JSON.parse(calls[0].detail as string).error).toBe("Sheets quota exceeded");
   });
 });
 

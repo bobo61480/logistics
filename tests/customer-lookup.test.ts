@@ -20,6 +20,9 @@ type CustomerLookupHelpers = {
   stripCustomerLocationSuffix_: (name: string) => string;
   isAmbiguousLocationFamily_: (customerValue: string, records: CustomerRecord[]) => boolean;
   customerAddressConflicts_: (record: CustomerRecord, seedAddress: string) => boolean;
+  customerAddressFillable_: (record: CustomerRecord, seedAddress: string) => boolean;
+  matchedByExactName_: (customerValue: string, record: CustomerRecord) => boolean;
+  fillCustomerAddress_: (sheet: FakeDbSheet, header: DbHeader, record: CustomerRecord, address: string) => void;
   logPipelineFromBoundSpreadsheet_: (
     spreadsheet: FakeSpreadsheet,
     event: string,
@@ -39,6 +42,20 @@ type FakeSpreadsheet = {
   getSheetByName: (name: string) => FakeSheet | null;
   insertSheet: (name: string) => FakeSheet;
 };
+
+type DbHeader = { rowIndex: number; map: Record<string, number> };
+type DbWrite = { row: number; col: number; value: unknown };
+type FakeDbSheet = { writes: DbWrite[]; getRange: (row: number, col: number) => { setValue: (value: unknown) => void } };
+
+function makeFakeDbSheet(): FakeDbSheet {
+  const writes: DbWrite[] = [];
+  return {
+    writes,
+    getRange: (row: number, col: number) => ({
+      setValue: (value: unknown) => writes.push({ row, col, value }),
+    }),
+  };
+}
 
 function makeFakeSheet(): FakeSheet {
   const rows: unknown[][] = [];
@@ -77,6 +94,7 @@ function loadCustomerLookupHelpers(): CustomerLookupHelpers {
     `${code}\n${customerLookup}\n;globalThis.__cust = {` +
       "matchCustomerRecord_,buildCustomerNoteText_,canonicalWmsCustomer_,normalizeWmsCustomerKey_," +
       "stripCustomerLocationSuffix_,isAmbiguousLocationFamily_,customerAddressConflicts_," +
+      "customerAddressFillable_,matchedByExactName_,fillCustomerAddress_," +
       "logPipelineFromBoundSpreadsheet_};",
     context,
   );
@@ -217,6 +235,57 @@ describe("WH Trucking Request customer lookup: same-batch address conflict detec
     const withoutAddress = makeRecord({ name: "Acme Co", address: "" });
     expect(helpers.customerAddressConflicts_(withAddress, "")).toBe(false);
     expect(helpers.customerAddressConflicts_(withoutAddress, "456 Oak St")).toBe(false);
+  });
+});
+
+// Round 5 (2026-08-24, Codex review on PR #92): a same-batch stub created
+// with no address (the first occurrence of a brand-new customer in a
+// multi-row paste, before any address is known) must have its address
+// filled in once a later occurrence in the same paste supplies one — not
+// stay permanently addressless just because customerAddressConflicts_'s
+// blank-side bypass means there's no "conflict" to flag.
+describe("WH Trucking Request customer lookup: filling a blank address supplied later in the same batch", () => {
+  it("is fillable when the row supplies an address and the record has none on file", () => {
+    const record = makeRecord({ name: "Acme Co", address: "" });
+    expect(helpers.customerAddressFillable_(record, "123 Main St")).toBe(true);
+  });
+
+  it("is not fillable when there is no address to fill with", () => {
+    const record = makeRecord({ name: "Acme Co", address: "" });
+    expect(helpers.customerAddressFillable_(record, "")).toBe(false);
+  });
+
+  it("is not fillable when the record already has an address (that's a potential conflict, not a fill)", () => {
+    const record = makeRecord({ name: "Acme Co", address: "123 Main St" });
+    expect(helpers.customerAddressFillable_(record, "456 Oak St")).toBe(false);
+  });
+
+  it("fillCustomerAddress_ writes only the address cell on the matched row", () => {
+    const sheet = makeFakeDbSheet();
+    const header: DbHeader = { rowIndex: 0, map: { "CUSTOMER NAME": 0, ADDRESS: 1 } };
+    const record = makeRecord({ name: "Acme Co", rowNumber: 42 });
+
+    helpers.fillCustomerAddress_(sheet, header, record, "9 Fill St");
+
+    expect(sheet.writes).toEqual([{ row: 42, col: 2, value: "9 Fill St" }]);
+  });
+});
+
+// Round 5: the same cross-location risk CustomerBackfill.gs's
+// matchedByExactName_ guards against — a canonical-only match (e.g. "MEGA
+// MART (FREMONT)" resolving to the lone existing "MEGA MART (PALO ALTO)"
+// row because Fremont has no row of its own yet) must never be trusted
+// enough to fill an existing row's address, or it corrupts a different
+// physical location's data.
+describe("WH Trucking Request customer lookup: exact-vs-canonical match distinction", () => {
+  it("is an exact match when the typed name equals the record's name (case/whitespace-insensitive)", () => {
+    const record = makeRecord({ name: "Acme Co" });
+    expect(helpers.matchedByExactName_("  acme co  ", record)).toBe(true);
+  });
+
+  it("is not an exact match when only the canonical/brand-alias key agrees", () => {
+    const record = makeRecord({ name: "MEGA MART (PALO ALTO)" });
+    expect(helpers.matchedByExactName_("MEGA MART (FREMONT)", record)).toBe(false);
   });
 });
 

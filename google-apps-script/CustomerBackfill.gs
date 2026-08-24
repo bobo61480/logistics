@@ -91,8 +91,16 @@ function reconcileCustomerBackfill() {
     var wouldFill = 0;
     var wouldRepair = 0;
     var ambiguousCount = 0;
+    var needsReviewCount = 0;
     var okCount = 0;
 
+    // Every mutating branch below logs AFTER its write(s) succeed, not
+    // before — logging first (the previous ordering) would record a
+    // "CUSTOMER BACKFILL LIVE" entry describing an action that never
+    // actually happened if the write throws partway through (Codex review
+    // on PR #92 round 5). A caught write failure logs an explicit
+    // "CUSTOMER BACKFILL WRITE FAILED" entry instead, so the audit trail
+    // never silently overstates what this run did.
     aggregation.aggregates.forEach(function (aggregate, exactKey) {
       var classification = classifyCustomerCandidate_(aggregate.name, aggregate, truckingRecords);
 
@@ -102,54 +110,101 @@ function reconcileCustomerBackfill() {
         // new (only computed/populated for an established "- N" suffix
         // family — see classifyCustomerCandidate_).
         ambiguousCount++;
-        logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
         if (!CUSTOMER_BACKFILL_DRY_RUN) {
-          var baseName = stripBackfillLocationSuffix_(aggregate.name);
-          classification.pendingAddresses.forEach(function (address) {
-            var newName = appendNewFamilyLocation_(truckingSheet, truckingHeader, baseName, truckingRecords, address, nextTruckingRow);
-            truckingRecords.push(makeBackfillRecord_(nextTruckingRow, newName, address));
-            nextTruckingRow++;
-          });
+          try {
+            var ambiguousBaseName = stripBackfillLocationSuffix_(aggregate.name);
+            classification.pendingAddresses.forEach(function (address) {
+              var newName = appendNewFamilyLocation_(truckingSheet, truckingHeader, ambiguousBaseName, truckingRecords, address, nextTruckingRow);
+              truckingRecords.push(makeBackfillRecord_(nextTruckingRow, newName, address));
+              nextTruckingRow++;
+            });
+            logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
+          } catch (writeError) {
+            logCustomerBackfillCandidate_(aggregate.name, aggregate, classification, writeError);
+          }
+        } else {
+          logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
         }
       } else if (classification.classification === "would-create") {
         wouldCreate++;
-        logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
         if (!CUSTOMER_BACKFILL_DRY_RUN) {
-          appendBackfillCustomer_(truckingSheet, truckingHeader, aggregate.name, classification.proposedAddress, nextTruckingRow);
-          truckingRecords.push(makeBackfillRecord_(nextTruckingRow, aggregate.name, classification.proposedAddress));
-          nextTruckingRow++;
+          try {
+            appendBackfillCustomer_(truckingSheet, truckingHeader, aggregate.name, classification.proposedAddress, nextTruckingRow);
+            truckingRecords.push(makeBackfillRecord_(nextTruckingRow, aggregate.name, classification.proposedAddress));
+            nextTruckingRow++;
+            // A brand-new customer whose very first pass already shows 2+
+            // distinct addresses gets every one of them created now, not
+            // just the first — same "- N" numbering the ambiguous-family/
+            // second-location paths already use (Codex review, round 5).
+            classification.pendingAddresses.forEach(function (address) {
+              var newName = appendNewFamilyLocation_(truckingSheet, truckingHeader, aggregate.name, truckingRecords, address, nextTruckingRow);
+              truckingRecords.push(makeBackfillRecord_(nextTruckingRow, newName, address));
+              nextTruckingRow++;
+            });
+            logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
+          } catch (writeError) {
+            logCustomerBackfillCandidate_(aggregate.name, aggregate, classification, writeError);
+          }
+        } else {
+          logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
         }
       } else if (classification.classification === "would-flag-second-location") {
         wouldFlag++;
-        logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
         if (!CUSTOMER_BACKFILL_DRY_RUN) {
-          // One append per distinct address not yet on file anywhere in this
-          // customer's location family — not just the first one — so no
-          // known-different address is silently dropped.
-          classification.pendingAddresses.forEach(function (address) {
-            var newName = flagBackfillSecondLocation_(
-              truckingSheet, truckingHeader, truckingRecords, classification.matchedRecord, address, nextTruckingRow
-            );
-            truckingRecords.push(makeBackfillRecord_(nextTruckingRow, newName, address));
-            nextTruckingRow++;
-          });
+          try {
+            // One append per distinct address not yet on file anywhere in
+            // this customer's location family — not just the first one —
+            // so no known-different address is silently dropped.
+            classification.pendingAddresses.forEach(function (address) {
+              var newName = flagBackfillSecondLocation_(
+                truckingSheet, truckingHeader, truckingRecords, classification.matchedRecord, address, nextTruckingRow
+              );
+              truckingRecords.push(makeBackfillRecord_(nextTruckingRow, newName, address));
+              nextTruckingRow++;
+            });
+            logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
+          } catch (writeError) {
+            logCustomerBackfillCandidate_(aggregate.name, aggregate, classification, writeError);
+          }
+        } else {
+          logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
         }
       } else if (classification.classification === "would-fill-missing-address") {
         wouldFill++;
-        logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
         if (!CUSTOMER_BACKFILL_DRY_RUN) {
-          fillBackfillCustomerAddress_(truckingSheet, truckingHeader, classification.matchedRecord, classification.proposedAddress);
-          classification.matchedRecord.address = classification.proposedAddress;
+          try {
+            fillBackfillCustomerAddress_(truckingSheet, truckingHeader, classification.matchedRecord, classification.proposedAddress);
+            classification.matchedRecord.address = classification.proposedAddress;
+            logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
+          } catch (writeError) {
+            logCustomerBackfillCandidate_(aggregate.name, aggregate, classification, writeError);
+          }
+        } else {
+          logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
         }
       } else if (classification.classification === "would-repair-split-rename") {
         // A prior flagBackfillSecondLocation_ append succeeded but its
         // follow-up rename didn't — finish the rename now rather than
         // leaving the pair permanently unrecognized as a split family.
         wouldRepair++;
-        logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
         if (!CUSTOMER_BACKFILL_DRY_RUN) {
-          renameToFirstLocation_(truckingSheet, truckingHeader, classification.matchedRecord);
+          try {
+            renameToFirstLocation_(truckingSheet, truckingHeader, classification.matchedRecord);
+            logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
+          } catch (writeError) {
+            logCustomerBackfillCandidate_(aggregate.name, aggregate, classification, writeError);
+          }
+        } else {
+          logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
         }
+      } else if (classification.classification === "canonical-match-needs-review") {
+        // Matched only via the canonical/brand-alias fallback, not the
+        // literal exact name — could be a different physical location
+        // under the same multi-location brand (e.g. MEGA MART Fremont vs.
+        // the lone existing Palo Alto record). Never mutate; log only, for
+        // a human to confirm before this ever writes (Codex review, round 5).
+        needsReviewCount++;
+        logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
       } else {
         okCount++;
       }
@@ -162,6 +217,7 @@ function reconcileCustomerBackfill() {
       wouldFillMissingAddress: wouldFill,
       wouldRepairSplitRename: wouldRepair,
       ambiguousLocationFamily: ambiguousCount,
+      canonicalMatchNeedsReview: needsReviewCount,
       okNoAction: okCount,
       skippedBlankNameRows: aggregation.skippedBlankNameRows,
       dryRun: CUSTOMER_BACKFILL_DRY_RUN
@@ -174,6 +230,7 @@ function reconcileCustomerBackfill() {
       ", wouldFillMissingAddress=" + wouldFill +
       ", wouldRepairSplitRename=" + wouldRepair +
       ", ambiguousLocationFamily=" + ambiguousCount +
+      ", canonicalMatchNeedsReview=" + needsReviewCount +
       ", ok=" + okCount +
       ", skippedBlankNameRows=" + aggregation.skippedBlankNameRows +
       ", dryRun=" + CUSTOMER_BACKFILL_DRY_RUN
@@ -187,6 +244,7 @@ function reconcileCustomerBackfill() {
       wouldFillMissingAddress: wouldFill,
       wouldRepairSplitRename: wouldRepair,
       ambiguousLocationFamily: ambiguousCount,
+      canonicalMatchNeedsReview: needsReviewCount,
       okNoAction: okCount,
       skippedBlankNameRows: aggregation.skippedBlankNameRows,
       dryRun: CUSTOMER_BACKFILL_DRY_RUN
@@ -428,9 +486,30 @@ function familyAddressesFor_(name, records) {
 }
 
 /**
+ * True when customerValue matched record via a literal exact-name equality
+ * (case/whitespace-insensitive), not merely the same canonical/brand-alias
+ * key. matchBackfillCustomerRecord_ already tries exact first and only
+ * falls back to canonical when no exact match exists, so this recomputes
+ * the same predicate to tell the two paths apart after the fact.
+ */
+function matchedByExactBackfillName_(customerValue, record) {
+  return customerValue.toUpperCase().replace(/\s+/g, " ").trim() === record.exactKey;
+}
+
+/**
  * The core reconciliation decision for one distinct customer name:
  *  - matches 2+ existing locations already -> "ambiguous-location-family"
  *  - no TRUCKING match at all               -> "would-create"
+ *  - matched only via canonical/brand-alias
+ *    fallback, not the literal exact name   -> "canonical-match-needs-review"
+ *    (see matchedByExactBackfillName_ below — a canonical-only match can be a
+ *    DIFFERENT physical location under the same multi-location brand, e.g.
+ *    "MEGA MART (FREMONT)" canonical-matching the lone existing
+ *    "MEGA MART (PALO ALTO)" record when Fremont has no row of its own yet.
+ *    Mutating that record would silently write Fremont's address onto
+ *    Palo Alto's row — Codex review on PR #92 round 5. Only an exact-name
+ *    match is trusted enough to fill/rename/flag an existing row; every
+ *    other outcome below this point requires one.)
  *  - matched an unsuffixed record that has
  *    a suffixed sibling in its family       -> "would-repair-split-rename"
  *    (a prior flagBackfillSecondLocation_ append succeeded but its rename
@@ -489,8 +568,25 @@ function classifyCustomerCandidate_(name, aggregate, truckingRecords) {
       classification: "would-create",
       matchedRecord: null,
       proposedAddress: allAddresses[0] || "",
-      pendingAddresses: [],
+      // Codex review on PR #92 (round 5): a brand-new customer whose very
+      // first pass already shows 2+ distinct addresses must not leave the
+      // extras for "whenever the job happens to run again" — surface every
+      // address beyond the first so the write loop can create every known
+      // location now, not just one.
+      pendingAddresses: allAddresses.slice(1),
       existingAddress: null,
+      addressVariants: allAddresses,
+      sourcesUsed: sourcesUsed
+    };
+  }
+
+  if (!matchedByExactBackfillName_(name, matchedRecord)) {
+    return {
+      classification: "canonical-match-needs-review",
+      matchedRecord: matchedRecord,
+      proposedAddress: allAddresses[0] || "",
+      pendingAddresses: [],
+      existingAddress: matchedRecord.address || "",
       addressVariants: allAddresses,
       sourcesUsed: sourcesUsed
     };
@@ -701,10 +797,19 @@ function appendNewFamilyLocation_(truckingSheet, header, baseName, truckingRecor
  * triage the full, unfiltered list after the fact even though nothing was
  * excluded before logging. Logged unconditionally (live or dry-run) so
  * there is always an audit trail of what this job did or would do.
+ *
+ * Callers pass writeError only when a live write for this candidate just
+ * threw — the log tag then reads "CUSTOMER BACKFILL WRITE FAILED" instead
+ * of "CUSTOMER BACKFILL LIVE", so the audit trail never claims a write
+ * happened when it didn't (Codex review on PR #92 round 5: this is called
+ * AFTER a successful write now, not before, for exactly this reason).
  */
-function logCustomerBackfillCandidate_(name, aggregate, classification) {
+function logCustomerBackfillCandidate_(name, aggregate, classification, writeError) {
   try {
-    logPipeline_(CUSTOMER_BACKFILL_DRY_RUN ? "CUSTOMER BACKFILL DRY RUN" : "CUSTOMER BACKFILL LIVE", name, JSON.stringify({
+    var tag = writeError
+      ? "CUSTOMER BACKFILL WRITE FAILED"
+      : (CUSTOMER_BACKFILL_DRY_RUN ? "CUSTOMER BACKFILL DRY RUN" : "CUSTOMER BACKFILL LIVE");
+    logPipeline_(tag, name, JSON.stringify({
       action: classification.classification,
       customer: name,
       occurrenceCount: aggregate.occurrenceCount,
@@ -714,7 +819,8 @@ function logCustomerBackfillCandidate_(name, aggregate, classification) {
       existingTruckingRow: classification.matchedRecord ? classification.matchedRecord.rowNumber : null,
       sources: classification.sourcesUsed,
       addressVariants: classification.addressVariants,
-      sampleRows: aggregate.sampleRows
+      sampleRows: aggregate.sampleRows,
+      error: writeError ? String((writeError && writeError.message) || writeError) : undefined
     }));
   } catch (e) {
     Logger.log("logCustomerBackfillCandidate_ failed: " + (e && e.message || e));

@@ -156,6 +156,20 @@ function handleWhTruckingCustomerEdit_(e) {
         if (customerAddressConflicts_(record, seedAddress)) {
           logCustomerAddressConflict_(e.source, customerValue, rowNumber, record, seedAddress);
         } else {
+          // The mirror case of a conflict: the matched record (often a
+          // same-batch stub this very edit just created) has no address on
+          // file yet, and this row supplies one — fill it in now rather
+          // than leaving the customer permanently addressless (Codex
+          // review on PR #92, round 5). Gated to an exact-name match only:
+          // a canonical-only match (e.g. "MEGA MART (FREMONT)" resolving to
+          // the lone existing "MEGA MART (PALO ALTO)" row) could be a
+          // DIFFERENT physical location, and writing into it would corrupt
+          // that other location's address — same risk CustomerBackfill.gs's
+          // matchedByExactName_ guards against.
+          if (customerAddressFillable_(record, seedAddress) && matchedByExactName_(customerValue, record)) {
+            fillCustomerAddress_(dbSheet, dbHeader, record, seedAddress);
+            record.address = seedAddress;
+          }
           appendCustomerNote_(sheet, rowNumber, noteCol, record);
         }
       } else if (isAmbiguousLocationFamily_(customerValue, records)) {
@@ -294,6 +308,32 @@ function makeCustomerRecord_(rowNumber, name, address) {
  */
 function customerAddressConflicts_(record, seedAddress) {
   return !!(seedAddress && record.address && seedAddress !== record.address);
+}
+
+/**
+ * True when this row supplies an address and the matched record has none on
+ * file — the mirror of customerAddressConflicts_'s blank-side bypass, which
+ * otherwise leaves a same-batch stub (created with no address, then matched
+ * again later in the same paste once a real address appears) permanently
+ * addressless (Codex review on PR #92, round 5).
+ */
+function customerAddressFillable_(record, seedAddress) {
+  return !!(seedAddress && !record.address);
+}
+
+/**
+ * True when customerValue matched record via a literal exact-name equality
+ * (case/whitespace-insensitive), not merely the same canonical/brand-alias
+ * key — see CustomerBackfill.gs's matchedByExactName_ for the identical
+ * cross-location risk this guards against.
+ */
+function matchedByExactName_(customerValue, record) {
+  return customerValue.toUpperCase().replace(/\s+/g, " ").trim() === record.exactKey;
+}
+
+function fillCustomerAddress_(dbSheet, dbHeader, record, address) {
+  if (dbHeader.map["ADDRESS"] === undefined) return;
+  dbSheet.getRange(record.rowNumber, dbHeader.map["ADDRESS"] + 1).setValue(address);
 }
 
 function logCustomerAddressConflict_(spreadsheet, customerValue, whTruckingRow, record, seedAddress) {

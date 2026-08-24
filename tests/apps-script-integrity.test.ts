@@ -113,6 +113,15 @@ describe("Apps Script production integrity", () => {
     expect(lookup).toContain("function onEdit(e)");
     expect(lookup).toContain("function logPipelineFromBoundSpreadsheet_(");
     expect(lookup).not.toContain("function customerLookupOnEdit(");
+    // Round 5 of the same review: a same-batch stub created with a blank
+    // address must get filled in once a later row in the same paste
+    // supplies one, gated to an exact-name match only (a canonical-only
+    // match could be a different physical location under the same brand —
+    // see CustomerBackfill.gs's matchedByExactBackfillName_ below for the
+    // identical risk and why the two names must differ).
+    expect(lookup).toContain("function customerAddressFillable_(");
+    expect(lookup).toContain("function fillCustomerAddress_(");
+    expect(lookup).toContain("function matchedByExactName_(");
   });
 
   it("runs the customer backfill batch job live, with the '- 1'/'- 2' second-location write path implemented", () => {
@@ -159,6 +168,21 @@ describe("Apps Script production integrity", () => {
     // class of bug that hit isAmbiguousLocationFamily_.
     expect(backfill).toContain("function stripBackfillLocationSuffix_(");
     expect(backfill).not.toMatch(/function stripCustomerLocationSuffix_\(/);
+    // Round 5 of the same review: a canonical-only match (matched via the
+    // brand-alias fallback, not the literal exact name) must never mutate
+    // an existing TRUCKING row — it could be a different physical location
+    // under the same multi-location brand (e.g. MEGA MART Fremont resolving
+    // to the lone existing Palo Alto record). matchedByExactBackfillName_,
+    // not matchedByExactName_: CustomerLookup.gs defines its own identical
+    // helper for the same reason, and this file's other duplicated helpers
+    // are all "Backfill"-qualified to avoid exactly this collision.
+    expect(backfill).toContain("function matchedByExactBackfillName_(");
+    expect(backfill).not.toMatch(/function matchedByExactName_\(/);
+    expect(backfill).toContain('"canonical-match-needs-review"');
+    // Every mutating branch must log AFTER its write succeeds (or with an
+    // explicit failure tag when the write throws), not before — see
+    // logCustomerBackfillCandidate_'s writeError parameter.
+    expect(backfill).toContain("CUSTOMER BACKFILL WRITE FAILED");
   });
 
   it("does not provision an installable onEdit trigger for customer lookup (deploy-apps-script.yml never runs setupAllTriggers)", () => {
