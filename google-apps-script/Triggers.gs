@@ -21,6 +21,15 @@ var TRIGGER_PLAN = [
   { handler: "reconcileCustomerBackfill", daily: 5 }
 ];
 
+// customerLookupOnEdit is retained here ONLY as a cleanup target: an earlier
+// revision of PR #92 registered it as an installable trigger, but
+// deploy-apps-script.yml never runs setupAllTriggers(), so that trigger
+// would have silently disabled the customer-lookup automation after every
+// deploy until a human manually re-ran setup. Reverted — CustomerLookup.gs's
+// onEdit(e) is a bare, zero-config simple trigger again (see that file's
+// header comment for how it now avoids the authorization-requiring calls a
+// simple trigger can't make). This entry just ensures setupAllTriggers()
+// deletes any stray installable trigger left over from that revision.
 var TRIGGER_CLEANUP_HANDLERS = [
   "processLogisticsEmails",
   "processLogisticsEmailsV2",
@@ -30,6 +39,7 @@ var TRIGGER_CLEANUP_HANDLERS = [
   "syncInventoryModule",
   "enrichImportsFromContainerLog",
   "reconcileCustomerBackfill",
+  "customerLookupOnEdit",
   "requestSiteRedeploy"
 ];
 
