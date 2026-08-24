@@ -167,26 +167,35 @@ function handleWhTruckingCustomerEdit_(e) {
       var seedAddress = addressCol ? String(sheet.getRange(rowNumber, addressCol).getDisplayValue() || "").trim() : "";
       var record = matchCustomerRecord_(customerValue, records);
       if (record) {
-        // A record matched here can be one created earlier in this SAME
-        // batch (records[] is mutated as rows are processed) — if this
-        // row's own typed address disagrees with that record's address,
-        // blindly applying the record's note would silently attach the
-        // wrong address to this shipment. Flag instead of guessing (Codex
-        // review on PR #92).
-        if (customerAddressConflicts_(record, seedAddress)) {
+        // A canonical-only match (matchCustomerRecord_'s fallback path, not
+        // a literal exact name) could be a DIFFERENT physical location
+        // under the same multi-location brand — e.g. "MEGA MART (FREMONT)"
+        // resolving to the lone existing "MEGA MART (PALO ALTO)" row.
+        // Round 5 already gated the address-FILL write on this; round 8's
+        // review found the note-append itself was never gated, so a
+        // canonical-only match still appended the WRONG location's
+        // contact/services into this row's note — increasingly reachable
+        // once round 6 widened this handler to also fire on address-only
+        // edits. Route it to the same review-only treatment
+        // CustomerBackfill.gs's canonical-match-needs-review classification
+        // already uses: log for a human, never write anything.
+        if (!matchedByExactName_(customerValue, record)) {
+          logCanonicalMatchNeedsReview_(e.source, customerValue, rowNumber, record);
+        } else if (customerAddressConflicts_(record, seedAddress)) {
+          // A record matched here can be one created earlier in this SAME
+          // batch (records[] is mutated as rows are processed) — if this
+          // row's own typed address disagrees with that record's address,
+          // blindly applying the record's note would silently attach the
+          // wrong address to this shipment. Flag instead of guessing (Codex
+          // review on PR #92).
           logCustomerAddressConflict_(e.source, customerValue, rowNumber, record, seedAddress);
         } else {
           // The mirror case of a conflict: the matched record (often a
           // same-batch stub this very edit just created) has no address on
           // file yet, and this row supplies one — fill it in now rather
           // than leaving the customer permanently addressless (Codex
-          // review on PR #92, round 5). Gated to an exact-name match only:
-          // a canonical-only match (e.g. "MEGA MART (FREMONT)" resolving to
-          // the lone existing "MEGA MART (PALO ALTO)" row) could be a
-          // DIFFERENT physical location, and writing into it would corrupt
-          // that other location's address — same risk CustomerBackfill.gs's
-          // matchedByExactName_ guards against.
-          if (customerAddressFillable_(record, seedAddress) && matchedByExactName_(customerValue, record)) {
+          // review on PR #92, round 5).
+          if (customerAddressFillable_(record, seedAddress)) {
             fillCustomerAddress_(dbSheet, dbHeader, record, seedAddress);
             record.address = seedAddress;
           }
@@ -372,6 +381,24 @@ function logAmbiguousCustomerFamily_(spreadsheet, customerValue, whTruckingRow) 
     action: "ambiguous-location-family",
     customer: customerValue,
     whTruckingRow: whTruckingRow
+  }));
+}
+
+/**
+ * Matched only via the canonical/brand-alias fallback, not the literal
+ * exact name — could be a different physical location under the same
+ * multi-location brand. Never write (note, address, or otherwise); log for
+ * a human to confirm which record this shipment actually belongs to
+ * (Codex review on PR #92, round 8 — mirrors CustomerBackfill.gs's
+ * canonical-match-needs-review classification).
+ */
+function logCanonicalMatchNeedsReview_(spreadsheet, customerValue, whTruckingRow, record) {
+  logPipelineFromBoundSpreadsheet_(spreadsheet, "CUSTOMER LOOKUP CANONICAL MATCH NEEDS REVIEW", customerValue, JSON.stringify({
+    action: "canonical-match-needs-review",
+    customer: customerValue,
+    whTruckingRow: whTruckingRow,
+    matchedTruckingRow: record.rowNumber,
+    matchedTruckingName: record.name
   }));
 }
 

@@ -127,6 +127,18 @@ describe("Apps Script production integrity", () => {
     // on the customer column alone meant the address-only edit never
     // reached customerAddressFillable_ at all.
     expect(lookup).toContain("function shouldProcessCustomerLookupEdit_(");
+    // Round 8 of the same review: matchedByExactName_ was already gating the
+    // address-fill write, but the note-append itself was never gated the
+    // same way — a canonical-only match (e.g. "MEGA MART (FREMONT)"
+    // resolving to the lone existing "MEGA MART (PALO ALTO)" row) still
+    // appended the WRONG location's contact/services into the row's NOTE.
+    // logCanonicalMatchNeedsReview_ is the review-only path that now runs
+    // instead of appendCustomerNote_ whenever the match isn't exact.
+    expect(lookup).toContain("function logCanonicalMatchNeedsReview_(");
+    expect(lookup).toContain('"canonical-match-needs-review"');
+    expect(lookup).toMatch(
+      /if\s*\(\s*!matchedByExactName_\(customerValue,\s*record\)\s*\)\s*\{\s*logCanonicalMatchNeedsReview_\(/,
+    );
   });
 
   it("runs the customer backfill batch job live, with the '- 1'/'- 2' second-location write path implemented", () => {
@@ -210,6 +222,11 @@ describe("Apps Script production integrity", () => {
     expect(backfill).toMatch(
       /function createBackfillCustomerWithLocations_[\s\S]*?flagBackfillSecondLocation_\(truckingSheet, header, truckingRecords, primaryRecord/,
     );
+    // Round 8 of the same review: a stopped batch left part of the
+    // reconciliation unprocessed and must read as a failure, not a quiet
+    // success — otherwise a caller/operator checking the return value's
+    // .ok has no way to tell a partial run from a complete one.
+    expect(backfill).toMatch(/ok:\s*!batchStoppedEarly/);
   });
 
   it("does not provision an installable onEdit trigger for customer lookup (deploy-apps-script.yml never runs setupAllTriggers)", () => {

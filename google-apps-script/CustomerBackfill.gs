@@ -273,7 +273,15 @@ function reconcileCustomerBackfill() {
     );
 
     return {
-      ok: true,
+      // A stopped batch left part of the reconciliation unprocessed — this
+      // must read as a failure, not a quiet success, or a caller/operator
+      // checking .ok (or a manual test run in the Apps Script editor) has
+      // no way to tell a partial run from a complete one (Codex review on
+      // PR #92, round 8). The rich stats/batchStoppedEarly flag stay on the
+      // object either way — this is a signal, not a thrown exception, so
+      // the informative PIPELINE LOG summary already written above isn't
+      // clobbered by the outer catch's generic error object.
+      ok: !batchStoppedEarly,
       scanned: aggregation.aggregates.size,
       wouldCreate: wouldCreate,
       wouldFlagSecondLocation: wouldFlag,

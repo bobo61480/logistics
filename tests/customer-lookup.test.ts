@@ -35,6 +35,12 @@ type CustomerLookupHelpers = {
     subject: string,
     detail: string,
   ) => void;
+  logCanonicalMatchNeedsReview_: (
+    spreadsheet: FakeSpreadsheet,
+    customerValue: string,
+    whTruckingRow: number,
+    record: CustomerRecord,
+  ) => void;
 };
 
 type FakeSheet = {
@@ -101,7 +107,8 @@ function loadCustomerLookupHelpers(): CustomerLookupHelpers {
       "matchCustomerRecord_,buildCustomerNoteText_,canonicalWmsCustomer_,normalizeWmsCustomerKey_," +
       "stripCustomerLocationSuffix_,isAmbiguousLocationFamily_,customerAddressConflicts_," +
       "customerAddressFillable_,matchedByExactName_,fillCustomerAddress_," +
-      "shouldProcessCustomerLookupEdit_,logPipelineFromBoundSpreadsheet_};",
+      "shouldProcessCustomerLookupEdit_,logPipelineFromBoundSpreadsheet_," +
+      "logCanonicalMatchNeedsReview_};",
     context,
   );
   return context.__cust as CustomerLookupHelpers;
@@ -360,5 +367,45 @@ describe("WH Trucking Request customer lookup: bound-spreadsheet PIPELINE LOG wr
   it("never throws even if the spreadsheet handle is broken", () => {
     const broken = { getSheetByName: () => { throw new Error("boom"); } } as unknown as FakeSpreadsheet;
     expect(() => helpers.logPipelineFromBoundSpreadsheet_(broken, "X", "y", "z")).not.toThrow();
+  });
+});
+
+// Round 8 (2026-08-24, Codex review on PR #92): a canonical-only match (e.g.
+// "MEGA MART (FREMONT)" resolving to the lone existing "MEGA MART (PALO
+// ALTO)" row) is gated off address-fill writes by matchedByExactName_ already,
+// but the note-append itself was never gated the same way — so it still
+// attached the WRONG location's contact/services into the row's NOTE column.
+// logCanonicalMatchNeedsReview_ is the review-only path that replaces any
+// write in that case, mirroring CustomerBackfill.gs's
+// canonical-match-needs-review classification.
+describe("WH Trucking Request customer lookup: canonical-only matches route to review, never a write", () => {
+  it("logs a CANONICAL MATCH NEEDS REVIEW row identifying both the typed name and the matched record", () => {
+    const spreadsheet = makeFakeSpreadsheet();
+    const record = makeRecord({ name: "MEGA MART (PALO ALTO)", rowNumber: 17 });
+
+    helpers.logCanonicalMatchNeedsReview_(spreadsheet, "MEGA MART (FREMONT)", 203, record);
+
+    const log = spreadsheet.getSheetByName("PIPELINE LOG");
+    expect(log?.rows[0]).toEqual(["Timestamp", "Event", "Subject", "Detail"]);
+    expect(log?.rows[1]?.slice(1, 3)).toEqual(["CUSTOMER LOOKUP CANONICAL MATCH NEEDS REVIEW", "MEGA MART (FREMONT)"]);
+
+    const detail = JSON.parse(log?.rows[1]?.[3] as string);
+    expect(detail).toEqual({
+      action: "canonical-match-needs-review",
+      customer: "MEGA MART (FREMONT)",
+      whTruckingRow: 203,
+      matchedTruckingRow: 17,
+      matchedTruckingName: "MEGA MART (PALO ALTO)",
+    });
+  });
+
+  it("distinguishes the case where a write is actually safe (exact match) from one where it is not (canonical-only)", () => {
+    // This is the exact routing decision handleWhTruckingCustomerEdit_ makes:
+    // matchedByExactName_ true -> safe to write; false -> logCanonicalMatchNeedsReview_
+    // only, never appendCustomerNote_/fillCustomerAddress_. Assert both sides
+    // of that gate hold for the same fixture pair used above.
+    const exactRecord = makeRecord({ name: "MEGA MART (PALO ALTO)" });
+    expect(helpers.matchedByExactName_("MEGA MART (PALO ALTO)", exactRecord)).toBe(true);
+    expect(helpers.matchedByExactName_("MEGA MART (FREMONT)", exactRecord)).toBe(false);
   });
 });
