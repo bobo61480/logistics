@@ -104,7 +104,7 @@ function reconcileCustomerBackfill() {
         ambiguousCount++;
         logCustomerBackfillCandidate_(aggregate.name, aggregate, classification);
         if (!CUSTOMER_BACKFILL_DRY_RUN) {
-          var baseName = stripCustomerLocationSuffix_(aggregate.name);
+          var baseName = stripBackfillLocationSuffix_(aggregate.name);
           classification.pendingAddresses.forEach(function (address) {
             var newName = appendNewFamilyLocation_(truckingSheet, truckingHeader, baseName, truckingRecords, address, nextTruckingRow);
             truckingRecords.push(makeBackfillRecord_(nextTruckingRow, newName, address));
@@ -355,7 +355,7 @@ function mergeCustomerEntryAddresses_(aggregates, rows, header) {
  * landing on "- 3" and recognizing addresses already on file (PR #92).
  */
 function canonicalFamilyBaseKey_(name) {
-  return normalizeWmsCustomerKey_(canonicalWmsCustomer_(stripCustomerLocationSuffix_(name)));
+  return normalizeWmsCustomerKey_(canonicalWmsCustomer_(stripBackfillLocationSuffix_(name)));
 }
 
 /**
@@ -402,7 +402,7 @@ function hasEstablishedSuffixConvention_(customerValue, records) {
   });
 }
 
-function isAmbiguousLocationFamily_(customerValue, records) {
+function isBackfillAmbiguousLocationFamily_(customerValue, records) {
   if (isSuffixLocationFamily_(customerValue, records)) return true;
 
   var canonicalKey = normalizeWmsCustomerKey_(canonicalWmsCustomer_(customerValue));
@@ -458,7 +458,7 @@ function classifyCustomerCandidate_(name, aggregate, truckingRecords) {
   });
 
   if (!matchedRecord) {
-    if (isAmbiguousLocationFamily_(name, truckingRecords)) {
+    if (isBackfillAmbiguousLocationFamily_(name, truckingRecords)) {
       // The name itself is ambiguous (2+ candidate locations), but WHICH
       // address is new is not, when the family already uses the explicit
       // "- N" suffix convention: every sibling sharing name's stripped base
@@ -572,7 +572,7 @@ function classifyCustomerCandidate_(name, aggregate, truckingRecords) {
  * customer name, returning the bare base name shared by every location of
  * the same brand. A name with no suffix is returned unchanged.
  */
-function stripCustomerLocationSuffix_(name) {
+function stripBackfillLocationSuffix_(name) {
   var match = /^(.*?)\s*-\s*(\d+)\s*$/.exec(name);
   return match ? match[1].trim() : name;
 }
@@ -646,12 +646,12 @@ function fillBackfillCustomerAddress_(truckingSheet, header, matchedRecord, addr
  * needs its "- 1" rename, which the next run's own alreadySuffixed check
  * would still perform). Appending AFTER a completed rename would instead
  * orphan a "<name> - 1" row that nothing can exact-match anymore, and that
- * isAmbiguousLocationFamily_ can't yet recognize as a family (only 1 known
+ * isBackfillAmbiguousLocationFamily_ can't yet recognize as a family (only 1 known
  * sibling) — reclassifying the bare name as "would-create" and appending
  * an unsuffixed duplicate on top of it forever. Returns the new row's name.
  */
 function flagBackfillSecondLocation_(truckingSheet, header, truckingRecords, matchedRecord, newAddress, targetRow) {
-  var baseName = stripCustomerLocationSuffix_(matchedRecord.name);
+  var baseName = stripBackfillLocationSuffix_(matchedRecord.name);
   var alreadySuffixed = /^(.*?)\s*-\s*(\d+)\s*$/.test(matchedRecord.name);
 
   var nextSuffix = nextCustomerLocationSuffix_(baseName, truckingRecords);
@@ -673,7 +673,7 @@ function flagBackfillSecondLocation_(truckingSheet, header, truckingRecords, mat
  * "would-repair-split-rename" outcome) — the same rename either way.
  */
 function renameToFirstLocation_(truckingSheet, header, matchedRecord) {
-  var baseName = stripCustomerLocationSuffix_(matchedRecord.name);
+  var baseName = stripBackfillLocationSuffix_(matchedRecord.name);
   var renamed = baseName + " - 1";
   truckingSheet.getRange(matchedRecord.rowNumber, header.map["CUSTOMER NAME"] + 1).setValue(renamed);
   matchedRecord.name = renamed;

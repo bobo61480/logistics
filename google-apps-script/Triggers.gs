@@ -21,18 +21,15 @@ var TRIGGER_PLAN = [
   { handler: "reconcileCustomerBackfill", daily: 5 }
 ];
 
-// Installable onEdit triggers, kept separate from TRIGGER_PLAN's time-based
-// jobs since they're provisioned via a different ScriptApp builder chain
-// (.forSpreadsheet(...).onEdit() instead of .timeBased()). customerLookupOnEdit
-// (CustomerLookup.gs) is deliberately NOT a bare global `onEdit` — that would
-// auto-install as a restricted "simple trigger" that can't call
-// SpreadsheetApp.openById (which logPipeline_ needs) — see that file's
-// comment on the function. This is the trigger that gives it full
-// authorization instead.
-var EDIT_TRIGGER_PLAN = [
-  { handler: "customerLookupOnEdit" }
-];
-
+// customerLookupOnEdit is retained here ONLY as a cleanup target: an earlier
+// revision of PR #92 registered it as an installable trigger, but
+// deploy-apps-script.yml never runs setupAllTriggers(), so that trigger
+// would have silently disabled the customer-lookup automation after every
+// deploy until a human manually re-ran setup. Reverted — CustomerLookup.gs's
+// onEdit(e) is a bare, zero-config simple trigger again (see that file's
+// header comment for how it now avoids the authorization-requiring calls a
+// simple trigger can't make). This entry just ensures setupAllTriggers()
+// deletes any stray installable trigger left over from that revision.
 var TRIGGER_CLEANUP_HANDLERS = [
   "processLogisticsEmails",
   "processLogisticsEmailsV2",
@@ -60,15 +57,8 @@ function setupAllTriggers() {
     else builder.everyDays(1).atHour(t.daily).create();
   });
 
-  EDIT_TRIGGER_PLAN.forEach(function (t) {
-    ScriptApp.newTrigger(t.handler).forSpreadsheet(SPREADSHEET_ID).onEdit().create();
-  });
-
-  Logger.log(
-    "Provisioned " + TRIGGER_PLAN.length + " canonical triggers and " +
-    EDIT_TRIGGER_PLAN.length + " edit trigger(s)."
-  );
-  return TRIGGER_PLAN.concat(EDIT_TRIGGER_PLAN);
+  Logger.log("Provisioned " + TRIGGER_PLAN.length + " canonical triggers.");
+  return TRIGGER_PLAN;
 }
 
 /**

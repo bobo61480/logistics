@@ -27,12 +27,22 @@
  * in the separate CustomerBackfill.gs batch job, not here — this file only
  * handles the live per-edit lookup + create described above.
  *
- * IMPORTANT — OPERATIONAL: the handler is customerLookupOnEdit(e), not a
- * bare onEdit(e), and only runs once Triggers.gs's setupAllTriggers() has
- * been run at least once to register it as an installable onEdit trigger
- * (see Triggers.gs's EDIT_TRIGGER_PLAN and that function's header comment
- * for why). If setupAllTriggers() has never been run since this file was
- * added, this automation is not doing anything yet.
+ * onEdit(e) below is a bare, zero-config Apps Script "simple trigger" —
+ * it fires automatically on every edit with no setupAllTriggers() step
+ * required, the same as it always has. Simple triggers cannot call
+ * authorization-requiring services such as SpreadsheetApp.openById
+ * (Codex review on PR #92, round 2), which is why every PIPELINE LOG write
+ * in this file goes through logPipelineFromBoundSpreadsheet_ (writes
+ * directly to the already-open, already-authorized bound spreadsheet —
+ * GMAIL_PIPELINE.masterId IS this same workbook) instead of the shared
+ * logPipeline_ helper other files use from time-based (fully-authorized)
+ * triggers. An earlier revision promoted this to a real installable
+ * trigger instead, but deploy-apps-script.yml never runs setupAllTriggers()
+ * (round 4 finding) — that would have silently disabled this whole feature
+ * after every deploy until a human manually re-ran it, trading a narrower,
+ * already-fixed logging gap for a worse regression. Fixing the actual
+ * authorization-requiring call is strictly better: it keeps the zero-config
+ * behavior this handler always had.
  */
 
 var CUSTOMER_DB_SHEET_NAME = "TRUCKING";
@@ -49,19 +59,31 @@ var CUSTOMER_SERVICE_FLAGS = [
   ["APPOINTMENT", "Appointment required"]
 ];
 
-// NOT named onEdit(e): a bare top-level onEdit is auto-installed by Apps
-// Script as a restricted "simple trigger" that cannot call authorization-
-// requiring services — including SpreadsheetApp.openById, which logPipeline_
-// uses (Codex review on PR #92). Registered instead as a full installable
-// onEdit trigger in Triggers.gs's EDIT_TRIGGER_PLAN, which runs with the
-// same authorization as any other installable trigger. Naming it onEdit
-// here as well would double-fire it (once as a simple trigger, once as the
-// installable one) — keep this name.
-function customerLookupOnEdit(e) {
+function onEdit(e) {
   try {
     handleWhTruckingCustomerEdit_(e);
   } catch (err) {
-    Logger.log("customerLookupOnEdit failed: " + (err && err.message || err));
+    Logger.log("onEdit customer lookup failed: " + (err && err.message || err));
+  }
+}
+
+/**
+ * Writes one row to PIPELINE LOG using an already-open Spreadsheet handle
+ * (e.g. e.source from the onEdit event, or dbSheet.getParent()) instead of
+ * opening by ID. GMAIL_PIPELINE.masterId (used by the shared logPipeline_
+ * helper) is this same workbook, but SpreadsheetApp.openById is restricted
+ * under a simple trigger's authorization regardless of which file ID is
+ * passed — this avoids that call entirely rather than requiring this
+ * handler to become an installable trigger just to log.
+ */
+function logPipelineFromBoundSpreadsheet_(spreadsheet, event, subject, detail) {
+  try {
+    var log = spreadsheet.getSheetByName("PIPELINE LOG") || spreadsheet.insertSheet("PIPELINE LOG");
+    if (log.getLastRow() === 0) log.appendRow(["Timestamp", "Event", "Subject", "Detail"]);
+    log.appendRow([new Date(), event, subject, detail]);
+    if (log.getLastRow() > 2000) log.deleteRows(2, 500); // keep the log bounded, same cap logPipeline_ uses
+  } catch (e) {
+    Logger.log("logPipelineFromBoundSpreadsheet_ failed: " + (e && e.message || e));
   }
 }
 
@@ -95,16 +117,12 @@ function handleWhTruckingCustomerEdit_(e) {
     // A dropped edit is otherwise invisible outside the Apps Script
     // executions log — surface it in PIPELINE LOG so a busy paste that loses
     // the lock race doesn't silently go unreviewed (Codex review on PR #92).
-    try {
-      logPipeline_("CUSTOMER LOOKUP LOCK TIMEOUT", "", JSON.stringify({
-        action: "lock-timeout",
-        sheet: sheet.getName(),
-        startRow: startRow,
-        numRows: numRows
-      }));
-    } catch (e) {
-      Logger.log("Customer lookup lock-timeout logging failed: " + (e && e.message || e));
-    }
+    logPipelineFromBoundSpreadsheet_(e.source, "CUSTOMER LOOKUP LOCK TIMEOUT", "", JSON.stringify({
+      action: "lock-timeout",
+      sheet: sheet.getName(),
+      startRow: startRow,
+      numRows: numRows
+    }));
     return;
   }
 
@@ -136,7 +154,7 @@ function handleWhTruckingCustomerEdit_(e) {
         // wrong address to this shipment. Flag instead of guessing (Codex
         // review on PR #92).
         if (customerAddressConflicts_(record, seedAddress)) {
-          logCustomerAddressConflict_(customerValue, rowNumber, record, seedAddress);
+          logCustomerAddressConflict_(e.source, customerValue, rowNumber, record, seedAddress);
         } else {
           appendCustomerNote_(sheet, rowNumber, noteCol, record);
         }
@@ -144,9 +162,9 @@ function handleWhTruckingCustomerEdit_(e) {
         // Multiple existing TRUCKING rows already share this base name
         // (distinct locations) — never guess which one, and never pile a
         // new blank duplicate on top. Log for a human, write nothing.
-        logAmbiguousCustomerFamily_(customerValue, rowNumber);
+        logAmbiguousCustomerFamily_(e.source, customerValue, rowNumber);
       } else {
-        proposeNewCustomer_(customerValue, seedAddress, rowNumber, dbSheet, dbHeader, nextDbRow);
+        proposeNewCustomer_(e.source, customerValue, seedAddress, rowNumber, dbSheet, dbHeader, nextDbRow);
         if (!CUSTOMER_CREATE_DRY_RUN) {
           records.push(makeCustomerRecord_(nextDbRow, customerValue, seedAddress));
           nextDbRow += 1;
@@ -278,31 +296,23 @@ function customerAddressConflicts_(record, seedAddress) {
   return !!(seedAddress && record.address && seedAddress !== record.address);
 }
 
-function logCustomerAddressConflict_(customerValue, whTruckingRow, record, seedAddress) {
-  try {
-    logPipeline_("CUSTOMER LOOKUP ADDRESS CONFLICT", customerValue, JSON.stringify({
-      action: "address-conflict",
-      customer: customerValue,
-      whTruckingRow: whTruckingRow,
-      matchedTruckingRow: record.rowNumber,
-      existingAddress: record.address,
-      seedAddress: seedAddress
-    }));
-  } catch (e) {
-    Logger.log("logCustomerAddressConflict_ failed: " + e.message);
-  }
+function logCustomerAddressConflict_(spreadsheet, customerValue, whTruckingRow, record, seedAddress) {
+  logPipelineFromBoundSpreadsheet_(spreadsheet, "CUSTOMER LOOKUP ADDRESS CONFLICT", customerValue, JSON.stringify({
+    action: "address-conflict",
+    customer: customerValue,
+    whTruckingRow: whTruckingRow,
+    matchedTruckingRow: record.rowNumber,
+    existingAddress: record.address,
+    seedAddress: seedAddress
+  }));
 }
 
-function logAmbiguousCustomerFamily_(customerValue, whTruckingRow) {
-  try {
-    logPipeline_("CUSTOMER LOOKUP AMBIGUOUS", customerValue, JSON.stringify({
-      action: "ambiguous-location-family",
-      customer: customerValue,
-      whTruckingRow: whTruckingRow
-    }));
-  } catch (e) {
-    Logger.log("logAmbiguousCustomerFamily_ failed: " + e.message);
-  }
+function logAmbiguousCustomerFamily_(spreadsheet, customerValue, whTruckingRow) {
+  logPipelineFromBoundSpreadsheet_(spreadsheet, "CUSTOMER LOOKUP AMBIGUOUS", customerValue, JSON.stringify({
+    action: "ambiguous-location-family",
+    customer: customerValue,
+    whTruckingRow: whTruckingRow
+  }));
 }
 
 function buildCustomerNoteText_(record) {
@@ -329,18 +339,14 @@ function appendCustomerNote_(sheet, rowNumber, noteCol, record) {
  * CUSTOMER_CREATE_DRY_RUN is set back to true, in which case it only logs
  * the proposal to PIPELINE LOG ("CUSTOMER DB DRY RUN") for review instead.
  */
-function proposeNewCustomer_(customerValue, seedAddress, whTruckingRow, dbSheet, dbHeader, targetDbRow) {
+function proposeNewCustomer_(spreadsheet, customerValue, seedAddress, whTruckingRow, dbSheet, dbHeader, targetDbRow) {
   if (CUSTOMER_CREATE_DRY_RUN) {
-    try {
-      logPipeline_("CUSTOMER DB DRY RUN", customerValue, JSON.stringify({
-        action: "would-create",
-        customer: customerValue,
-        seedAddress: seedAddress,
-        whTruckingRow: whTruckingRow
-      }));
-    } catch (e) {
-      Logger.log("proposeNewCustomer_ logging failed: " + e.message);
-    }
+    logPipelineFromBoundSpreadsheet_(spreadsheet, "CUSTOMER DB DRY RUN", customerValue, JSON.stringify({
+      action: "would-create",
+      customer: customerValue,
+      seedAddress: seedAddress,
+      whTruckingRow: whTruckingRow
+    }));
     return;
   }
 

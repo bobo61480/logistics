@@ -20,7 +20,44 @@ type CustomerLookupHelpers = {
   stripCustomerLocationSuffix_: (name: string) => string;
   isAmbiguousLocationFamily_: (customerValue: string, records: CustomerRecord[]) => boolean;
   customerAddressConflicts_: (record: CustomerRecord, seedAddress: string) => boolean;
+  logPipelineFromBoundSpreadsheet_: (
+    spreadsheet: FakeSpreadsheet,
+    event: string,
+    subject: string,
+    detail: string,
+  ) => void;
 };
+
+type FakeSheet = {
+  rows: unknown[][];
+  getLastRow: () => number;
+  appendRow: (row: unknown[]) => void;
+  deleteRows: (start: number, count: number) => void;
+};
+type FakeSpreadsheet = {
+  sheets: Record<string, FakeSheet>;
+  getSheetByName: (name: string) => FakeSheet | null;
+  insertSheet: (name: string) => FakeSheet;
+};
+
+function makeFakeSheet(): FakeSheet {
+  const rows: unknown[][] = [];
+  return {
+    rows,
+    getLastRow: () => rows.length,
+    appendRow: (row: unknown[]) => rows.push(row),
+    deleteRows: (start: number, count: number) => rows.splice(start - 1, count),
+  };
+}
+
+function makeFakeSpreadsheet(): FakeSpreadsheet {
+  const sheets: Record<string, FakeSheet> = {};
+  return {
+    sheets,
+    getSheetByName: (name: string) => sheets[name] || null,
+    insertSheet: (name: string) => (sheets[name] = makeFakeSheet()),
+  };
+}
 
 function loadCustomerLookupHelpers(): CustomerLookupHelpers {
   // canonicalWmsCustomer_/normalizeWmsCustomerKey_ live in Code.gs;
@@ -30,12 +67,17 @@ function loadCustomerLookupHelpers(): CustomerLookupHelpers {
   // wms-trucking-sync.test.ts.
   const code = readFileSync("google-apps-script/Code.gs", "utf8");
   const customerLookup = readFileSync("google-apps-script/CustomerLookup.gs", "utf8");
-  const context = vm.createContext({ console });
+  // Logger stub: logPipelineFromBoundSpreadsheet_'s catch path calls
+  // Logger.log, same as real Apps Script — without a stub, an intentionally
+  // broken spreadsheet handle in a test would throw a ReferenceError from
+  // inside the catch block itself instead of being caught.
+  const context = vm.createContext({ console, Logger: { log: () => {} } });
 
   vm.runInContext(
     `${code}\n${customerLookup}\n;globalThis.__cust = {` +
       "matchCustomerRecord_,buildCustomerNoteText_,canonicalWmsCustomer_,normalizeWmsCustomerKey_," +
-      "stripCustomerLocationSuffix_,isAmbiguousLocationFamily_,customerAddressConflicts_};",
+      "stripCustomerLocationSuffix_,isAmbiguousLocationFamily_,customerAddressConflicts_," +
+      "logPipelineFromBoundSpreadsheet_};",
     context,
   );
   return context.__cust as CustomerLookupHelpers;
@@ -175,5 +217,41 @@ describe("WH Trucking Request customer lookup: same-batch address conflict detec
     const withoutAddress = makeRecord({ name: "Acme Co", address: "" });
     expect(helpers.customerAddressConflicts_(withAddress, "")).toBe(false);
     expect(helpers.customerAddressConflicts_(withoutAddress, "456 Oak St")).toBe(false);
+  });
+});
+
+// Round 4 (2026-08-24, Codex review on PR #92): onEdit(e) reverted to a bare,
+// zero-config simple trigger — deploy-apps-script.yml never runs
+// setupAllTriggers(), so an earlier revision that required it as an
+// installable trigger would have silently disabled this whole feature after
+// every deploy. Every PIPELINE LOG write now goes through
+// logPipelineFromBoundSpreadsheet_, which writes directly to an already-open
+// spreadsheet handle (e.source) instead of SpreadsheetApp.openById — the
+// specific call that's restricted under a simple trigger's authorization.
+describe("WH Trucking Request customer lookup: bound-spreadsheet PIPELINE LOG writes", () => {
+  it("creates the PIPELINE LOG sheet with a header row on first write", () => {
+    const spreadsheet = makeFakeSpreadsheet();
+    helpers.logPipelineFromBoundSpreadsheet_(spreadsheet, "CUSTOMER LOOKUP AMBIGUOUS", "Acme Co", "{}");
+
+    const log = spreadsheet.getSheetByName("PIPELINE LOG");
+    expect(log?.rows[0]).toEqual(["Timestamp", "Event", "Subject", "Detail"]);
+    expect(log?.rows[1]?.slice(1)).toEqual(["CUSTOMER LOOKUP AMBIGUOUS", "Acme Co", "{}"]);
+  });
+
+  it("appends to an existing PIPELINE LOG sheet without re-adding the header", () => {
+    const spreadsheet = makeFakeSpreadsheet();
+    const existing = spreadsheet.insertSheet("PIPELINE LOG");
+    existing.appendRow(["Timestamp", "Event", "Subject", "Detail"]);
+    existing.appendRow([new Date(), "SOME OTHER EVENT", "x", "y"]);
+
+    helpers.logPipelineFromBoundSpreadsheet_(spreadsheet, "CUSTOMER LOOKUP LOCK TIMEOUT", "", "{}");
+
+    expect(existing.rows).toHaveLength(3);
+    expect(existing.rows[2][1]).toBe("CUSTOMER LOOKUP LOCK TIMEOUT");
+  });
+
+  it("never throws even if the spreadsheet handle is broken", () => {
+    const broken = { getSheetByName: () => { throw new Error("boom"); } } as unknown as FakeSpreadsheet;
+    expect(() => helpers.logPipelineFromBoundSpreadsheet_(broken, "X", "y", "z")).not.toThrow();
   });
 });

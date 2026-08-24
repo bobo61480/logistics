@@ -102,12 +102,17 @@ describe("Apps Script production integrity", () => {
     // observable in PIPELINE LOG, not just the executions log.
     expect(lookup).toContain("function customerAddressConflicts_(");
     expect(lookup).toContain("CUSTOMER LOOKUP LOCK TIMEOUT");
-    // The handler is NOT a bare onEdit(e): that auto-installs as a
-    // restricted simple trigger that can't call SpreadsheetApp.openById
-    // (which logPipeline_ needs). It's customerLookupOnEdit(e), registered
-    // as a full installable trigger in Triggers.gs instead.
-    expect(lookup).toContain("function customerLookupOnEdit(e)");
-    expect(lookup).not.toMatch(/function\s+onEdit\s*\(/);
+    // Round 4 of the same review: a bare onEdit(e) auto-installs as a
+    // restricted simple trigger — an earlier revision promoted it to a real
+    // installable trigger instead, but deploy-apps-script.yml never runs
+    // setupAllTriggers(), so that would have silently disabled this whole
+    // feature after every deploy. Reverted to a bare onEdit(e); every
+    // PIPELINE LOG write instead goes through logPipelineFromBoundSpreadsheet_,
+    // which avoids the one call (SpreadsheetApp.openById) actually
+    // restricted under a simple trigger's authorization.
+    expect(lookup).toContain("function onEdit(e)");
+    expect(lookup).toContain("function logPipelineFromBoundSpreadsheet_(");
+    expect(lookup).not.toContain("function customerLookupOnEdit(");
   });
 
   it("runs the customer backfill batch job live, with the '- 1'/'- 2' second-location write path implemented", () => {
@@ -117,7 +122,15 @@ describe("Apps Script production integrity", () => {
     expect(backfill).toContain("function appendBackfillCustomer_(");
     expect(backfill).toContain("function fillBackfillCustomerAddress_(");
     expect(backfill).toContain("function flagBackfillSecondLocation_(");
-    expect(backfill).toContain("function isAmbiguousLocationFamily_(");
+    // isBackfillAmbiguousLocationFamily_, not isAmbiguousLocationFamily_:
+    // CustomerLookup.gs defines its OWN identically-named function, and Apps
+    // Script's single flat global namespace means the last-loaded file's
+    // definition silently wins for both callers, discarding the other's
+    // logic — round 4 of the Codex review on PR #92 (the two copies had
+    // drifted to genuinely different behavior across rounds 2/3's fixes, so
+    // whichever one lost would run the wrong ambiguity check with no error).
+    expect(backfill).toContain("function isBackfillAmbiguousLocationFamily_(");
+    expect(backfill).not.toMatch(/function isAmbiguousLocationFamily_\(/);
     expect(backfill).toContain('"ambiguous-location-family"');
     // Every candidate is still logged to PIPELINE LOG regardless of dry-run
     // state, live or not — the audit trail must never be silently dropped.
@@ -137,18 +150,33 @@ describe("Apps Script production integrity", () => {
     expect(backfill).toContain("function canonicalFamilyBaseKey_(");
     expect(backfill).toContain("function renameToFirstLocation_(");
     expect(backfill).toContain('"would-repair-split-rename"');
+    // stripBackfillLocationSuffix_, not stripCustomerLocationSuffix_: same
+    // global-namespace collision reasoning as isBackfillAmbiguousLocationFamily_
+    // above — CustomerLookup.gs defines its own stripCustomerLocationSuffix_
+    // too. Currently byte-identical across both files (so today's collision
+    // is harmless), but sharing a name across files remains fragile — a
+    // future edit to either copy alone would silently resurrect the same
+    // class of bug that hit isAmbiguousLocationFamily_.
+    expect(backfill).toContain("function stripBackfillLocationSuffix_(");
+    expect(backfill).not.toMatch(/function stripCustomerLocationSuffix_\(/);
   });
 
-  it("registers the WH Trucking Request customer-lookup edit handler as a fully-authorized installable trigger", () => {
+  it("does not provision an installable onEdit trigger for customer lookup (deploy-apps-script.yml never runs setupAllTriggers)", () => {
     const triggers = read("google-apps-script/Triggers.gs");
-    // Codex review on PR #92: a bare global onEdit(e) auto-installs as a
-    // restricted simple trigger that can't call SpreadsheetApp.openById
-    // (which CustomerLookup.gs's ambiguous/lock-timeout logging needs) — it
-    // must instead be a normal installable trigger like every other handler
-    // here.
-    expect(triggers).toContain('{ handler: "customerLookupOnEdit" }');
-    expect(triggers).toContain("EDIT_TRIGGER_PLAN");
-    expect(triggers).toContain(".forSpreadsheet(SPREADSHEET_ID).onEdit().create()");
+    const workflow = read(".github/workflows/deploy-apps-script.yml");
+    // Round 4 of the Codex review on PR #92: deploy-apps-script.yml only
+    // pushes/deploys source, never invokes setupAllTriggers() — provisioning
+    // customer lookup as an installable trigger would have left it disabled
+    // after every normal production deploy until a human ran setup by hand.
+    // Confirm both halves: the workflow still doesn't call it (so the risk
+    // is real if anything ever depended on install-time provisioning), and
+    // Triggers.gs no longer tries to provision one — CustomerLookup.gs's
+    // bare onEdit(e) needs no trigger installation at all.
+    expect(workflow).not.toContain("setupAllTriggers");
+    expect(triggers).not.toContain("EDIT_TRIGGER_PLAN");
+    expect(triggers).not.toContain(".onEdit().create()");
+    // Retained purely as a cleanup target for any stray installable trigger
+    // left over from testing an earlier revision of this PR.
     expect(triggers).toContain('"customerLookupOnEdit"');
   });
 });

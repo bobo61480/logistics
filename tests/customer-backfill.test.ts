@@ -53,9 +53,9 @@ type BackfillHelpers = {
     addressVariants: string[];
     sourcesUsed: string[];
   };
-  stripCustomerLocationSuffix_: (name: string) => string;
+  stripBackfillLocationSuffix_: (name: string) => string;
   nextCustomerLocationSuffix_: (baseName: string, records: CustomerRecord[]) => number;
-  isAmbiguousLocationFamily_: (customerValue: string, records: CustomerRecord[]) => boolean;
+  isBackfillAmbiguousLocationFamily_: (customerValue: string, records: CustomerRecord[]) => boolean;
   isSuffixLocationFamily_: (customerValue: string, records: CustomerRecord[]) => boolean;
   hasEstablishedSuffixConvention_: (customerValue: string, records: CustomerRecord[]) => boolean;
   appendBackfillCustomer_: (sheet: FakeSheet, header: Header, name: string, address: string, targetRow: number) => void;
@@ -88,9 +88,9 @@ function loadBackfillHelpers(): BackfillHelpers {
     `${codeSource}\n${backfillSource}\n;globalThis.__backfill = {` +
       "findB2bTruckingHeader_,buildB2bCustomerAggregates_,findCustomerEntryHeader_," +
       "mergeCustomerEntryAddresses_,findBackfillCustomerDbHeader_,buildBackfillCustomerRecords_," +
-      "matchBackfillCustomerRecord_,classifyCustomerCandidate_,stripCustomerLocationSuffix_," +
+      "matchBackfillCustomerRecord_,classifyCustomerCandidate_,stripBackfillLocationSuffix_," +
       "nextCustomerLocationSuffix_,appendBackfillCustomer_,fillBackfillCustomerAddress_," +
-      "flagBackfillSecondLocation_,isAmbiguousLocationFamily_,isSuffixLocationFamily_," +
+      "flagBackfillSecondLocation_,isBackfillAmbiguousLocationFamily_,isSuffixLocationFamily_," +
       "hasEstablishedSuffixConvention_,appendNewFamilyLocation_,renameToFirstLocation_};",
     context,
   );
@@ -323,7 +323,7 @@ describe("customer backfill: live writes (2026-08-24 rollout)", () => {
       { name: "Acme Co - 1" } as CustomerRecord,
       { name: "Acme Co - 2" } as CustomerRecord,
     ];
-    expect(helpers.isAmbiguousLocationFamily_("Acme Co", records)).toBe(true);
+    expect(helpers.isBackfillAmbiguousLocationFamily_("Acme Co", records)).toBe(true);
   });
 
   it("flags ambiguity via canonical-key aliasing (e.g. MEGA MART), independent of suffix stripping", () => {
@@ -331,17 +331,17 @@ describe("customer backfill: live writes (2026-08-24 rollout)", () => {
       { name: "Mega Mart (Palo Alto)", canonicalKey: "MEGA MART" } as CustomerRecord,
       { name: "Mega Mart - Fremont", canonicalKey: "MEGA MART" } as CustomerRecord,
     ];
-    expect(helpers.isAmbiguousLocationFamily_("Mega Mart", records)).toBe(true);
+    expect(helpers.isBackfillAmbiguousLocationFamily_("Mega Mart", records)).toBe(true);
   });
 
   it("is not ambiguous for a single, unrelated record", () => {
     const records = [{ name: "Someone Else Co", canonicalKey: "SOMEONE ELSE CO" } as CustomerRecord];
-    expect(helpers.isAmbiguousLocationFamily_("Acme Co", records)).toBe(false);
+    expect(helpers.isBackfillAmbiguousLocationFamily_("Acme Co", records)).toBe(false);
   });
 
   it("strips a trailing numeric location suffix, leaving unsuffixed names untouched", () => {
-    expect(helpers.stripCustomerLocationSuffix_("OVER N OVER Over Beauty - 2")).toBe("OVER N OVER Over Beauty");
-    expect(helpers.stripCustomerLocationSuffix_("Plain Customer Co")).toBe("Plain Customer Co");
+    expect(helpers.stripBackfillLocationSuffix_("OVER N OVER Over Beauty - 2")).toBe("OVER N OVER Over Beauty");
+    expect(helpers.stripBackfillLocationSuffix_("Plain Customer Co")).toBe("Plain Customer Co");
   });
 
   it("treats an unsuffixed record as implicit location 1, so the first real duplicate becomes 2", () => {
@@ -436,7 +436,7 @@ describe("customer backfill: live writes (2026-08-24 rollout)", () => {
     expect(helpers.hasEstablishedSuffixConvention_("Acme Co", suffixed)).toBe(true);
 
     // Same canonical brand, but neither sibling has ever used "- N" naming —
-    // isSuffixLocationFamily_/isAmbiguousLocationFamily_ still flag this as
+    // isSuffixLocationFamily_/isBackfillAmbiguousLocationFamily_ still flag this as
     // ambiguous (never guess which location), but it's not safe to invent a
     // "- N" convention the sheet has never used for this family.
     const aliasOnly = [
