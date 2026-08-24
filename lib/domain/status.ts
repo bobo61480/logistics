@@ -8,6 +8,7 @@ export type LogisticsStatus =
   | "Received"
   | "Cancelled"
   | "Completed"
+  | "N/A"
   | "Customs Clearance"
   | "FDA Review / Hold"
   | "FWS Review / Hold"
@@ -31,6 +32,7 @@ const aliases = new Map<string, LogisticsStatus>([
   ["CANCELLED", "Cancelled"],
   ["CANCELED", "Cancelled"],
   ["COMPLETED", "Completed"],
+  ["N/A", "N/A"],
   ["CUSTOMS CLEARANCE", "Customs Clearance"],
   ["FDA HOLD", "FDA Review / Hold"],
   ["FDA REVIEW", "FDA Review / Hold"],

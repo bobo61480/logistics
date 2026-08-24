@@ -11,7 +11,15 @@
  */
 
 var WMS_TRUCKING_IMPORT_MIN_DATE = "2026-08-01";
-var WMS_TRUCKING_SYNC_ENABLED = false;
+var WMS_TRUCKING_SYNC_ENABLED = true;
+// Re-enabled 2026-08-23 after fixing the customer-canonicalization bug that
+// caused the 2026-08-12 KORHEIM wrong-merge incident (canonicalWmsCustomer_
+// in Code.gs used an unanchored prefix match, not the word-boundary check it
+// has now). Ships in dry-run first: real scans run and log exactly what they
+// would insert/update to PIPELINE LOG without touching WH Trucking Request,
+// so the fix can be validated against live data before trusting it with
+// writes again. Flip to false only after reviewing several dry-run cycles.
+var WMS_TRUCKING_DRY_RUN = true;
 
 function wmsImportEligible_(dateInfo) {
   var key = String(dateInfo && dateInfo.key || "").trim();
@@ -181,17 +189,26 @@ function scanAndImportWmsTruckingOrdersV2() {
         var removedCount = currentInvoices.length - retainedInvoices.length;
         var changed = false;
 
-        changed = writeMappedValue_(targetSheet, match.rowNumber, targetMap, "CUSTOMER", group.customer) || changed;
-        changed = writeMappedValue_(targetSheet, match.rowNumber, targetMap, "INVOICE NO.", mergedInvoices.join("\n")) || changed;
-        changed = writeMappedValue_(targetSheet, match.rowNumber, targetMap, "SHIP DATE", group.shipDate) || changed;
+        if (WMS_TRUCKING_DRY_RUN) {
+          changed = wouldChangeMappedValue_(current, targetMap, "CUSTOMER", group.customer) ||
+            wouldChangeMappedValue_(current, targetMap, "INVOICE NO.", mergedInvoices.join("\n")) ||
+            wouldChangeMappedValue_(current, targetMap, "SHIP DATE", group.shipDate) ||
+            (totalAmount > 0 && targetMap["VALUE"] !== undefined && !current[targetMap["VALUE"]]) ||
+            (targetMap["STATUS"] !== undefined && !current[targetMap["STATUS"]]);
+          logWmsDryRun_("update", match.rowNumber, group, mergedInvoices, totalAmount);
+        } else {
+          changed = writeMappedValue_(targetSheet, match.rowNumber, targetMap, "CUSTOMER", group.customer) || changed;
+          changed = writeMappedValue_(targetSheet, match.rowNumber, targetMap, "INVOICE NO.", mergedInvoices.join("\n")) || changed;
+          changed = writeMappedValue_(targetSheet, match.rowNumber, targetMap, "SHIP DATE", group.shipDate) || changed;
 
-        if (totalAmount > 0 && targetMap["VALUE"] !== undefined && !current[targetMap["VALUE"]]) {
-          targetSheet.getRange(match.rowNumber, targetMap["VALUE"] + 1).setValue(totalAmount);
-          changed = true;
-        }
-        if (targetMap["STATUS"] !== undefined && !current[targetMap["STATUS"]]) {
-          targetSheet.getRange(match.rowNumber, targetMap["STATUS"] + 1).setValue("WORK IN PROGRESS");
-          changed = true;
+          if (totalAmount > 0 && targetMap["VALUE"] !== undefined && !current[targetMap["VALUE"]]) {
+            targetSheet.getRange(match.rowNumber, targetMap["VALUE"] + 1).setValue(totalAmount);
+            changed = true;
+          }
+          if (targetMap["STATUS"] !== undefined && !current[targetMap["STATUS"]]) {
+            targetSheet.getRange(match.rowNumber, targetMap["STATUS"] + 1).setValue("WORK IN PROGRESS");
+            changed = true;
+          }
         }
 
         match.invoices = mergedInvoices.slice();
@@ -207,7 +224,11 @@ function scanAndImportWmsTruckingOrdersV2() {
       newRow[targetMap["SHIP DATE"]] = group.shipDate;
       if (targetMap["VALUE"] !== undefined && totalAmount > 0) newRow[targetMap["VALUE"]] = totalAmount;
       if (targetMap["STATUS"] !== undefined) newRow[targetMap["STATUS"]] = "WORK IN PROGRESS";
-      pendingRows.push({ row: newRow, group: group });
+      if (WMS_TRUCKING_DRY_RUN) {
+        logWmsDryRun_("insert", null, group, group.invoices, totalAmount);
+      } else {
+        pendingRows.push({ row: newRow, group: group });
+      }
       imported++;
     });
 
@@ -236,7 +257,7 @@ function scanAndImportWmsTruckingOrdersV2() {
 
     SpreadsheetApp.flush();
     Logger.log(
-      "WMS trucking v2: groups=" + groups.size +
+      "WMS trucking v2" + (WMS_TRUCKING_DRY_RUN ? " (DRY RUN)" : "") + ": groups=" + groups.size +
       ", imported=" + imported +
       ", updated=" + updated +
       ", repaired=" + repaired +
@@ -246,6 +267,7 @@ function scanAndImportWmsTruckingOrdersV2() {
 
     return {
       ok: true,
+      dryRun: WMS_TRUCKING_DRY_RUN,
       groups: groups.size,
       imported: imported,
       updated: updated,
@@ -259,5 +281,33 @@ function scanAndImportWmsTruckingOrdersV2() {
     return { ok: false, error: error.message };
   } finally {
     lock.releaseLock();
+  }
+}
+
+/** Non-mutating twin of writeMappedValue_ — reports whether a write would
+ * change the cell, without performing it. Used only in dry-run mode. */
+function wouldChangeMappedValue_(currentRow, map, header, value) {
+  var index = map[header];
+  if (index === undefined || value === undefined || value === null) return false;
+  return String(currentRow[index] || "").trim() !== String(value).trim();
+}
+
+/** Logs what a dry-run scan would have inserted/updated to the existing
+ * PIPELINE LOG sheet (same helper item 8's Shipment Notices audit trail
+ * uses) instead of writing to WH Trucking Request. Never throws — logging
+ * must never break the scan. */
+function logWmsDryRun_(action, rowNumber, group, invoices, totalAmount) {
+  try {
+    logPipeline_("WMS TRUCKING DRY RUN", group.customer, JSON.stringify({
+      action: action,
+      row: rowNumber,
+      customer: group.customer,
+      shipDate: group.shipDate,
+      invoices: invoices,
+      totalAmount: totalAmount,
+      groupKey: group.key
+    }));
+  } catch (e) {
+    Logger.log("logWmsDryRun_ failed: " + e.message);
   }
 }

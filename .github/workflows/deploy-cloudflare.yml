@@ -1,4 +1,5 @@
 name: Deploy canonical logistics site to Cloudflare
+# Production redeploy requested 2026-08-14
 
 on:
   push:
@@ -7,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 concurrency:
   group: cloudflare-production
@@ -46,117 +48,64 @@ jobs:
           test -f out/light-full/index.html
           test -f out/fulfillment-style/index.html
 
-      - name: Prepare production D1 binding when permitted
-        id: database
+      - name: Apply D1 migrations
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -uo pipefail
-          database_name="stylekorean-logistics-read-model"
-          production_config=".wrangler.production.toml"
-          database_config=".wrangler.database.toml"
-          cp wrangler.toml "$production_config"
-          cp wrangler.toml "$database_config"
-
-          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] || [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
-            echo "::warning::CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID must both be configured; deploying the verified Google Sheets fallback without a database binding."
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-            exit 0
+          # wrangler.toml declares the D1 binding statically (both this workflow
+          # and Cloudflare's native Workers Builds Git integration deploy from
+          # the same file, so the binding must not depend on a runtime probe).
+          # Applying migrations here is idempotent — wrangler tracks what has
+          # already run in the database's own d1_migrations table.
+          #
+          # Non-fatal on purpose: a failure here (e.g. CLOUDFLARE_ACCOUNT_ID/
+          # CLOUDFLARE_API_TOKEN scoped to the wrong account for this database)
+          # must not block the Worker deploy step below — the deploy is what
+          # actually keeps production current, and migrations are idempotent,
+          # so a later successful run catches up once credentials are fixed.
+          if ! npx wrangler d1 migrations apply stylekorean-logistics-read-model --remote; then
+            echo "::warning::D1 migrations apply failed — continuing without blocking the Worker deploy. Investigate CLOUDFLARE_ACCOUNT_ID/CLOUDFLARE_API_TOKEN access to this database."
           fi
 
-          if ! databases="$(npx wrangler d1 list --json 2>/tmp/d1-list.log)"; then
-            echo "::warning::D1 permission is unavailable; the token must contain Account > D1 > Edit and target the same account as CLOUDFLARE_ACCOUNT_ID. Deploying the verified Google Sheets fallback without a database binding."
-            sed -n '1,80p' /tmp/d1-list.log
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          database_id="$(DATABASES="$databases" DATABASE_NAME="$database_name" node -e 'const rows=JSON.parse(process.env.DATABASES); const match=rows.find((row)=>row.name===process.env.DATABASE_NAME); process.stdout.write(match?.uuid || "")')"
-
-          if [ -z "$database_id" ]; then
-            if ! npx wrangler d1 create "$database_name" --location wnam; then
-              echo "::warning::D1 creation was rejected; deploying the verified Google Sheets fallback without a database binding."
-              echo "configured=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            if ! databases="$(npx wrangler d1 list --json)"; then
-              echo "::warning::D1 could not be read after creation; deploying without a database binding."
-              echo "configured=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            database_id="$(DATABASES="$databases" DATABASE_NAME="$database_name" node -e 'const rows=JSON.parse(process.env.DATABASES); const match=rows.find((row)=>row.name===process.env.DATABASE_NAME); process.stdout.write(match?.uuid || "")')"
-          fi
-
-          if [ -z "$database_id" ]; then
-            echo "::warning::D1 database UUID was not returned; deploying without a database binding."
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          cat >> "$database_config" <<EOF
-
-          [[d1_databases]]
-          binding = "DB"
-          database_name = "$database_name"
-          database_id = "$database_id"
-          migrations_dir = "./migrations"
-
-          [triggers]
-          crons = ["*/15 * * * *"]
-          EOF
-          if ! npx wrangler d1 migrations apply "$database_name" --remote --config "$database_config"; then
-            echo "::warning::D1 migrations failed; deploying without the unsafe or incomplete database binding."
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          mv "$database_config" "$production_config"
-          echo "configured=true" >> "$GITHUB_OUTPUT"
-
-      - name: Deploy canonical Worker version without mutating its existing route
+      - name: Deploy canonical Worker and restore production route
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -euo pipefail
-          production_config=".wrangler.production.toml"
-          version_config=".wrangler.version.toml"
-          release_tag="release-${GITHUB_SHA}-attempt-${GITHUB_RUN_ATTEMPT}"
-
-          # The production route already targets this Worker. Version uploads and
-          # deployments do not need zone-write authority, so keep route lifecycle
-          # separate from routine code/data releases.
-          awk '
-            /^\[\[routes\]\]$/ { skip_route = 1; next }
-            skip_route && /^\[/ { skip_route = 0 }
-            !skip_route { print }
-          ' "$production_config" > "$version_config"
-
-          if grep -q '^\[\[routes\]\]$' "$version_config"; then
-            echo "::error::The version deployment config still contains a route block."
-            exit 1
+          # A version-only deployment cannot recover a detached zone route.
+          # Canonical deploy validates and restores the configured route, assets,
+          # D1 binding, rate limiter, and Worker code together.
+          set +e
+          npx wrangler deploy --keep-vars 2>&1 | tee /tmp/cloudflare-route-deploy.log
+          deploy_status=${PIPESTATUS[0]}
+          set -e
+          if [ "$deploy_status" -ne 0 ]; then
+            {
+              echo "Cloudflare route recovery failed for commit ${GITHUB_SHA}."
+              echo
+              echo '```text'
+              sed -n '1,160p' /tmp/cloudflare-route-deploy.log
+              echo '```'
+            } > /tmp/cloudflare-route-failure.md
+            gh issue create \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Production route recovery failed ${GITHUB_SHA::7}" \
+              --body-file /tmp/cloudflare-route-failure.md
+            exit "$deploy_status"
           fi
-
-          npx wrangler versions upload \
-            --config "$version_config" \
-            --tag "$release_tag" \
-            --message "StyleKorean release ${GITHUB_SHA}"
-          npx wrangler versions deploy \
-            --config "$version_config" \
-            --version-tag "$release_tag" \
-            --percentage 100 \
-            --message "StyleKorean production ${GITHUB_SHA}" \
-            --yes
-          npx wrangler triggers deploy \
-            --config "$version_config" \
-            --triggers "*/15 * * * *"
 
       - name: Verify live custom domain, appearance routes, and Worker APIs
         shell: bash
         env:
-          EXPECTED_DATABASE_CONFIGURED: ${{ steps.database.outputs.configured }}
+          # wrangler.toml declares the D1 binding statically now, so a
+          # successful deploy always carries it — there is no more
+          # runtime-probed fallback state to read from a prior step.
+          EXPECTED_DATABASE_CONFIGURED: "true"
         run: |
           set -euo pipefail
           fetch_route() {

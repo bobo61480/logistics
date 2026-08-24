@@ -4,6 +4,14 @@ interface __BaseEnv_Env {
 	STATUS_WRITE_RATE_LIMITER: RateLimit;
 	ASSETS: Fetcher;
 	APPS_SCRIPT_WRITE_URL: "https://script.google.com/macros/s/AKfycbz770kmpwqMTA-h-lzeLARgVnDh_VDjh-70OOKk_yE-iXJTmzAsVXUtln17QTOURO1R/exec";
+	// Carrier tracking API secrets are provisioned via `wrangler secret put`, not wrangler.toml
+	// vars, so `wrangler types` cannot see them — declared manually here to match carrier-tracking.ts.
+	UPS_CLIENT_ID?: string;
+	UPS_CLIENT_SECRET?: string;
+	FEDEX_CLIENT_ID?: string;
+	FEDEX_CLIENT_SECRET?: string;
+	USPS_CLIENT_ID?: string;
+	USPS_CLIENT_SECRET?: string;
 }
 declare namespace Cloudflare {
 	interface GlobalProps {

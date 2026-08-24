@@ -187,6 +187,29 @@ export async function readDatabaseHealth(db: D1Database) {
   } : { ready: false };
 }
 
+export async function recordPendingReviewDecision(db: D1Database, event: {
+  correlationId: string;
+  reviewKey: string;
+  shipmentId?: string;
+  decision: "approve" | "reject";
+  resultingStatus: string;
+}) {
+  await db.prepare(`INSERT INTO automation_events
+    (id, source, entity_type, entity_id, previous_json, proposed_json, decision,
+      actor, correlation_id, verification, created_at)
+    VALUES (?, 'gmail-review', 'gmail-review', ?, ?, ?, ?, 'operator', ?, 'source-confirmed', ?)`)
+    .bind(
+      crypto.randomUUID(),
+      event.shipmentId || event.reviewKey,
+      JSON.stringify({ status: "NEEDS REVIEW" }),
+      JSON.stringify({ status: event.resultingStatus }),
+      event.decision === "approve" ? "confirmed" : "rejected",
+      event.correlationId,
+      new Date().toISOString(),
+    )
+    .run();
+}
+
 export async function recordConfirmedStatusWrite(db: D1Database, event: {
   correlationId: string;
   entityType: "inbound" | "outbound";

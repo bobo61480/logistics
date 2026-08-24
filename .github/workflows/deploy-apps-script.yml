@@ -39,7 +39,10 @@ jobs:
           chmod 600 "$HOME/.clasprc.json"
 
       - name: Install clasp
-        run: npm install --global @google/clasp
+        # Pin to the last 2.x: clasp 3.x rejects the existing appsscript.json
+        # with `Invalid manifest file "appsscript.json"`. Bump deliberately
+        # after verifying 3.x accepts this project's manifest/config.
+        run: npm install --global @google/clasp@2.4.2
 
       - name: Push canonical Apps Script source
         run: clasp push --force
