@@ -1,237 +1,41 @@
-import type { SourceHealth } from "./sources";
+type PartRow = { dataset_name: string; record_count: number; part_count: number; payload_bytes: number; source_hash: string; part_index: number; payload_text: string; part_bytes: number };
+type OverrideRow = { dataset_name: string; record_key: string; value_json: string; previous_json: string | null; actor: string; correlation_id: string; created_at: string };
+type IngestionRow = { id: string; provider: string; message_id: string; received_at: string; sender_domain: string; subject: string; matched_identifiers: string; matched_dataset: string; matched_record_key: string; action: string; created_at: string };
 
-// Keep every chunk within the schema's 512 KiB byte constraint while packing
-// ASCII-heavy operational data densely enough to preserve the D1 query budget.
-const PART_BYTES = 512 * 1024;
-// Each part insert is one D1 query. Keep the publication transaction plus
-// retention below the 50-query Worker invocation limit on the Free plan.
-const MAX_PARTS = 44;
-const RETAINED_SNAPSHOTS = 4;
-
-export type OperationalSnapshot = {
-  ok: true;
-  generatedAt: string;
-  version: string;
-  sourceHealth: SourceHealth[];
-  sources: Record<string, unknown>;
-  kpis: unknown;
-  kpiError?: string;
-};
-
-export type StoredSnapshot = OperationalSnapshot & {
-  storage: "d1";
-  storedAt: string;
-};
-
-type SnapshotRow = {
-  id: string;
-  generated_at: string;
-  version: string;
-  source_count: number;
-  part_count: number;
-  payload_bytes: number;
-  created_at: string;
-};
-
-type PartRow = { part_name: string; part_index: number; payload_text: string; payload_bytes: number };
-
-function byteLength(value: string) {
-  return new TextEncoder().encode(value).byteLength;
-}
-
-export function splitPayload(value: unknown) {
-  const serialized = JSON.stringify(value);
-  if (serialized === undefined) throw new Error("Snapshot value is not JSON serializable");
-  const chunks: string[] = [];
-  const encoder = new TextEncoder();
-  let start = 0;
-  while (start < serialized.length) {
-    const buffer = new Uint8Array(PART_BYTES);
-    const { read, written } = encoder.encodeInto(serialized.slice(start), buffer);
-    if (!read || !written) throw new Error("Snapshot payload could not be chunked");
-    const chunk = serialized.slice(start, start + read);
-    if (byteLength(chunk) !== written) throw new Error("Snapshot chunk byte count is inconsistent");
-    chunks.push(chunk);
-    start += read;
-  }
-  return chunks.length ? chunks : [""];
-}
-
-export function joinPayload(chunks: string[]) {
-  return JSON.parse(chunks.join("")) as unknown;
-}
-
-function payloadEntries(snapshot: OperationalSnapshot) {
-  return [
-    ["sourceHealth", snapshot.sourceHealth],
-    ["sources", snapshot.sources],
-    ["kpis", snapshot.kpis],
-    ["kpiError", snapshot.kpiError ?? null],
-  ] as const;
-}
-
-export async function persistSnapshot(db: D1Database, snapshot: OperationalSnapshot) {
-  const id = crypto.randomUUID();
-  const entries = payloadEntries(snapshot);
-  const parts = entries.flatMap(([name, value]) =>
-    splitPayload(value).map((payload, index) => ({ name, index, payload, bytes: byteLength(payload) })),
-  );
-  if (parts.length > MAX_PARTS) throw new Error(`Snapshot requires ${parts.length} database parts; limit is ${MAX_PARTS}`);
-  const payloadBytes = parts.reduce((total, part) => total + part.bytes, 0);
-  const now = new Date().toISOString();
-  const statements = [
-    db.prepare(`INSERT INTO operational_snapshots
-      (id, generated_at, version, source_count, part_count, payload_bytes)
-      VALUES (?, ?, ?, ?, ?, ?)`).bind(
-      id,
-      snapshot.generatedAt,
-      snapshot.version,
-      snapshot.sourceHealth.length,
-      parts.length,
-      payloadBytes,
-    ),
-    ...parts.map((part) => db.prepare(`INSERT INTO operational_snapshot_parts
-      (snapshot_id, part_name, part_index, payload_text, payload_bytes)
-      VALUES (?, ?, ?, ?, ?)`).bind(id, part.name, part.index, part.payload, part.bytes)),
-    db.prepare(`INSERT INTO operational_state (key, snapshot_id, updated_at)
-      VALUES ('current_snapshot', ?, ?)
-      ON CONFLICT(key) DO UPDATE SET snapshot_id = excluded.snapshot_id, updated_at = excluded.updated_at`).bind(id, now),
-  ];
-  await db.batch(statements);
-
-  await db.prepare(`DELETE FROM operational_snapshots
-    WHERE id NOT IN (
-      SELECT id FROM operational_snapshots ORDER BY generated_at DESC LIMIT ?
-    ) AND id NOT IN (SELECT snapshot_id FROM operational_state)`).bind(RETAINED_SNAPSHOTS).run();
-  return { id, partCount: parts.length, payloadBytes };
-}
-
-export async function readCurrentSnapshot(db: D1Database): Promise<StoredSnapshot | null> {
-  const [metadataResult, partsResult] = await db.batch([
-    db.prepare(`SELECT s.id, s.generated_at, s.version, s.source_count, s.part_count,
-      s.payload_bytes, s.created_at
-      FROM operational_state state
-      JOIN operational_snapshots s ON s.id = state.snapshot_id
-      WHERE state.key = 'current_snapshot'`),
-    db.prepare(`SELECT p.part_name, p.part_index, p.payload_text, p.payload_bytes
-      FROM operational_state state
-      JOIN operational_snapshot_parts p ON p.snapshot_id = state.snapshot_id
-      WHERE state.key = 'current_snapshot'
-      ORDER BY p.part_name, p.part_index`),
-  ]);
-  const metadata = metadataResult.results[0] as SnapshotRow | undefined;
+export async function readWarehouseSnapshot(db: D1Database) {
+  const metadata = await db.prepare(`SELECT snapshot.id, snapshot.source_generated_at, snapshot.imported_at, snapshot.source_version, snapshot.dataset_count, snapshot.payload_bytes FROM warehouse_state state JOIN warehouse_snapshots snapshot ON snapshot.id = state.snapshot_id WHERE state.key = 'current_snapshot'`).first<{ id: string; source_generated_at: string; imported_at: string; source_version: string; dataset_count: number; payload_bytes: number }>();
   if (!metadata) return null;
-  const rows = partsResult.results as PartRow[];
-  if (rows.length !== metadata.part_count) throw new Error("Current D1 snapshot is incomplete");
-  const actualPayloadBytes = rows.reduce((total, row) => {
-    const actualPartBytes = byteLength(row.payload_text);
-    if (actualPartBytes !== row.payload_bytes) {
-      throw new Error(`Current D1 snapshot part ${row.part_name}:${row.part_index} failed integrity validation`);
-    }
-    return total + actualPartBytes;
-  }, 0);
-  if (actualPayloadBytes !== metadata.payload_bytes) {
-    throw new Error("Current D1 snapshot byte count failed integrity validation");
+  const [result, overrideResult, ingestionResult] = await Promise.all([
+    db.prepare(`SELECT dataset.dataset_name, dataset.record_count, dataset.part_count, dataset.payload_bytes, dataset.source_hash, part.part_index, part.payload_text, part.payload_bytes AS part_bytes FROM warehouse_datasets dataset JOIN warehouse_dataset_parts part ON part.snapshot_id = dataset.snapshot_id AND part.dataset_name = dataset.dataset_name WHERE dataset.snapshot_id = ? ORDER BY dataset.dataset_name, part.part_index`).bind(metadata.id).all<PartRow>(),
+    db.prepare(`SELECT dataset_name, record_key, value_json, previous_json, actor, correlation_id, created_at FROM warehouse_overrides WHERE field_name = 'status' ORDER BY created_at DESC`).all<OverrideRow>(),
+    db.prepare(`SELECT id,provider,message_id,received_at,sender_domain,subject,matched_identifiers,matched_dataset,matched_record_key,action,created_at FROM warehouse_ingestion_events ORDER BY created_at DESC LIMIT 50`).all<IngestionRow>().catch(() => ({ results: [] as IngestionRow[] }))
+  ]);
+  const grouped = new Map<string, PartRow[]>();
+  for (const row of result.results) grouped.set(row.dataset_name, [...(grouped.get(row.dataset_name) ?? []), row]);
+  if (grouped.size !== metadata.dataset_count) throw new Error("Warehouse snapshot dataset count mismatch");
+  const sources: Record<string, unknown> = {}; const datasets: Array<Record<string, unknown>> = [];
+  for (const [name, parts] of grouped) {
+    const first = parts[0]; if (parts.length !== first.part_count) throw new Error(`Dataset ${name} is incomplete`);
+    const text = parts.map((part, index) => { if (part.part_index !== index || new TextEncoder().encode(part.payload_text).byteLength !== part.part_bytes) throw new Error(`Dataset ${name} failed integrity validation`); return part.payload_text; }).join("");
+    if (new TextEncoder().encode(text).byteLength !== first.payload_bytes) throw new Error(`Dataset ${name} byte count mismatch`);
+    sources[name] = JSON.parse(text) as unknown; datasets.push({ name, recordCount: first.record_count, payloadBytes: first.payload_bytes, sourceHash: first.source_hash });
   }
-
-  const grouped = new Map<string, string[]>();
-  for (const row of rows) {
-    const chunks = grouped.get(row.part_name) ?? [];
-    chunks[row.part_index] = row.payload_text;
-    grouped.set(row.part_name, chunks);
-  }
-  const decode = (name: string) => {
-    const chunks = grouped.get(name);
-    if (!chunks?.length || chunks.some((chunk) => chunk === undefined)) {
-      throw new Error(`Current D1 snapshot is missing ${name}`);
-    }
-    return joinPayload(chunks);
-  };
-  const sourceHealth = decode("sourceHealth") as SourceHealth[];
-  if (!Array.isArray(sourceHealth) || sourceHealth.length !== metadata.source_count) {
-    throw new Error("Current D1 snapshot source count failed integrity validation");
-  }
-  return {
-    ok: true,
-    generatedAt: metadata.generated_at,
-    version: metadata.version,
-    sourceHealth,
-    sources: decode("sources") as Record<string, unknown>,
-    kpis: decode("kpis"),
-    kpiError: (decode("kpiError") as string | null) ?? undefined,
-    storage: "d1",
-    storedAt: metadata.created_at,
-  };
+  const overrides = overrideResult.results.map(row => ({ datasetName: row.dataset_name, recordKey: row.record_key, status: JSON.parse(row.value_json), previousStatus: row.previous_json ? JSON.parse(row.previous_json) : null, actor: row.actor, correlationId: row.correlation_id, updatedAt: row.created_at }));
+  const ingestionEvents = ingestionResult.results.map(row => ({ id: row.id, provider: row.provider, receivedAt: row.received_at, matchedDataset: row.matched_dataset, action: row.action, createdAt: row.created_at }));
+  return { ok: true, storage: "d1" as const, generatedAt: metadata.source_generated_at, importedAt: metadata.imported_at, version: metadata.source_version, datasetCount: metadata.dataset_count, payloadBytes: metadata.payload_bytes, datasets, sources, overrides, ingestionEvents };
 }
 
-export async function readDatabaseHealth(db: D1Database) {
-  const row = await db.prepare(`SELECT s.generated_at, s.created_at, s.source_count,
-    s.part_count, s.payload_bytes
-    FROM operational_state state
-    JOIN operational_snapshots s ON s.id = state.snapshot_id
-    WHERE state.key = 'current_snapshot'`).first<{
-      generated_at: string;
-      created_at: string;
-      source_count: number;
-      part_count: number;
-      payload_bytes: number;
-    }>();
-  return row ? {
-    ready: true,
-    generatedAt: row.generated_at,
-    storedAt: row.created_at,
-    ageSeconds: Math.max(0, Math.round((Date.now() - Date.parse(row.generated_at)) / 1000)),
-    sourceCount: row.source_count,
-    partCount: row.part_count,
-    payloadBytes: row.payload_bytes,
-  } : { ready: false };
+export async function writeGmailIngestion(db: D1Database, input: { messageId: string; receivedAt: string; senderDomain: string; subject: string; identifiers: string[]; matchedDataset: string; matchedRecordKey: string }) {
+  const id = crypto.randomUUID(); const createdAt = new Date().toISOString();
+  const result = await db.prepare(`INSERT INTO warehouse_ingestion_events (id,provider,message_id,received_at,sender_domain,subject,matched_identifiers,matched_dataset,matched_record_key,action,created_at) VALUES (?,?,?,?,?,?,?,?,?,'verified-import',?) ON CONFLICT(message_id) DO NOTHING`).bind(id,"gmail",input.messageId,input.receivedAt,input.senderDomain,input.subject,JSON.stringify(input.identifiers),input.matchedDataset,input.matchedRecordKey,createdAt).run();
+  if (!result.meta.changes) {
+    const existing = await db.prepare(`SELECT id,created_at FROM warehouse_ingestion_events WHERE message_id = ?`).bind(input.messageId).first<{ id: string; created_at: string }>();
+    return { id: existing?.id ?? id, createdAt: existing?.created_at ?? createdAt, duplicate: true };
+  }
+  return { id, createdAt, duplicate: false };
 }
 
-export async function recordPendingReviewDecision(db: D1Database, event: {
-  correlationId: string;
-  reviewKey: string;
-  shipmentId?: string;
-  decision: "approve" | "reject";
-  resultingStatus: string;
-}) {
-  await db.prepare(`INSERT INTO automation_events
-    (id, source, entity_type, entity_id, previous_json, proposed_json, decision,
-      actor, correlation_id, verification, created_at)
-    VALUES (?, 'gmail-review', 'gmail-review', ?, ?, ?, ?, 'operator', ?, 'source-confirmed', ?)`)
-    .bind(
-      crypto.randomUUID(),
-      event.shipmentId || event.reviewKey,
-      JSON.stringify({ status: "NEEDS REVIEW" }),
-      JSON.stringify({ status: event.resultingStatus }),
-      event.decision === "approve" ? "confirmed" : "rejected",
-      event.correlationId,
-      new Date().toISOString(),
-    )
-    .run();
-}
-
-export async function recordConfirmedStatusWrite(db: D1Database, event: {
-  correlationId: string;
-  entityType: "inbound" | "outbound";
-  entityId: string;
-  previousStatus?: string;
-  status: string;
-  sourceSheet: string;
-  sourceRow: number;
-}) {
-  await db.prepare(`INSERT INTO automation_events
-    (id, source, entity_type, entity_id, previous_json, proposed_json, decision,
-      actor, correlation_id, verification, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, 'confirmed', 'operator', ?, 'source-confirmed', ?)`)
-    .bind(
-      crypto.randomUUID(),
-      `${event.sourceSheet}:${event.sourceRow}`,
-      event.entityType,
-      event.entityId,
-      JSON.stringify({ status: event.previousStatus ?? null }),
-      JSON.stringify({ status: event.status }),
-      event.correlationId,
-      new Date().toISOString(),
-    )
-    .run();
+export async function writeWarehouseStatus(db: D1Database, input: { datasetName: string; recordKey: string; status: string; previousStatus?: string; actor: string; correlationId: string }) {
+  const now = new Date().toISOString();
+  await db.prepare(`INSERT INTO warehouse_overrides (id,dataset_name,record_key,field_name,previous_json,value_json,actor,correlation_id,created_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(dataset_name,record_key,field_name) DO UPDATE SET previous_json=warehouse_overrides.value_json,value_json=excluded.value_json,actor=excluded.actor,correlation_id=excluded.correlation_id,created_at=excluded.created_at`).bind(crypto.randomUUID(), input.datasetName, input.recordKey, "status", JSON.stringify(input.previousStatus ?? null), JSON.stringify(input.status), input.actor, input.correlationId, now).run();
 }

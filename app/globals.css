@@ -2287,3 +2287,70 @@ footer strong {
 [data-theme="dark"] .import-table tbody tr:hover { background: var(--surface-inset); }
 [data-theme="dark"] .import-table a { color: var(--text); }
 [data-theme="dark"] .import-table a:hover { color: var(--accent-outbound); }
+/* ============================================================
+   TYPE SCALE — append to the END of app/globals.css
+   ------------------------------------------------------------
+   The board had grown nine different "normal text" sizes
+   (8, 9, 9.5, 10, 10.5, 11, 11.5, 12, 13px), so tables read
+   smaller than the surrounding page. This bumps everything up
+   and collapses them onto one scale.
+
+   Tune the whole board from these four values.
+   ============================================================ */
+:root {
+  --fs-body:    13px;  /* table + list body text   (was 10–12) */
+  --fs-head:    10px;  /* sticky table headers     (was 8)     */
+  --fs-pill:    10px;  /* pills, chips, badges     (was 8–9)   */
+  --fs-control: 12px;  /* selects, inputs, buttons (was 9)     */
+}
+
+/* --- body text ------------------------------------------------ */
+body { font-size: 15px; }                    /* was 14px */
+
+/* --- data tables ---------------------------------------------- */
+.import-table,
+.inventory-table,
+.grid-table,
+.gmail-review-table,
+.parcel-table,
+table.data-table                  { font-size: var(--fs-body) !important; }
+
+.import-table td,
+.inventory-table td,
+.grid-table td                    { font-size: var(--fs-body) !important; }
+
+.import-table th,
+.inventory-table th,
+.grid-table th,
+.parcel-table th                  { font-size: var(--fs-head) !important; }
+
+/* Monospace runs optically ~1px larger, so keep it a notch below. */
+.mono,
+.grid-table .mono,
+.inventory-table .mono            { font-size: calc(var(--fs-body) - 1px) !important; }
+
+/* --- pills / chips / status badges ---------------------------- */
+.mode-pill,
+.badge,
+.count-pill,
+.method-pill,
+.sys-badge-status,
+.status-pill                      { font-size: var(--fs-pill) !important; }
+
+/* --- form controls -------------------------------------------- */
+.status-field select,
+.source-buttons .button,
+select, input, textarea, button   { font-size: var(--fs-control) !important; }
+
+.search input                     { font-size: 14px !important; }
+
+/* --- supporting copy ------------------------------------------ */
+.intro                            { font-size: 15px !important; line-height: 1.55; }
+.roadmap-inbox-note,
+.inventory-table small,
+small                             { font-size: var(--fs-control) !important; }
+
+/* --- dense fulfillment view ----------------------------------- */
+[class*="fulfillment"] table,
+[class*="fulfillment"] .tk-table  { font-size: var(--fs-body) !important; }
+

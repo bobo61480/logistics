@@ -817,6 +817,7 @@ var aliases = /* @__PURE__ */ new Map([
   ["CANCELLED", "Cancelled"],
   ["CANCELED", "Cancelled"],
   ["COMPLETED", "Completed"],
+  ["N/A", "N/A"],
   ["CUSTOMS CLEARANCE", "Customs Clearance"],
   ["FDA HOLD", "FDA Review / Hold"],
   ["FDA REVIEW", "FDA Review / Hold"],
@@ -1063,6 +1064,246 @@ async function handlePendingReviewCommand(request, env, context) {
 }
 __name(handlePendingReviewCommand, "handlePendingReviewCommand");
 
+// worker/carrier-tracking.ts
+var tokenCache = /* @__PURE__ */ new Map();
+async function getCachedToken(carrier, fetchToken) {
+  const cached = tokenCache.get(carrier);
+  if (cached && cached.expiresAt > Date.now() + 3e4) return cached.token;
+  const { token, expiresInSeconds } = await fetchToken();
+  tokenCache.set(carrier, { token, expiresAt: Date.now() + expiresInSeconds * 1e3 });
+  return token;
+}
+__name(getCachedToken, "getCachedToken");
+async function upsToken(env) {
+  return getCachedToken("ups", async () => {
+    const response = await fetch("https://onlinetools.ups.com/security/v1/oauth/token", {
+      method: "POST",
+      headers: {
+        authorization: `Basic ${btoa(`${env.UPS_CLIENT_ID}:${env.UPS_CLIENT_SECRET}`)}`,
+        "content-type": "application/x-www-form-urlencoded"
+      },
+      body: "grant_type=client_credentials"
+    });
+    if (!response.ok) throw new Error(`UPS OAuth failed (${response.status})`);
+    const data = await response.json();
+    return { token: data.access_token, expiresInSeconds: Number(data.expires_in) || 3600 };
+  });
+}
+__name(upsToken, "upsToken");
+async function trackUps(env, number) {
+  const base = { carrier: "ups", number, ok: false, configured: true };
+  try {
+    const token = await upsToken(env);
+    const response = await fetch(`https://onlinetools.ups.com/api/track/v1/details/${encodeURIComponent(number)}`, {
+      headers: {
+        authorization: `Bearer ${token}`,
+        transId: crypto.randomUUID(),
+        transactionSrc: "stylekorean-logistics"
+      }
+    });
+    if (!response.ok) return { ...base, error: `UPS track failed (${response.status})` };
+    const data = await response.json();
+    const pkg = data?.trackResponse?.shipment?.[0]?.package?.[0];
+    const activity = pkg?.activity?.[0];
+    const address = activity?.location?.address;
+    if (!activity) return { ...base, error: "No tracking activity yet" };
+    return {
+      ...base,
+      ok: true,
+      status: pkg?.currentStatus?.description,
+      statusCategory: pkg?.currentStatus?.simplifiedTextDescription ?? pkg?.currentStatus?.type,
+      city: address?.city,
+      state: address?.stateProvince,
+      postal: address?.postalCode,
+      country: address?.countryCode,
+      timestamp: activity?.date && activity?.time ? `${activity.date}T${activity.time}` : activity?.date
+    };
+  } catch (error) {
+    return { ...base, error: error instanceof Error ? error.message : "UPS lookup failed" };
+  }
+}
+__name(trackUps, "trackUps");
+async function fedexToken(env) {
+  return getCachedToken("fedex", async () => {
+    const response = await fetch("https://apis.fedex.com/oauth/token", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "client_credentials",
+        client_id: env.FEDEX_CLIENT_ID ?? "",
+        client_secret: env.FEDEX_CLIENT_SECRET ?? ""
+      }).toString()
+    });
+    if (!response.ok) throw new Error(`FedEx OAuth failed (${response.status})`);
+    const data = await response.json();
+    return { token: data.access_token, expiresInSeconds: data.expires_in || 3600 };
+  });
+}
+__name(fedexToken, "fedexToken");
+async function trackFedex(env, number) {
+  const base = { carrier: "fedex", number, ok: false, configured: true };
+  try {
+    const token = await fedexToken(env);
+    const response = await fetch("https://apis.fedex.com/track/v1/trackingnumbers", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        includeDetailedScans: true,
+        trackingInfo: [{ trackingNumberInfo: { trackingNumber: number } }]
+      })
+    });
+    if (!response.ok) return { ...base, error: `FedEx track failed (${response.status})` };
+    const data = await response.json();
+    const trackResult = data?.output?.completeTrackResults?.[0]?.trackResults?.[0];
+    const scanEvent = trackResult?.scanEvents?.[0];
+    const location = scanEvent?.scanLocation;
+    if (!scanEvent) return { ...base, error: "No scan events yet" };
+    return {
+      ...base,
+      ok: true,
+      status: trackResult?.latestStatusDetail?.statusByLocale ?? trackResult?.latestStatusDetail?.description,
+      statusCategory: trackResult?.latestStatusDetail?.derivedCode ?? trackResult?.latestStatusDetail?.code,
+      city: location?.city,
+      state: location?.stateOrProvinceCode,
+      postal: location?.postalCode,
+      country: location?.countryCode,
+      timestamp: scanEvent?.date
+    };
+  } catch (error) {
+    return { ...base, error: error instanceof Error ? error.message : "FedEx lookup failed" };
+  }
+}
+__name(trackFedex, "trackFedex");
+async function uspsToken(env) {
+  return getCachedToken("usps", async () => {
+    const response = await fetch("https://apis.usps.com/oauth2/v3/token", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        client_id: env.USPS_CLIENT_ID,
+        client_secret: env.USPS_CLIENT_SECRET,
+        grant_type: "client_credentials"
+      })
+    });
+    if (!response.ok) throw new Error(`USPS OAuth failed (${response.status})`);
+    const data = await response.json();
+    return { token: data.access_token, expiresInSeconds: data.expires_in || 3600 };
+  });
+}
+__name(uspsToken, "uspsToken");
+async function trackUsps(env, number) {
+  const base = { carrier: "usps", number, ok: false, configured: true };
+  try {
+    const token = await uspsToken(env);
+    const response = await fetch(
+      `https://apis.usps.com/tracking/v3/tracking/${encodeURIComponent(number)}?expand=DETAIL`,
+      { headers: { authorization: `Bearer ${token}`, accept: "application/json" } }
+    );
+    if (!response.ok) return { ...base, error: `USPS track failed (${response.status})` };
+    const data = await response.json();
+    const events = Array.isArray(data?.trackingEvents) ? [...data.trackingEvents] : [];
+    events.sort((a, b) => new Date(b?.eventTimestamp ?? 0).getTime() - new Date(a?.eventTimestamp ?? 0).getTime());
+    const latest = events[0];
+    if (!latest) return { ...base, error: "No tracking events yet" };
+    return {
+      ...base,
+      ok: true,
+      status: data?.status,
+      statusCategory: data?.statusCategory,
+      city: latest?.eventCity,
+      state: latest?.eventState,
+      postal: latest?.eventZIP,
+      country: latest?.eventCountry || "US",
+      timestamp: latest?.eventTimestamp
+    };
+  } catch (error) {
+    return { ...base, error: error instanceof Error ? error.message : "USPS lookup failed" };
+  }
+}
+__name(trackUsps, "trackUsps");
+function carrierConfigured(env, carrier) {
+  if (carrier === "ups") return Boolean(env.UPS_CLIENT_ID && env.UPS_CLIENT_SECRET);
+  if (carrier === "fedex") return Boolean(env.FEDEX_CLIENT_ID && env.FEDEX_CLIENT_SECRET);
+  return Boolean(env.USPS_CLIENT_ID && env.USPS_CLIENT_SECRET);
+}
+__name(carrierConfigured, "carrierConfigured");
+async function trackParcel(env, carrier, number) {
+  if (!carrierConfigured(env, carrier)) {
+    return { carrier, number, ok: false, configured: false, error: `${carrier.toUpperCase()} tracking is not configured` };
+  }
+  if (carrier === "ups") return trackUps(env, number);
+  if (carrier === "fedex") return trackFedex(env, number);
+  return trackUsps(env, number);
+}
+__name(trackParcel, "trackParcel");
+
+// worker/tracking-command.ts
+var MAX_REQUESTS = 25;
+var MAX_BODY_BYTES = 4096;
+var CACHE_TTL_SECONDS = 15 * 60;
+var CARRIERS = ["ups", "fedex", "usps"];
+function json3(value, status = 200, extraHeaders) {
+  return Response.json(value, { status, headers: { "cache-control": "no-store", ...extraHeaders } });
+}
+__name(json3, "json");
+function cacheKeyFor(request, carrier, number) {
+  const url = new URL(request.url);
+  return new Request(`${url.origin}/__cache/tracking/${carrier}/${encodeURIComponent(number)}`);
+}
+__name(cacheKeyFor, "cacheKeyFor");
+async function handleTrackingCommand(request, env) {
+  if (request.method !== "POST") return json3({ ok: false, error: "Method not allowed" }, 405);
+  const origin = request.headers.get("origin");
+  if (origin && origin !== new URL(request.url).origin) {
+    return json3({ ok: false, error: "Cross-origin tracking requests are not allowed" }, 403);
+  }
+  if (request.headers.get("sec-fetch-site") === "cross-site") {
+    return json3({ ok: false, error: "Cross-site tracking requests are not allowed" }, 403);
+  }
+  if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
+    return json3({ ok: false, error: "Content-Type must be application/json" }, 415);
+  }
+  const clientIp = request.headers.get("cf-connecting-ip")?.trim() || "unknown";
+  const body = await request.text();
+  if (new TextEncoder().encode(body).byteLength > MAX_BODY_BYTES) {
+    return json3({ ok: false, error: "Request is too large" }, 413);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return json3({ ok: false, error: "Invalid JSON body" }, 400);
+  }
+  const requested = Array.isArray(parsed.requests) ? parsed.requests.slice(0, MAX_REQUESTS) : [];
+  const valid = requested.filter(
+    (entry) => typeof entry?.number === "string" && entry.number.trim().length > 0 && entry.number.length <= 40 && typeof entry?.carrier === "string" && CARRIERS.includes(entry.carrier)
+  );
+  const cache = caches.default;
+  const results = await Promise.all(
+    valid.map(async ({ carrier, number }) => {
+      const cacheKey = cacheKeyFor(request, carrier, number);
+      const cached = await cache.match(cacheKey);
+      if (cached) return await cached.json();
+      const rateLimit = await env.STATUS_WRITE_RATE_LIMITER.limit({ key: `tracking:${clientIp}` });
+      if (!rateLimit.success) {
+        return { carrier, number, ok: false, configured: true, error: "Tracking rate limit exceeded. Try again in a minute." };
+      }
+      const result = await trackParcel(env, carrier, number);
+      if (result.ok) {
+        const response = Response.json(result, { headers: { "cache-control": `public, max-age=${CACHE_TTL_SECONDS}` } });
+        await cache.put(cacheKey, response.clone());
+      }
+      return result;
+    })
+  );
+  return json3({
+    ok: true,
+    results,
+    configured: Object.fromEntries(CARRIERS.map((carrier) => [carrier, carrierConfigured(env, carrier)]))
+  });
+}
+__name(handleTrackingCommand, "handleTrackingCommand");
+
 // worker/index.ts
 var WORKER_VERSION = "2026-08-13-worker-v8-public-guardrails";
 var SNAPSHOT_CACHE_URL = "https://stylekorean.internal/api/logistics/snapshot";
@@ -1072,7 +1313,7 @@ function hasDatabase3(env) {
   return "DB" in env;
 }
 __name(hasDatabase3, "hasDatabase");
-function json3(value, status = 200, cacheControl = "no-store") {
+function json4(value, status = 200, cacheControl = "no-store") {
   return Response.json(value, {
     status,
     headers: {
@@ -1081,7 +1322,7 @@ function json3(value, status = 200, cacheControl = "no-store") {
     }
   });
 }
-__name(json3, "json");
+__name(json4, "json");
 async function buildSnapshotPayload(env) {
   const generatedAt = (/* @__PURE__ */ new Date()).toISOString();
   const snapshot = await fetchOperationalSources(env.APPS_SCRIPT_WRITE_URL);
@@ -1122,7 +1363,7 @@ async function refreshDatabaseSnapshot(env) {
 }
 __name(refreshDatabaseSnapshot, "refreshDatabaseSnapshot");
 function snapshotResponse(payload) {
-  return json3(payload, 200, `public, max-age=0, s-maxage=${SNAPSHOT_CACHE_SECONDS}`);
+  return json4(payload, 200, `public, max-age=0, s-maxage=${SNAPSHOT_CACHE_SECONDS}`);
 }
 __name(snapshotResponse, "snapshotResponse");
 function cacheSnapshot(context, response) {
@@ -1209,7 +1450,7 @@ async function handleSnapshot(env, context) {
   } catch (error) {
     const payload = cacheState?.cached ? await cacheState.cached.clone().json().catch(() => null) : null;
     if (payload?.ok === true) {
-      const response = json3({
+      const response = json4({
         ...payload,
         stale: true,
         staleReason: error instanceof Error ? error.message : "Live sources are temporarily unavailable",
@@ -1219,7 +1460,7 @@ async function handleSnapshot(env, context) {
       response.headers.set("x-stylekorean-cache", "STALE");
       return response;
     }
-    return json3({ ok: false, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), error: "Core Logistics Master sources are unavailable" }, 503);
+    return json4({ ok: false, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), error: "Core Logistics Master sources are unavailable" }, 503);
   }
 }
 __name(handleSnapshot, "handleSnapshot");
@@ -1236,7 +1477,7 @@ async function handleHealth(env) {
       console.error(JSON.stringify({ event: "d1-health-summary-failed", error: String(error) }));
     }
   }
-  return json3({
+  return json4({
     ok: true,
     service: "stylekorean-logistics-control-tower",
     version: WORKER_VERSION,
@@ -1256,13 +1497,13 @@ async function handleHealth(env) {
 __name(handleHealth, "handleHealth");
 async function handleReconciliation(env) {
   if (!hasDatabase3(env)) {
-    return json3({ ok: true, databaseConfigured: false, ready: false, activationRequired: true });
+    return json4({ ok: true, databaseConfigured: false, ready: false, activationRequired: true });
   }
   try {
-    return json3({ ok: true, databaseConfigured: true, ...await readDatabaseHealth(env.DB) });
+    return json4({ ok: true, databaseConfigured: true, ...await readDatabaseHealth(env.DB) });
   } catch (error) {
     console.error(JSON.stringify({ event: "d1-health-read-failed", error: String(error) }));
-    return json3({ ok: false, databaseConfigured: true, ready: false, error: "Database health is unavailable" }, 503);
+    return json4({ ok: false, databaseConfigured: true, ready: false, error: "Database health is unavailable" }, 503);
   }
 }
 __name(handleReconciliation, "handleReconciliation");
@@ -1282,17 +1523,19 @@ var index_default = {
     const url = new URL(request.url);
     let response;
     if (url.pathname === "/api/logistics/snapshot") {
-      response = request.method === "GET" ? await handleSnapshot(env, context) : json3({ ok: false, error: "Method not allowed" }, 405);
+      response = request.method === "GET" ? await handleSnapshot(env, context) : json4({ ok: false, error: "Method not allowed" }, 405);
     } else if (url.pathname === "/api/logistics/reconciliation") {
-      response = request.method === "GET" ? await handleReconciliation(env) : json3({ ok: false, error: "Method not allowed" }, 405);
+      response = request.method === "GET" ? await handleReconciliation(env) : json4({ ok: false, error: "Method not allowed" }, 405);
     } else if (url.pathname === "/api/logistics/status") {
       response = await handleStatusCommand(request, env, context);
     } else if (url.pathname === "/api/logistics/pending-review") {
       response = await handlePendingReviewCommand(request, env, context);
+    } else if (url.pathname === "/api/logistics/tracking") {
+      response = await handleTrackingCommand(request, env);
     } else if (url.pathname === "/api/logistics/health") {
-      response = request.method === "GET" ? await handleHealth(env) : json3({ ok: false, error: "Method not allowed" }, 405);
+      response = request.method === "GET" ? await handleHealth(env) : json4({ ok: false, error: "Method not allowed" }, 405);
     } else if (url.pathname.startsWith("/api/")) {
-      response = json3({ ok: false, error: "API route not found" }, 404);
+      response = json4({ ok: false, error: "API route not found" }, 404);
     } else {
       response = await env.ASSETS.fetch(request);
     }
