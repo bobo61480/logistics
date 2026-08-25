@@ -109,6 +109,24 @@ describe("resolveUltaDcFromEmailV2_", () => {
     const result = helpers.resolveUltaDcFromEmailV2_("Pickup: Phoenix, AZ; Deliver to: Dallas, TX");
     expect(result).toEqual({ customer: "ULTA (DALLAS)", method: "ulta-dc-city", confidence: "medium" });
   });
+
+  // Regression for a Codex round-5 finding: the destination-label
+  // carry-forward previously had no reset at all, so a footer or
+  // quoted-history block below a labeled (but not-yet-on-file) destination
+  // silently inherited that label forever. "Ship-to: Phoenix" (unknown)
+  // followed by a blank line and an unrelated "Dallas office" footer must
+  // not resolve to Dallas just because it's textually below the last label.
+  it("stops carrying a destination label forward past a blank line", () => {
+    const helpers = loadStoreResolverHelpers(ultaRows, []);
+    const result = helpers.resolveUltaDcFromEmailV2_("Ship-to: Phoenix\n\nDallas office");
+    expect(result).toBeNull();
+  });
+
+  it("still carries a destination label across a real multi-line address with no blank line", () => {
+    const helpers = loadStoreResolverHelpers(ultaRows, []);
+    const result = helpers.resolveUltaDcFromEmailV2_("Ship To:\n123 Main St, Dallas, TX 75201");
+    expect(result).toEqual({ customer: "ULTA (DALLAS)", method: "ulta-dc-city", confidence: "medium" });
+  });
 });
 
 describe("resolveTjxDcFromEmailV2_", () => {

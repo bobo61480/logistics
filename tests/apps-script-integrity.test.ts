@@ -350,6 +350,15 @@ describe("Apps Script production integrity", () => {
     // genuinely new thread ranked just below the cap.
     expect(pipeline).toContain("if (!gmailV2ThreadHasUnprocessedMessageV2_(thread)) return;");
     expect(pipeline).toContain("function gmailV2ThreadHasUnprocessedMessageV2_(thread) {");
+    // Round 5 of the same review: a per-query cap can go unused when that
+    // query simply has fewer than its share of hits (e.g. only one of
+    // three queries has any matches), leaving global budget idle while
+    // that query's own overflow ages past the lookback window instead of
+    // being processed. A second fill pass spends the leftover global
+    // budget on overflow from every query.
+    expect(pipeline).toContain("var overflowByQuery = [];");
+    expect(pipeline).toContain("var remainingGlobalBudget = GMAIL_V2_MAX_THREADS - Object.keys(threadsById).length;");
+    expect(pipeline).toContain("overflowByQuery.forEach(function (overflow) {");
   });
 
   it("forces every broadened-only-matched record through PENDING VERIFICATION until explicitly trusted", () => {
