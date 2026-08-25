@@ -104,14 +104,16 @@ function chooseWmsTargetRow_(groupKey, invoices, rows) {
   var wanted = new Set((invoices || []).map(function (invoice) {
     return String(invoice || "").trim().toUpperCase();
   }).filter(Boolean));
+  var customerKey = String(groupKey || "").split("___")[0];
 
   for (var i = 0; i < rows.length; i++) {
     var row = rows[i];
-    if (row.key !== groupKey) continue;
+    var rowCustomerKey = normalizeWmsCustomerKey_(canonicalWmsCustomer_(row.customer));
+    if (rowCustomerKey !== customerKey) continue;
     for (var j = 0; j < row.invoices.length; j++) {
-      // Three independent identifiers must agree before two records are
-      // treated as one shipment: canonical customer and exact ship date are
-      // encoded in groupKey, and an exact invoice match is required here.
+      // User-defined shipment identity: an exact normalized customer and an
+      // exact invoice are sufficient to identify a duplicate. Ship date,
+      // quantity, carrier, and tracking remain updateable shipment details.
       if (wanted.has(String(row.invoices[j] || "").trim().toUpperCase())) return row;
     }
   }
