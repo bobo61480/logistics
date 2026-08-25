@@ -243,6 +243,25 @@ describe("resolveCustomerFromEmailV2_", () => {
     expect(result).toBeNull();
   });
 
+  // Regression for a Codex round-4 finding: the exact-tier early return
+  // used to fire before canonical/brand evidence for a DIFFERENT customer
+  // was ever checked, so an email naming both an exact-matched customer and
+  // a second, brand-only-matched customer silently picked the exact one.
+  it("does not silently ignore a canonical/brand match for a different customer when an exact match also fires", () => {
+    const dbRows = [
+      HEADER,
+      ["MEGA MART", "1 Main St", "Jane", ""],
+      ["TOKTOK BEAUTY INC", "2 Second St", "Jack", ""],
+    ];
+    const { helpers } = loadResolverHelpers(dbRows);
+    const result = helpers.resolveCustomerFromEmailV2_(
+      { from: "ops@unrelated.com", subject: "New shipment for Mega Mart, cc TokTok Beauty on this load", body: "", messageId: "m-conflict" },
+      {},
+      {},
+    );
+    expect(result).toBeNull();
+  });
+
   it("returns null and logs when the two tiers disagree, never guessing", () => {
     const dbRows = [
       HEADER,
