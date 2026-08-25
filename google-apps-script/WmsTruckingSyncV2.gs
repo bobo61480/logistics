@@ -105,6 +105,7 @@ function chooseWmsTargetRow_(groupKey, invoices, rows) {
     return String(invoice || "").trim().toUpperCase();
   }).filter(Boolean));
   var customerKey = String(groupKey || "").split("___")[0];
+  var best = null;
 
   for (var i = 0; i < rows.length; i++) {
     var row = rows[i];
@@ -114,10 +115,13 @@ function chooseWmsTargetRow_(groupKey, invoices, rows) {
       // User-defined shipment identity: an exact normalized customer and an
       // exact invoice are sufficient to identify a duplicate. Ship date,
       // quantity, carrier, and tracking remain updateable shipment details.
-      if (wanted.has(String(row.invoices[j] || "").trim().toUpperCase())) return row;
+      if (wanted.has(String(row.invoices[j] || "").trim().toUpperCase())) {
+        if (!best || row.invoices.length > best.invoices.length) best = row;
+        break;
+      }
     }
   }
-  return null;
+  return best;
 }
 
 function filterWmsInvoicesForGroup_(invoices, groupKey, sourceByInvoice) {

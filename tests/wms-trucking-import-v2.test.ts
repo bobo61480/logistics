@@ -53,6 +53,27 @@ describe("WMS trucking importer v2 safeguards", () => {
     ).toBe(653);
   });
 
+  it("prefers the matching row with the larger invoice set", () => {
+    const rows = [
+      {
+        rowNumber: 10,
+        key: "GLOWISS___2026-08-20",
+        active: true,
+        invoices: ["IN00470001"],
+      },
+      {
+        rowNumber: 14,
+        key: "GLOWISS___2026-08-21",
+        active: true,
+        invoices: ["IN00470001", "IN00470002", "IN00470003"],
+      },
+    ];
+
+    expect(
+      helpers.chooseWmsTargetRow_("GLOWISS___2026-08-22", ["IN00470001"], rows)?.rowNumber,
+    ).toBe(14);
+  });
+
   it("removes source-known invoices that belong to another exact ship-date group", () => {
     const sourceByInvoice = new Map([
       ["IN00463488", { key: "BEAUTIFYME___2026-08-10" }],
