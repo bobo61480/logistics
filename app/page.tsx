@@ -467,13 +467,14 @@ function carrierFromTrackingNumber(value: string) {
   return "";
 }
 
-// The live-map tracking backend only integrates UPS/FedEx/USPS (carrier-tracking.ts) —
-// DHL and Amazon don't have a server-side lookup, so they're intentionally excluded here.
-function trackableCarrier(value?: string): "ups" | "fedex" | "usps" | null {
+// Amazon tracking remains excluded because it has no supported server-side
+// shipment API; UPS/FedEx/USPS/DHL use official carrier integrations.
+function trackableCarrier(value?: string): "ups" | "fedex" | "usps" | "dhl" | null {
   const normalized = clean(value).toLowerCase();
   if (normalized.includes("ups")) return "ups";
   if (normalized.includes("fedex")) return "fedex";
   if (normalized.includes("usps")) return "usps";
+  if (normalized.includes("dhl")) return "dhl";
   return null;
 }
 

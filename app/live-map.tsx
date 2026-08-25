@@ -35,7 +35,7 @@ function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;");
 }
 
-export type Carrier = "ups" | "fedex" | "usps";
+export type Carrier = "ups" | "fedex" | "usps" | "dhl";
 
 export type MilestoneShipment = {
   id: string;
@@ -66,6 +66,7 @@ export type TrackingResult = {
   state?: string;
   country?: string;
   timestamp?: string;
+  trackingUrl?: string;
   error?: string;
 };
 
@@ -88,7 +89,7 @@ export function useParcelTracking(trackable: TrackableShipment[]) {
 
   useEffect(() => {
     if (!trackable.length) {
-      setConfigured((current) => current ?? { ups: false, fedex: false, usps: false });
+      setConfigured((current) => current ?? { ups: false, fedex: false, usps: false, dhl: false });
       return;
     }
     let cancelled = false;
@@ -264,7 +265,9 @@ export function LiveMapPanel({
           `<strong>${escapeHtml(item.title)}</strong><br/>${escapeHtml(item.carrier.toUpperCase())} ${escapeHtml(item.trackingNumber)}` +
             `<br/>${escapeHtml([result.city, result.state].filter(Boolean).join(", ")) || "Location unavailable"}` +
             `${result.status ? `<br/>${escapeHtml(result.status)}` : ""}` +
-            `${result.timestamp ? `<br/><small>${escapeHtml(new Date(result.timestamp).toLocaleString())}</small>` : ""}`,
+            `${result.timestamp ? `<br/><small>${escapeHtml(new Date(result.timestamp).toLocaleString())}</small>` : ""}` +
+            `${result.trackingUrl ? `<br/><a href="${escapeHtml(result.trackingUrl)}" target="_blank" rel="noreferrer">Open official carrier tracking ↗</a>` : ""}` +
+            `${result.carrier === "dhl" ? "<br/><small>Delivered by Deutsche Post DHL Group</small>" : ""}`,
         )
         .addTo(layerRef.current);
       bounds.push(coords);
@@ -300,7 +303,7 @@ export function LiveMapPanel({
       </div>
       {!anyCarrierConfigured && trackable.length > 0 && (
         <p className="live-map-hint">
-          No carrier tracking connected yet — UPS/FedEx/USPS API credentials aren&apos;t configured, so parcel
+          No carrier tracking connected yet — UPS/FedEx/USPS/DHL API credentials aren&apos;t configured, so parcel
           positions won&apos;t appear. Ocean/air port milestones above still work without them.
         </p>
       )}
