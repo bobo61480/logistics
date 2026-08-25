@@ -30,16 +30,26 @@ function processLogisticsEmailsV2() {
   try {
     var labels = gmailV2Labels_();
     var queries = gmailV2Queries_();
+    // The broadened query, when enabled, is always the last one pushed by
+    // gmailV2Queries_() — used below only to attribute a thread found
+    // exclusively by it, for observing its yield/noise independently.
+    var broadenedQueryIndex = GMAIL_V2_BROADENED_SEARCH_ENABLED_V2 ? queries.length - 1 : -1;
     var threadsById = {};
-    queries.forEach(function (query) {
+    var matchedOnlyByBroadenedQuery = {};
+    queries.forEach(function (query, queryIndex) {
       GmailApp.search(query, 0, GMAIL_V2_MAX_THREADS).forEach(function (thread) {
-        threadsById[thread.getId()] = thread;
+        var id = thread.getId();
+        if (!(id in threadsById)) {
+          threadsById[id] = thread;
+          if (queryIndex === broadenedQueryIndex) matchedOnlyByBroadenedQuery[id] = true;
+        }
       });
     });
 
     var stats = {
       threads: 0, messages: 0, inserted: 0, updated: 0, noop: 0,
-      pending: 0, errors: 0, deferredThreads: 0, retryDeferred: 0, budgetHit: false
+      pending: 0, errors: 0, deferredThreads: 0, retryDeferred: 0, budgetHit: false,
+      broadenedMatches: Object.keys(matchedOnlyByBroadenedQuery).length
     };
     var threadIds = Object.keys(threadsById).slice(0, GMAIL_V2_MAX_THREADS);
     for (var ti = 0; ti < threadIds.length; ti++) {
@@ -110,12 +120,37 @@ function processLogisticsEmailsV2() {
   }
 }
 
+// Kill switch for the third, sender-agnostic query below — independent of
+// the two hand-tuned queries above it, which are unaffected either way.
+var GMAIL_V2_BROADENED_SEARCH_ENABLED_V2 = true;
+
+// Generic shipment/logistics subject terms, not tied to any specific
+// sender — lets a new/unknown shipper's own notice get picked up, instead
+// of only ever finding emails from senders already hardcoded above.
+var GMAIL_V2_GENERIC_LOGISTICS_TERMS_V2 = [
+  "packing list", "commercial invoice", "bill of lading", "proof of delivery",
+  "rate confirmation", "pickup confirmation", "shipment confirmation",
+  "shipping notification", "new shipment", "tracking number", "waybill",
+  "freight invoice", "customs release", "warehouse receipt", "delivery order",
+  "cargo release", "ISF filing", "container release"
+];
+
+function gmailV2GenericLogisticsSubjectClauseV2_() {
+  return GMAIL_V2_GENERIC_LOGISTICS_TERMS_V2.map(function (term) {
+    return 'subject:"' + term + '"';
+  }).join(" ");
+}
+
 function gmailV2Queries_() {
   var base = "newer_than:" + GMAIL_V2_LOOKBACK_DAYS + "d -in:spam -in:trash ";
-  return [
+  var queries = [
     base + '{subject:출고 subject:해상 subject:해운 subject:항공 subject:선적 subject:입고 subject:"AIR SHIPMENT" subject:"OCEAN SHIPMENT" subject:"SILICON2 LIST" subject:"arrival notice" subject:"bill of lading" subject:BOL subject:"entry summary" subject:"shipping documents" subject:ISF subject:"delivery order" subject:POD subject:MAWB subject:HAWB}',
     base + '{from:info@cargomatic.com from:mcinfo@ups.com from:ups.com from:fedex.com from:usps.com from:dhl.com} {subject:shipment subject:delivery subject:delivered subject:completed subject:rescheduled subject:pickup}'
   ];
+  if (GMAIL_V2_BROADENED_SEARCH_ENABLED_V2) {
+    queries.push(base + '{' + gmailV2GenericLogisticsSubjectClauseV2_() + '}');
+  }
+  return queries;
 }
 
 function gmailV2Labels_() {

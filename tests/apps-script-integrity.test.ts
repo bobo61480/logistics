@@ -278,4 +278,22 @@ describe("Apps Script production integrity", () => {
     // left over from testing an earlier revision of this PR.
     expect(triggers).toContain('"customerLookupOnEdit"');
   });
+
+  it("ships the broadened Gmail search and both new customer/store resolvers enabled, but not yet wired into live ingestion", () => {
+    const pipeline = read("google-apps-script/GmailPipelineV2.gs");
+    const customerResolver = read("google-apps-script/GmailCustomerResolverV2.gs");
+    const storeResolver = read("google-apps-script/GmailStoreResolverV2.gs");
+    expect(pipeline).toContain("var GMAIL_V2_BROADENED_SEARCH_ENABLED_V2 = true;");
+    expect(customerResolver).toContain("var GMAIL_CUSTOMER_RESOLVER_ENABLED_V2 = true;");
+    expect(storeResolver).toContain("var GMAIL_STORE_RESOLVER_ENABLED_V2 = true;");
+    // Both resolvers are reviewed/tested standalone first — wiring them into
+    // processLogisticsMessageV2_ lands in a follow-up PR together with the
+    // insert-row helper and its own dry-run gate, since a resolved
+    // record.customer would otherwise be able to reach
+    // upsertOutboundEmailV2_'s existing (already-live, ungated) insert
+    // branch immediately.
+    expect(pipeline).not.toContain("resolveCustomerFromEmailV2_(");
+    expect(pipeline).not.toContain("resolveUltaDcFromEmailV2_(");
+    expect(pipeline).not.toContain("resolveTjxDcFromEmailV2_(");
+  });
 });
