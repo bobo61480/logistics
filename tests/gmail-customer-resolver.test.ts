@@ -102,7 +102,44 @@ describe("resolveCustomerFromEmailV2_", () => {
       {},
       {},
     );
-    expect(result).toEqual({ customer: "MEGA MART", method: "text", confidence: "medium" });
+    expect(result).toEqual({ customer: "MEGA MART", method: "text-exact", confidence: "high" });
+  });
+
+  // Regression for a Codex review finding on this file: a lone existing
+  // TRUCKING row for a brand must never be trusted as a confident match
+  // when the email names a DIFFERENT, not-yet-on-file location of that
+  // same brand — the canonical/brand key alone is not enough once a
+  // record carries a location qualifier.
+  it("does not resolve a different, not-yet-on-file location of the same brand to the lone existing location", () => {
+    const dbRows = [HEADER, ["MEGA MART (PALO ALTO)", "1 Palo Alto Way", "Jane", ""]];
+    const { helpers } = loadResolverHelpers(dbRows);
+    const result = helpers.resolveCustomerFromEmailV2_(
+      { from: "ops@unrelated.com", subject: "New shipment for Mega Mart (Fremont)", body: "", messageId: "m11" },
+      {},
+      {},
+    );
+    expect(result).toBeNull();
+  });
+
+  // The exact same location DOES resolve, and legal-suffix/ampersand
+  // differences between the stored name and the email text wash out via
+  // the shared light normalization (Codex review: haystack normalization).
+  it("resolves an exact location match, and tolerates a legal-suffix/ampersand spelling difference", () => {
+    const exactLocation = loadResolverHelpers([HEADER, ["MEGA MART (PALO ALTO)", "1 Palo Alto Way", "Jane", ""]]);
+    const exactResult = exactLocation.helpers.resolveCustomerFromEmailV2_(
+      { from: "ops@unrelated.com", subject: "New shipment for Mega Mart (Palo Alto)", body: "", messageId: "m12" },
+      {},
+      {},
+    );
+    expect(exactResult?.customer).toBe("MEGA MART (PALO ALTO)");
+
+    const suffixCase = loadResolverHelpers([HEADER, ["A&B LLC", "1 Main St", "Jane", ""]]);
+    const suffixResult = suffixCase.helpers.resolveCustomerFromEmailV2_(
+      { from: "ops@unrelated.com", subject: "Pickup for A&B LLC", body: "", messageId: "m13" },
+      {},
+      {},
+    );
+    expect(suffixResult?.customer).toBe("A&B LLC");
   });
 
   // Regression for the 2026-08-12 KORHEIM incident's customer-matching bug

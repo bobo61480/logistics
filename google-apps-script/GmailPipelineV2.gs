@@ -34,15 +34,28 @@ function processLogisticsEmailsV2() {
     // gmailV2Queries_() — used below only to attribute a thread found
     // exclusively by it, for observing its yield/noise independently.
     var broadenedQueryIndex = GMAIL_V2_BROADENED_SEARCH_ENABLED_V2 ? queries.length - 1 : -1;
+    // Each query gets its own reserved share of GMAIL_V2_MAX_THREADS rather
+    // than filling threadsById in query order and slicing the combined set
+    // afterward — with a flat slice, a busy mailbox where the first two
+    // (already-established) queries alone find 12+ distinct threads would
+    // silently discard every result the new broadened query found, since
+    // its matches are always inserted last (Codex review on PR #102). A
+    // thread already found by an earlier query costs nothing against a
+    // later query's own share, so this still caps at GMAIL_V2_MAX_THREADS
+    // total when queries agree, while guaranteeing each query can always
+    // contribute up to its share of genuinely new threads.
+    var perQueryThreadCap = Math.ceil(GMAIL_V2_MAX_THREADS / queries.length);
     var threadsById = {};
     var matchedOnlyByBroadenedQuery = {};
     queries.forEach(function (query, queryIndex) {
+      var addedForThisQuery = 0;
       GmailApp.search(query, 0, GMAIL_V2_MAX_THREADS).forEach(function (thread) {
         var id = thread.getId();
-        if (!(id in threadsById)) {
-          threadsById[id] = thread;
-          if (queryIndex === broadenedQueryIndex) matchedOnlyByBroadenedQuery[id] = true;
-        }
+        if (id in threadsById) return;
+        if (addedForThisQuery >= perQueryThreadCap) return;
+        threadsById[id] = thread;
+        addedForThisQuery++;
+        if (queryIndex === broadenedQueryIndex) matchedOnlyByBroadenedQuery[id] = true;
       });
     });
 
@@ -51,7 +64,7 @@ function processLogisticsEmailsV2() {
       pending: 0, errors: 0, deferredThreads: 0, retryDeferred: 0, budgetHit: false,
       broadenedMatches: Object.keys(matchedOnlyByBroadenedQuery).length
     };
-    var threadIds = Object.keys(threadsById).slice(0, GMAIL_V2_MAX_THREADS);
+    var threadIds = Object.keys(threadsById);
     for (var ti = 0; ti < threadIds.length; ti++) {
       if (Date.now() - runStarted >= GMAIL_V2_RUNTIME_BUDGET_MS) {
         stats.budgetHit = true;
@@ -277,7 +290,19 @@ function processLogisticsMessageV2_(message) {
   }));
 
   var documentFolderUrl = "";
-  if (documentAttachments.length) {
+  // records.length, not just documentAttachments.length: the broadened
+  // search query is generic enough (e.g. "commercial invoice", "delivery
+  // order") that plenty of unrelated business emails can now match the
+  // search alone, get zero shipment records extracted, yet still create a
+  // permanent Drive folder for attachments no shipment ever references
+  // (Codex review on PR #102). Requiring at least one extracted record —
+  // already computed above, from either table extraction or the strong-
+  // context fallback — means a genuinely weak/irrelevant broadened match
+  // skips archiving entirely and falls through to the "no records" PENDING
+  // VERIFICATION branch below with an empty driveUrl, while a record that
+  // extracted something (even if it later fails full validation) still
+  // gets its documents archived so a human reviewing it can see them.
+  if (documentAttachments.length && records.length) {
     var archiveDirection = context.kind === "outbound" ? "outbound" : "inbound";
     documentFolderUrl = archiveEmailAttachmentsV2_(documentAttachments, records, archiveDirection, context.customer, context, meta);
     records.forEach(function (record) { record._driveFolder = documentFolderUrl; });
