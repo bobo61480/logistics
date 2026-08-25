@@ -11,10 +11,15 @@
  */
 
 var WMS_TRUCKING_IMPORT_MIN_DATE = "2026-08-01";
-var WMS_TRUCKING_SYNC_ENABLED = true;
+// EMERGENCY DISABLE (2026-08-25): live imports produced ~87 duplicate rows
+// for one KORHEIM (CANOGA PARK) shipment on WH Trucking Request. Disabled
+// at the owner's request until the duplicate-insert root cause is found and
+// fixed. Do not re-enable without confirming the fix and reviewing a dry-run
+// cycle first.
+var WMS_TRUCKING_SYNC_ENABLED = false;
 // Live writes use exact customer + ship-date grouping and preserve terminal
 // workflow states. Fulfillment dimensions enrich the same canonical rows.
-var WMS_TRUCKING_DRY_RUN = false;
+var WMS_TRUCKING_DRY_RUN = true;
 var FULFILLMENT_DATA_URL = "https://script.google.com/macros/s/AKfycbykK9DWjem9ORHxfR_mpdZl5DVh-en0D6JpCdIuel305QmfqxoNU_NqSnjkhFk401hI/exec";
 var WMS_FULFILLMENT_DETAIL_LIMIT = 80;
 

@@ -100,12 +100,16 @@ describe("Apps Script production integrity", () => {
     expect(triggers).not.toContain('{ handler: "requestSiteRedeploy"');
   });
 
-  it("runs the hardened WMS trucking importer live with the customer-canonicalization fix", () => {
+  it("keeps the WMS trucking importer emergency-disabled after the duplicate-row incident", () => {
     const importer = read("google-apps-script/WmsTruckingSyncV2.gs");
     const code = read("google-apps-script/Code.gs");
 
-    expect(importer).toContain("var WMS_TRUCKING_SYNC_ENABLED = true;");
-    expect(importer).toContain("var WMS_TRUCKING_DRY_RUN = false;");
+    // Emergency-disabled 2026-08-25: live imports produced ~87 duplicate
+    // rows for one KORHEIM (CANOGA PARK) shipment on WH Trucking Request.
+    // Do not flip these back without confirming the duplicate-insert root
+    // cause is fixed and reviewing a dry-run cycle first.
+    expect(importer).toContain("var WMS_TRUCKING_SYNC_ENABLED = false;");
+    expect(importer).toContain("var WMS_TRUCKING_DRY_RUN = true;");
     expect(importer).toContain("function logWmsDryRun_(");
     expect(importer).toContain("function wouldChangeMappedValue_(");
     // Word-boundary anchored — must not collapse "MEGA MARTINEZ..." into
