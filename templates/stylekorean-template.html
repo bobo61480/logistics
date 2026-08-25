@@ -1507,6 +1507,9 @@ function escapeHtml(str) {
 // ================================================================
 function toggleTheme() {
   var current = document.documentElement.getAttribute('data-theme');
+  if (!current && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+    current = 'dark';
+  }
   var next = current === 'dark' ? 'light' : 'dark';
   document.documentElement.setAttribute('data-theme', next);
   try { localStorage.setItem('sk-theme', next); } catch(e) {}
@@ -1540,7 +1543,7 @@ function renderDashboard(data) {
     metricEls[3].textContent = data.metrics.exceptions;
   }
 
-  // Update KPI figures
+  // Update KPI summary figures
   var kpiCards = document.querySelectorAll('.kpi-card:not(.kpi-carrier):not(.kpi-average)');
   var kpiValues = [
     [data.kpis.shippingMtd, data.kpis.shippingYtd],
@@ -1556,6 +1559,39 @@ function renderDashboard(data) {
       if (strongs[1]) strongs[1].textContent = formatMoney(kpiValues[i][1]);
     }
   });
+
+  // Update KPI detail cards (carriers + averages)
+  if (data.kpis.topCarriers) {
+    var carrierCards = document.querySelectorAll('.kpi-carrier');
+    carrierCards.forEach(function(card, i) {
+      if (data.kpis.topCarriers[i]) {
+        var name = card.querySelector('.kpi-label');
+        var val = card.querySelector('strong');
+        if (name) name.textContent = escapeHtml(data.kpis.topCarriers[i].name || '');
+        if (val) val.textContent = formatMoney(data.kpis.topCarriers[i].value || 0);
+      }
+    });
+  }
+  if (data.kpis.avgShipDays !== undefined) {
+    var avgCards = document.querySelectorAll('.kpi-average');
+    var avgValues = [data.kpis.avgShipDays, data.kpis.avgTransitDays];
+    avgCards.forEach(function(card, i) {
+      if (avgValues[i] !== undefined) {
+        var val = card.querySelector('strong');
+        if (val) val.textContent = avgValues[i];
+      }
+    });
+  }
+
+  // Update schedule board totals from data arrays
+  if (data.inboundSchedule) {
+    var inTotal = document.querySelector('.board-total:not(.outbound) strong');
+    if (inTotal) inTotal.textContent = data.inboundSchedule.length;
+  }
+  if (data.outboundSchedule) {
+    var outTotal = document.querySelector('.board-total.outbound strong');
+    if (outTotal) outTotal.textContent = data.outboundSchedule.length;
+  }
 
   // Update import schedules table
   var tbody = document.querySelector('.import-table tbody');
@@ -1583,7 +1619,8 @@ function renderDashboard(data) {
     parcelGrid.innerHTML = '';
     data.parcels.forEach(function(p) {
       var card = document.createElement('div');
-      card.className = 'parcel-card';
+      card.className = 'parcel-card' + (p.source ? ' ' + p.source.replace(/[^a-z0-9-]/g, '') : '');
+      if (p.source) card.style.setProperty('--carrier-accent', 'var(' + p.source.replace(/[^a-z0-9-]/g, '') + ', var(--teal))');
       var pStatus = (p.trackingStatus || p.status || '').toLowerCase();
       card.setAttribute('data-status', pStatus);
       card.innerHTML =
@@ -1657,6 +1694,8 @@ function initFilters() {
 function initKpiToggle() {
   var buttons = document.querySelectorAll('.period-toggle button');
   var detailCards = document.querySelectorAll('.kpi-carrier, .kpi-average');
+  // Hide detail cards initially (Summary view is default)
+  detailCards.forEach(function(card) { card.style.display = 'none'; });
   buttons.forEach(function(btn, i) {
     btn.addEventListener('click', function() {
       buttons.forEach(function(b) { b.classList.remove('active'); });
