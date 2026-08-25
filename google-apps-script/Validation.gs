@@ -239,10 +239,10 @@ function reviewKeyForRow_(data, col) {
 /**
  * Instant dashboard-driven approve/reject for one PENDING VERIFICATION row,
  * called from Code.gs's doPost({action:"reviewPending"}). Only ever acts on
- * a row currently in NEEDS REVIEW, matched by reviewKeyForRow_, and refuses
- * (never guesses) if zero or more than one open row matches — the same
- * "verify identifiers before writing" discipline used by the status-write
- * path and by skwbp's StatusWriteback.gs.
+ * a row currently in NEEDS REVIEW, matched by reviewKeyForRow_. When repeated
+ * emails produced more than one open row for the same shipment identifiers,
+ * the newest appended row wins because it represents the latest email state.
+ * Older rows remain as an audit trail and can still be resolved separately.
  */
 function reviewPendingRow_(payload) {
   var reviewKey = String(payload.reviewKey || "").trim();
@@ -268,23 +268,22 @@ function reviewPendingRow_(payload) {
     if (matches.length === 0) {
       throw new Error("That review row is no longer open — someone may have already resolved it. Refresh and retry.");
     }
-    if (matches.length > 1) {
-      throw new Error("More than one open review row matches — refusing to guess. Resolve directly in PENDING VERIFICATION.");
-    }
-
-    var r0 = matches[0];
+    // PENDING VERIFICATION is append-only. Selecting the last matching row
+    // deterministically applies the decision to the latest notice instead of
+    // blocking the operator when the same shipment received repeated emails.
+    var r0 = matches[matches.length - 1];
     var rowIndex1based = r0 + 1;
     var rowRange = sheet.getRange(rowIndex1based, 1, 1, VALIDATION.pendingHeaders.length);
     if (decision === "approve") {
       sheet.getRange(rowIndex1based, col["Status"] + 1).setValue("APPROVED");
       commitApprovedPendingRow_(sheet, rowIndex1based, data[r0], col);
       SpreadsheetApp.flush();
-      return { ok: true, action: "approved", row: rowIndex1based, status: "COMMITTED" };
+      return { ok: true, action: "approved", row: rowIndex1based, status: "COMMITTED", matchedRows: matches.length };
     }
     sheet.getRange(rowIndex1based, col["Status"] + 1).setValue("REJECTED");
     rowRange.setBackground(VALIDATION.colors.rejected).setFontColor("#999999");
     SpreadsheetApp.flush();
-    return { ok: true, action: "rejected", row: rowIndex1based, status: "REJECTED" };
+    return { ok: true, action: "rejected", row: rowIndex1based, status: "REJECTED", matchedRows: matches.length };
   } finally {
     lock.releaseLock();
   }

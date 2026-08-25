@@ -4,6 +4,15 @@ import { describe, expect, it } from "vitest";
 const read = (path: string) => readFileSync(path, "utf8");
 
 describe("Apps Script production integrity", () => {
+  it("resolves duplicate open shipment notices against the newest matching email", () => {
+    const validation = read("google-apps-script/Validation.gs");
+
+    expect(validation).toContain("var r0 = matches[matches.length - 1]");
+    expect(validation).toContain("matchedRows: matches.length");
+    expect(validation).not.toContain("More than one open review row matches");
+    expect(validation).not.toContain("refusing to guess");
+  });
+
   it("serves an owner-authorized read snapshot for the private production workbooks", () => {
     const code = read("google-apps-script/Code.gs");
     expect(code).toContain("function doGet(e)");
