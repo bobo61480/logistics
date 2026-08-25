@@ -361,13 +361,26 @@ describe("Apps Script production integrity", () => {
     expect(pipeline).toContain("processLogisticsMessageV2_(message, isBroadenedOnly)");
   });
 
-  it("only archives Gmail attachments once at least one shipment record was actually extracted", () => {
+  it("only skips archiving Gmail attachments for a weak broadened-only match with zero extracted records", () => {
     const pipeline = read("google-apps-script/GmailPipelineV2.gs");
-    // Codex review on PR #102: the broadened search query is generic
-    // enough that an unrelated email can match with zero extractable
-    // records — gating purely on documentAttachments.length would still
-    // create a permanent Drive folder for a shipment that was never
-    // matched or inserted anywhere.
-    expect(pipeline).toContain("if (documentAttachments.length && records.length) {");
+    // Codex review round 1 on PR #102: the broadened search query is
+    // generic enough that an unrelated email can match with zero
+    // extractable records — gating purely on documentAttachments.length
+    // would still create a permanent Drive folder for a shipment that was
+    // never matched or inserted anywhere.
+    //
+    // Codex review round 3 on PR #102: that fix over-reached — gating on
+    // records.length unconditionally also stopped archiving attachments
+    // for the two ORIGINAL, already-trusted queries whenever extraction
+    // failed, losing the exact artifact a human needs to debug why
+    // extraction failed. The zero-records skip must apply only to threads
+    // found ONLY by the broadened query.
+    //
+    // On this branch (PR #103), archiving direction/customer bucketing
+    // (archiveDirection/context.customer, not a bare context.kind check)
+    // has replaced the plain inbound-only gate, so the assertion below
+    // matches this branch's merged form of the same fix.
+    expect(pipeline).toContain("var isWeakBroadenedMatch = isBroadenedOnly && !records.length;");
+    expect(pipeline).toContain("if (documentAttachments.length && !isWeakBroadenedMatch) {");
   });
 });

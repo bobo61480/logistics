@@ -48,6 +48,34 @@ function buildUltaDcDirectory_() {
   return directory;
 }
 
+var ULTA_DESTINATION_LABEL_PATTERN_V2 = /\b(SHIP(PING)?[\s-]*TO|DELIVER(Y)?[\s-]*(TO|ADDRESS)|CONSIGNEE|DESTINATION|DROP[\s-]*(OFF|AT)|RECEIVING)\b/;
+var ULTA_ORIGIN_LABEL_PATTERN_V2 = /\b(PICK[\s-]*UP|PICKUP|ORIGIN|SHIP(PING)?[\s-]*FROM|FROM[\s-]*ADDRESS)\b/;
+
+/**
+ * Buckets each line of the text under "destination" or "origin" based on a
+ * label appearing on that line (SHIP TO / DELIVER TO / CONSIGNEE /
+ * DESTINATION vs. PICKUP / ORIGIN / SHIP FROM), carrying a label forward
+ * onto the following line too — shipment emails often write a label on its
+ * own line with the address below it. A line matching neither label, with
+ * no label carried forward, is dropped from both buckets: guessing which
+ * block an unlabeled line belongs to would reintroduce the exact ambiguity
+ * this exists to remove.
+ */
+function gmailStoreLabeledLinesV2_(haystack) {
+  var lines = String(haystack || "").split(/[\r\n]+/);
+  var destination = [];
+  var origin = [];
+  var carry = null;
+  lines.forEach(function (line) {
+    if (ULTA_DESTINATION_LABEL_PATTERN_V2.test(line)) { destination.push(line); carry = "dest"; return; }
+    if (ULTA_ORIGIN_LABEL_PATTERN_V2.test(line)) { origin.push(line); carry = "origin"; return; }
+    if (carry === "dest") { destination.push(line); return; }
+    if (carry === "origin") { origin.push(line); return; }
+    carry = null;
+  });
+  return { destination: destination.join(" "), origin: origin.join(" "), hasLabels: Boolean(destination.length || origin.length) };
+}
+
 /**
  * Requires exactly one directory city token to appear (word-boundary
  * anchored) in the given text, and that city to map to exactly one DC
@@ -59,8 +87,19 @@ function resolveUltaDcFromEmailV2_(text) {
   try {
     var directory = buildUltaDcDirectory_();
     var haystack = String(text || "").toUpperCase();
+    var labeled = gmailStoreLabeledLinesV2_(haystack);
+    // When the email labels a destination (or a pickup/origin) anywhere,
+    // only the destination-labeled text can identify the DC — a directory
+    // city mentioned solely on a pickup/origin line (e.g. "Pickup in
+    // Fresno; deliver to the new Phoenix DC") must not resolve to that
+    // pickup city just because it's the only directory-known city anywhere
+    // in the email (Codex review round 3 on PR #102). With no labels at
+    // all, fall back to the whole email — most real shipment emails aren't
+    // explicitly labeled and mention only the one relevant location, so
+    // restricting then would just suppress real matches for no reason.
+    var searchText = labeled.hasLabels ? labeled.destination : haystack;
     var matchedCities = Object.keys(directory).filter(function (city) {
-      return new RegExp("\\b" + city.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b").test(haystack);
+      return new RegExp("\\b" + city.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b").test(searchText);
     });
     if (matchedCities.length !== 1) return null;
     var dcValues = directory[matchedCities[0]];

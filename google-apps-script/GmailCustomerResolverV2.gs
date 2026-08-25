@@ -211,17 +211,28 @@ function hasCustomerLocationQualifierV2_(name) {
 }
 
 /**
- * Marks the position of a location qualifier (an opening paren, or a
- * "- N" suffix) so it survives the generic punctuation-to-space collapse
- * below as a distinguishable token, instead of becoming indistinguishable
- * from any other word-separating space. Applied identically to both a
- * candidate's own name and the email haystack, so "MEGA MART (PALO ALTO)"
- * and "MEGA MART (FREMONT)" both retain the marker right after "MEGA
- * MART" — letting customerKeyAppearsWithoutTrailingLocationV2_ detect that
- * a BARE "MEGA MART" key is immediately followed by a location qualifier
- * it doesn't itself include, and refuse to treat that as a match.
+ * Marks the position of a location qualifier (an opening/closing paren
+ * pair, or a "- N" suffix) so it survives the generic punctuation-to-space
+ * collapse below as a distinguishable token, instead of becoming
+ * indistinguishable from any other word-separating space. Applied
+ * identically to both a candidate's own name and the email haystack, so
+ * "MEGA MART (PALO ALTO)" and "MEGA MART (FREMONT)" both retain the marker
+ * right after "MEGA MART" — letting
+ * customerKeyAppearsWithoutTrailingLocationV2_ detect that a BARE
+ * "MEGA MART" key is immediately followed by a location qualifier it
+ * doesn't itself include, and refuse to treat that as a match.
+ *
+ * The CLOSE marker matters just as much as the OPEN one: without it, a
+ * shorter stored qualifier is a prefix-substring of a longer haystack
+ * mention of the same brand — e.g. stored "MEGA MART (PALO)" normalizes to
+ * "...SKLOCQUALIFIERV2 PALO" and would appear as a padded substring inside
+ * an email's "...SKLOCQUALIFIERV2 PALO ALTO...", incorrectly resolving to
+ * the wrong (shorter) location (Codex review round 3 on PR #102). Marking
+ * the close paren too means the stored key only matches when the FULL
+ * qualifier text between the markers is identical, not merely a prefix.
  */
 var CUSTOMER_LOCATION_MARKER_V2 = "SKLOCQUALIFIERV2";
+var CUSTOMER_LOCATION_MARKER_END_V2 = "SKLOCQUALIFIERV2END";
 
 /**
  * Lighter-touch than normalizeWmsCustomerKey_: uppercases, expands "&" to
@@ -237,6 +248,7 @@ function normalizedCustomerHaystackV2_(text) {
     .toUpperCase()
     .replace(/&/g, " AND ")
     .replace(/\(/g, " " + CUSTOMER_LOCATION_MARKER_V2 + " ")
+    .replace(/\)/g, " " + CUSTOMER_LOCATION_MARKER_END_V2 + " ")
     .replace(/-\s*(\d+)/g, " " + CUSTOMER_LOCATION_MARKER_V2 + " $1")
     .replace(/[^A-Z0-9]+/g, " ")
     .replace(/\s+/g, " ")

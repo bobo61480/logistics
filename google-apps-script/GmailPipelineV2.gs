@@ -370,19 +370,18 @@ function processLogisticsMessageV2_(message, isBroadenedOnly) {
   }));
 
   var documentFolderUrl = "";
-  // records.length, not just documentAttachments.length: the broadened
-  // search query is generic enough (e.g. "commercial invoice", "delivery
-  // order") that plenty of unrelated business emails can now match the
-  // search alone, get zero shipment records extracted, yet still create a
-  // permanent Drive folder for attachments no shipment ever references
-  // (Codex review on PR #102). Requiring at least one extracted record —
-  // already computed above, from either table extraction or the strong-
-  // context fallback — means a genuinely weak/irrelevant broadened match
-  // skips archiving entirely and falls through to the "no records" PENDING
-  // VERIFICATION branch below with an empty driveUrl, while a record that
-  // extracted something (even if it later fails full validation) still
-  // gets its documents archived so a human reviewing it can see them.
-  if (documentAttachments.length && records.length) {
+  // Skip archiving only for a weak, unproven broadened-only match with zero
+  // extracted records: the broadened search query is generic enough (e.g.
+  // "commercial invoice", "delivery order") that an unrelated business email
+  // could match the search alone, extract nothing, and still create a
+  // permanent Drive folder no shipment ever references (Codex review on
+  // PR #102). That risk is specific to threads found ONLY by the broadened
+  // query — the two original, already-trusted queries should keep archiving
+  // on a zero-record extraction failure exactly as before, since that's
+  // often the only artifact a human has to debug why extraction failed
+  // (Codex review round 3 on PR #102).
+  var isWeakBroadenedMatch = isBroadenedOnly && !records.length;
+  if (documentAttachments.length && !isWeakBroadenedMatch) {
     // A resolved customer/DC identity means an outbound-style sheet even
     // when context.kind itself stayed "" (the whole point of the broader
     // gate above) — otherwise a genuinely ULTA/IHERB/TJX-ROSS-bound email
