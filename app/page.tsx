@@ -14,6 +14,7 @@ import { ThemeToggle } from "./theme-toggle";
 import { DataGrids } from "./data-grids";
 import { IngestionRoadmapCard } from "./ingestion-roadmap-card";
 import { LOGISTICS_STATUS_OPTIONS } from "../lib/domain/status";
+import { inboundScheduleDateSource } from "../lib/domain/inbound-schedule";
 
 const SHEET_ID =
   process.env.NEXT_PUBLIC_LOGISTICS_MASTER_SHEET_ID ??
@@ -2884,9 +2885,12 @@ export default function Home() {
     const needle = query.trim().toLowerCase();
     return items.flatMap((item) => {
       if (item.direction !== "inbound" || item.isSmallParcel) return [];
-      // Warehouse receiving appointments use IMPORTS column Q (Delivery Expected);
-      // the Import Schedule table independently uses column O (ETA).
-      const scheduled = firstDatedValue(item.deliveryExpected ?? "");
+      // Use the warehouse receiving appointment when one exists. Before an
+      // appointment is assigned, keep the shipment visible on its ETA instead
+      // of dropping the live IMPORTS row from the Inbound Schedule entirely.
+      const scheduled = firstDatedValue(
+        inboundScheduleDateSource(item.deliveryExpected, item.eta),
+      );
       if (!scheduled) return [];
       const stamp = new Date(
         scheduled.date.getFullYear(),
