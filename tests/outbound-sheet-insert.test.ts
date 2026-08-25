@@ -10,6 +10,7 @@ type InsertHelpers = {
     record: Record<string, unknown>,
     allowInsert: boolean,
     sheetNames: string[],
+    dryRun: boolean,
   ) => UpsertResult;
 };
 
@@ -101,7 +102,7 @@ function loadInsertHelpers(sheets: Record<string, unknown[][]>, sourceOverride?:
     writeLog_: () => {},
     SpreadsheetApp: {
       openById: () => ({ getSheetByName: (name: string) => fakeSheets[name] || null }),
-      CopyPasteType: { PASTE_FORMAT: "FORMAT", PASTE_DATA_VALIDATION: "DATA_VALIDATION" },
+      CopyPasteType: { PASTE_FORMAT: "FORMAT", PASTE_FORMULA: "FORMULA", PASTE_DATA_VALIDATION: "DATA_VALIDATION" },
     },
   });
 
@@ -147,7 +148,7 @@ describe("chooseOutboundSheetV2_", () => {
 });
 
 describe("upsertOutboundEmailAcrossSheetsV2_", () => {
-  it("makes zero sheet writes in dry-run and logs the would-be insert", () => {
+  it("makes zero sheet writes in dry-run, reports a non-committed noop, and logs the would-be insert", () => {
     const rows = whTruckingRows([
       ["MEGA MART", "IN00100000", "", "08/10/2026", "", "", "", "", "", "", "", "", "", "", "", "", "XPO", "", "PRO100", "", "Work in Progress"],
     ]);
@@ -156,24 +157,46 @@ describe("upsertOutboundEmailAcrossSheetsV2_", () => {
       { customer: "MEGA MART", shipDate: "08/25/2026", invoice: "IN00999999", carrier: "XPO" },
       true,
       ["WH Trucking Request"],
+      true,
     );
-    expect(result).toMatchObject({ matched: true, action: "inserted", dryRun: true });
+    // matched:false, not true — a dry-run "would insert" must never be
+    // reported as a commit (Codex review on PR #103: the caller marks the
+    // Gmail message seen and writes a false "Received:" notice for
+    // anything matched:true, regardless of the action label).
+    expect(result).toEqual({ matched: false, action: "noop", dryRun: true });
     expect(fakeSheets["WH Trucking Request"].setValuesCalls).toHaveLength(0);
     expect(fakeSheets["WH Trucking Request"].setCalls).toHaveLength(0);
   });
 
-  it("inserts the correct columns and copies exemplar-row formatting once dry-run is disabled", () => {
+  it("makes zero sheet writes in dry-run for a MATCHED row too, not just new inserts", () => {
+    const rows = whTruckingRows([
+      ["MEGA MART", "IN00100000", "", "08/10/2026", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "PRO100", "", "Work in Progress"],
+    ]);
+    const { helpers, fakeSheets } = loadInsertHelpers({ "WH Trucking Request": rows });
+    // Same record that would update Carrier in the live test below — here
+    // dryRun:true must prevent that write entirely (Codex review on PR
+    // #103: only the insert path was ever dry-run-gated, so a matched
+    // update landed live immediately once resolvers were wired in).
+    const result = helpers.upsertOutboundEmailAcrossSheetsV2_(
+      { customer: "MEGA MART", pro: "PRO100", carrier: "NEW CARRIER" },
+      true,
+      ["WH Trucking Request"],
+      true,
+    );
+    expect(result).toEqual({ matched: false, action: "noop" });
+    expect(fakeSheets["WH Trucking Request"].setCalls).toHaveLength(0);
+  });
+
+  it("inserts the correct columns and copies exemplar-row format/formula/data-validation once dry-run is disabled", () => {
     const rows = whTruckingRows([
       ["MEGA MART", "IN00100000", "", "08/10/2026", "", "", "", "", "", "", "", "", "", "", "", "", "XPO", "", "PRO100", "", "Work in Progress"],
     ]);
-    const { helpers, fakeSheets } = loadInsertHelpers(
-      { "WH Trucking Request": rows },
-      (src) => src.replace("var OUTBOUND_INSERT_DRY_RUN_V2 = true;", "var OUTBOUND_INSERT_DRY_RUN_V2 = false;"),
-    );
+    const { helpers, fakeSheets } = loadInsertHelpers({ "WH Trucking Request": rows });
     const result = helpers.upsertOutboundEmailAcrossSheetsV2_(
       { customer: "TOKTOK BEAUTY", shipDate: "08/25/2026", invoice: "IN00999999", carrier: "XPO" },
       true,
       ["WH Trucking Request"],
+      false,
     );
     expect(result.action).toBe("inserted");
     const sheet = fakeSheets["WH Trucking Request"];
@@ -184,10 +207,16 @@ describe("upsertOutboundEmailAcrossSheetsV2_", () => {
     expect(written[3]).toBe("08/25/2026"); // SHIP DATE
     expect(written[16]).toBe("XPO"); // CARRIER
     expect(written[20]).toBe("Work in Progress"); // STATUS default
-    expect(sheet.copyToCalls.length).toBeGreaterThan(0);
+    // All three exemplar-row paste types, matching WmsTruckingSyncV2.gs's
+    // pattern (Codex review on PR #103: PASTE_FORMULA was missing, leaving
+    // formula-backed columns like VOLUME/CFT/PCF permanently blank).
+    const copiedTypes = sheet.copyToCalls.map((c) => (c as { type: string }).type);
+    expect(copiedTypes).toContain("FORMAT");
+    expect(copiedTypes).toContain("FORMULA");
+    expect(copiedTypes).toContain("DATA_VALIDATION");
   });
 
-  it("updates an existing row matched by PRO# rather than inserting a duplicate", () => {
+  it("updates an existing row matched by PRO# rather than inserting a duplicate, once dry-run is disabled", () => {
     const rows = whTruckingRows([
       ["MEGA MART", "IN00100000", "", "08/10/2026", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "PRO100", "", "Work in Progress"],
     ]);
@@ -196,24 +225,46 @@ describe("upsertOutboundEmailAcrossSheetsV2_", () => {
       { customer: "MEGA MART", pro: "PRO100", carrier: "NEW CARRIER" },
       true,
       ["WH Trucking Request"],
+      false,
     );
     expect(result).toMatchObject({ matched: true, action: "updated", row: 3 });
     expect(fakeSheets["WH Trucking Request"].setValuesCalls).toHaveLength(0); // no insert happened
     expect(fakeSheets["WH Trucking Request"].setCalls.some((c) => c.value === "NEW CARRIER")).toBe(true);
   });
 
-  it("never updates on a tied match, and stays a no-op when the record isn't independently insert-eligible either", () => {
+  it("matches an existing WH Trucking Request row by PRO# even with no resolved customer at all", () => {
+    // Restores upsertOutboundEmailV2_'s original behavior: matching never
+    // required a customer, only inserting did. GmailXpoV2.gs's fallback
+    // always calls with an unresolved customer — without this, it could
+    // never match anything again (Codex review on PR #103).
+    const rows = whTruckingRows([
+      ["MEGA MART", "IN00100000", "", "08/10/2026", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "PRO100", "", "Work in Progress"],
+    ]);
+    const { helpers, fakeSheets } = loadInsertHelpers({ "WH Trucking Request": rows });
+    const result = helpers.upsertOutboundEmailAcrossSheetsV2_(
+      { pro: "PRO100", carrier: "NEW CARRIER" },
+      false,
+      ["WH Trucking Request"],
+      false,
+    );
+    expect(result).toMatchObject({ matched: true, action: "updated", row: 3 });
+    expect(fakeSheets["WH Trucking Request"].setCalls.some((c) => c.value === "NEW CARRIER")).toBe(true);
+  });
+
+  it("never guesses between a tied match, and never inserts a duplicate on top of it even when otherwise insert-eligible", () => {
     const rows = whTruckingRows([
       ["MEGA MART", "IN00100000", "", "08/10/2026", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "Work in Progress"],
       ["MEGA MART", "IN00100000", "", "08/12/2026", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "Work in Progress"],
     ]);
     const { helpers, fakeSheets } = loadInsertHelpers({ "WH Trucking Request": rows });
-    // No shipDate — deliberately not insert-eligible, so this isolates the
-    // tie behavior: neither existing row is chosen for update.
+    // Fully insert-eligible (customer + shipDate + invoice all present) —
+    // proves the tie itself blocks the insert fallthrough, not merely a
+    // missing field (Codex review on PR #103).
     const result = helpers.upsertOutboundEmailAcrossSheetsV2_(
-      { customer: "MEGA MART", invoice: "IN00100000" },
+      { customer: "MEGA MART", invoice: "IN00100000", shipDate: "08/25/2026" },
       true,
       ["WH Trucking Request"],
+      false,
     );
     expect(result).toEqual({ matched: false, action: "noop" });
     expect(fakeSheets["WH Trucking Request"].setValuesCalls).toHaveLength(0);
@@ -227,22 +278,55 @@ describe("upsertOutboundEmailAcrossSheetsV2_", () => {
       { customer: "MEGA MART", shipDate: "08/25/2026", invoice: "IN00999999" },
       false,
       ["WH Trucking Request"],
+      false,
     );
     expect(result).toEqual({ matched: false, action: "noop" });
     expect(fakeSheets["WH Trucking Request"].setValuesCalls).toHaveLength(0);
   });
 
-  it("routes an IHERB-context record with no customer column data required beyond invoice/pro", () => {
+  it("routes an IHERB-context record with no customer column data required beyond invoice/pro and a ship date", () => {
     const iherbRows = [
       ["PO#", "BOL", "QTY", "FROM", "TO", "APPT #", "DELIVERY APPT", "VALUE", "TRUCKING", "RATE", "INVOICE", "STATUS"],
     ];
-    const { helpers, fakeSheets } = loadInsertHelpers(
-      { IHERB: iherbRows },
-      (src) => src.replace("var OUTBOUND_INSERT_DRY_RUN_V2 = true;", "var OUTBOUND_INSERT_DRY_RUN_V2 = false;"),
+    const { helpers, fakeSheets } = loadInsertHelpers({ IHERB: iherbRows });
+    const result = helpers.upsertOutboundEmailAcrossSheetsV2_(
+      { customer: "IHERB", invoice: "4500999999", shipDate: "08/25/2026" },
+      true,
+      ["IHERB"],
+      false,
     );
-    const result = helpers.upsertOutboundEmailAcrossSheetsV2_({ customer: "IHERB", invoice: "4500999999" }, true, ["IHERB"]);
     expect(result.action).toBe("inserted");
     const written = fakeSheets["IHERB"].setValuesCalls[0].values[0];
     expect(written[0]).toBe("4500999999"); // PO#
+  });
+
+  it("routes IHERB case-insensitively", () => {
+    const iherbRows = [
+      ["PO#", "BOL", "QTY", "FROM", "TO", "APPT #", "DELIVERY APPT", "VALUE", "TRUCKING", "RATE", "INVOICE", "STATUS"],
+    ];
+    const { helpers, fakeSheets } = loadInsertHelpers({ IHERB: iherbRows });
+    const result = helpers.upsertOutboundEmailAcrossSheetsV2_(
+      { customer: "iHerb", invoice: "4500999999", shipDate: "08/25/2026" },
+      true,
+      ["IHERB"],
+      false,
+    );
+    expect(result.action).toBe("inserted");
+    expect(fakeSheets["IHERB"].setValuesCalls).toHaveLength(1);
+  });
+
+  it("never inserts a date-less IHERB/TJX-ROSS record — eligibility matches validateRecord_'s universal outbound shipDate requirement", () => {
+    const iherbRows = [
+      ["PO#", "BOL", "QTY", "FROM", "TO", "APPT #", "DELIVERY APPT", "VALUE", "TRUCKING", "RATE", "INVOICE", "STATUS"],
+    ];
+    const { helpers, fakeSheets } = loadInsertHelpers({ IHERB: iherbRows });
+    const result = helpers.upsertOutboundEmailAcrossSheetsV2_(
+      { customer: "IHERB", invoice: "4500999999" }, // no shipDate
+      true,
+      ["IHERB"],
+      false,
+    );
+    expect(result).toEqual({ matched: false, action: "noop" });
+    expect(fakeSheets["IHERB"].setValuesCalls).toHaveLength(0);
   });
 });

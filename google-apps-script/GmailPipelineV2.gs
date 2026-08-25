@@ -328,7 +328,7 @@ function processLogisticsMessageV2_(message) {
       if (!normalizedStatus) throw new Error("Unsupported logistics status: " + record.status);
       record.status = normalizedStatus;
     }
-    var upsert = kind === "outbound" ? upsertOutboundEmailAcrossSheetsV2_(record, false, OUTBOUND_INSERT_SHEETS_V2) : upsertInboundEmailV2_(record, false);
+    var upsert = kind === "outbound" ? upsertOutboundEmailAcrossSheetsV2_(record, false, OUTBOUND_INSERT_SHEETS_V2, OUTBOUND_INSERT_DRY_RUN_V2) : upsertInboundEmailV2_(record, false);
     if (upsert.matched) {
       result[upsert.action] = (result[upsert.action] || 0) + 1;
       logGmailIngestionCommit_(kind, upsert.action, upsert.row, record, meta, documentFolderUrl);
@@ -341,7 +341,7 @@ function processLogisticsMessageV2_(message) {
       result.pending++;
       return;
     }
-    var inserted = kind === "outbound" ? upsertOutboundEmailAcrossSheetsV2_(record, true, OUTBOUND_INSERT_SHEETS_V2) : upsertInboundEmailV2_(record, true);
+    var inserted = kind === "outbound" ? upsertOutboundEmailAcrossSheetsV2_(record, true, OUTBOUND_INSERT_SHEETS_V2, OUTBOUND_INSERT_DRY_RUN_V2) : upsertInboundEmailV2_(record, true);
     if (inserted.action === "inserted") {
       result.inserted++;
       logGmailIngestionCommit_(kind, "inserted", inserted.row, record, meta, documentFolderUrl);
@@ -982,7 +982,12 @@ function setInboundDocsLinkV2_(sheet, rowNumber, label, folderUrl) {
  * INVOICE NO.=B, SHIP DATE=D, CARRIER=Q, PRO#=S, NOTE=T, STATUS=U).
  */
 function upsertOutboundEmailV2_(record, allowInsert) {
-  return upsertOutboundEmailAcrossSheetsV2_(record, allowInsert, ["WH Trucking Request"]);
+  // dryRun: false — always live, exactly preserving this shim's pre-
+  // existing behavior for its callers (GmailXpoV2.gs's fallback), which
+  // has no dry-run concept of its own and already writes live everywhere
+  // else in that file. OUTBOUND_INSERT_DRY_RUN_V2 only ever gates the
+  // automatic-ingestion path in processLogisticsMessageV2_.
+  return upsertOutboundEmailAcrossSheetsV2_(record, allowInsert, ["WH Trucking Request"], false);
 }
 
 function sameEmailIdV2_(a, b) {

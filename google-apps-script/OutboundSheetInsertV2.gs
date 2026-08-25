@@ -26,10 +26,18 @@
  * internal BP<->NJ warehouse-transfer log with no customer/shipper concept
  * at all — there is nothing for an external email to identify against.
  *
- * Ships behind OUTBOUND_INSERT_DRY_RUN_V2 = true: every scan runs and
- * matches for real, but an insert is logged to PIPELINE LOG instead of
- * written, the same rollout discipline WmsTruckingSyncV2.gs and
- * CustomerBackfill.gs used before their own live-write flips.
+ * Ships behind an explicit dryRun parameter, threaded from
+ * OUTBOUND_INSERT_DRY_RUN_V2 (= true) only for the automatic-ingestion
+ * caller — every match/insert scan still runs for real, but neither a
+ * matched-row update nor a new insert ever calls setValue while dry-run is
+ * on; both are logged to PIPELINE LOG instead ("OUTBOUND UPDATE DRY RUN" /
+ * "OUTBOUND INSERT DRY RUN"), the same rollout discipline
+ * WmsTruckingSyncV2.gs and CustomerBackfill.gs used before their own
+ * live-write flips. Critically, a dry-run outcome always returns
+ * `matched: false` — never a false "inserted"/"updated" — so the caller
+ * treats it exactly like a genuine non-match: falls through to
+ * validateRecord_ and PENDING VERIFICATION, rather than marking the Gmail
+ * message committed for a write that never happened.
  */
 
 var OUTBOUND_INSERT_DRY_RUN_V2 = true;
@@ -116,8 +124,14 @@ var OUTBOUND_SHEET_SPECS_V2 = {
     noteCol: null,
     statusCol: "STATUS",
     insertFields: { "PO#": "invoice", "BOL": "pro", "TRUCKING": "carrier" },
+    // record.shipDate is required here even though it's never written to a
+    // sheet cell (see the file-level comment on why): validateRecord_'s
+    // outbound branch always requires a ship date regardless of target
+    // sheet, and insert only ever runs after that validation passes — an
+    // eligibility rule looser than validateRecord_'s own gate would just be
+    // unreachable dead code (Codex review on PR #103).
     insertEligible: function (record) {
-      return Boolean(record.invoice || record.pro);
+      return Boolean(record.shipDate && (record.invoice || record.pro));
     }
   },
   "ULTA": {
@@ -153,8 +167,10 @@ var OUTBOUND_SHEET_SPECS_V2 = {
     noteCol: null,
     statusCol: "STATUS",
     insertFields: { "DC#": "customer", "PO#": "invoice", "SHIPMENT #": "shipmentNo", "BOL": "pro", "CARRIER": "carrier" },
+    // Same reasoning as IHERB above: validateRecord_ requires a ship date
+    // for every outbound record regardless of target sheet.
     insertEligible: function (record) {
-      return Boolean(record.customer && (record.invoice || record.pro || record.shipmentNo));
+      return Boolean(record.customer && record.shipDate && (record.invoice || record.pro || record.shipmentNo));
     }
   }
 };
@@ -174,7 +190,10 @@ function chooseOutboundSheetV2_(record, sheetNames) {
   if (!customer) return null;
   if (sheetNames.indexOf("ULTA") !== -1 && /^ULTA\s*\(/i.test(customer)) return "ULTA";
   if (sheetNames.indexOf("TJX/ROSS") !== -1 && /^\d{3,6}$/.test(customer)) return "TJX/ROSS";
-  if (sheetNames.indexOf("IHERB") !== -1 && customer === "IHERB") return "IHERB";
+  // Case-insensitive: a human typing "iHerb"/"Iherb" during PENDING
+  // VERIFICATION approval must still route here, not fall through to the
+  // WH Trucking Request default below (Codex review on PR #103).
+  if (sheetNames.indexOf("IHERB") !== -1 && customer.toUpperCase() === "IHERB") return "IHERB";
   if (sheetNames.indexOf("WH Trucking Request") !== -1) return "WH Trucking Request";
   return null;
 }
@@ -207,40 +226,92 @@ function isIherbContextV2_(meta) {
   return /\bIHERB\b/.test(text);
 }
 
-function upsertOutboundEmailAcrossSheetsV2_(record, allowInsert, sheetNames) {
-  var sheetName = chooseOutboundSheetV2_(record, sheetNames);
-  if (!sheetName) return { matched: false, action: "noop" };
-  var spec = OUTBOUND_SHEET_SPECS_V2[sheetName];
-  if (!spec) return { matched: false, action: "noop" };
+/**
+ * Which sheet to even ATTEMPT matching an existing row in — deliberately
+ * more permissive than chooseOutboundSheetV2_ (routing for a NEW/insert
+ * candidate), which requires a resolved customer/DC identity. The
+ * pre-existing upsertOutboundEmailV2_ this generalizes matched WH Trucking
+ * Request rows by PRO#/invoice alone, with no customer requirement at all
+ * — only its insert branch required one. Requiring an identity before even
+ * scanning for a match broke that (an outbound carrier notice with a clear
+ * PRO#/invoice but no confidently resolved customer could no longer update
+ * its own existing row, and GmailXpoV2.gs's fallback — which always calls
+ * with an unset record.customer — could never match anything at all;
+ * Codex review on PR #103). ULTA/IHERB/TJX-ROSS still require a resolved
+ * identity even to attempt a match: without one there is no principled way
+ * to know which of several sheets' PRO#/invoice namespace a bare
+ * identifier belongs to, unlike WH Trucking Request, which every caller
+ * already treats as the single default outbound sheet.
+ */
+function chooseOutboundMatchSheetV2_(record, sheetNames) {
+  var customer = String(record.customer || "").trim();
+  if (customer) return chooseOutboundSheetV2_(record, sheetNames);
+  return sheetNames.indexOf("WH Trucking Request") !== -1 ? "WH Trucking Request" : null;
+}
 
-  var ss = SpreadsheetApp.openById(GMAIL_PIPELINE.masterId);
-  var sheet = ss.getSheetByName(sheetName);
-  if (!sheet) return { matched: false, action: "noop" };
+/**
+ * dryRun is explicit, not read from the OUTBOUND_INSERT_DRY_RUN_V2 global
+ * directly, so each caller controls its own safety posture:
+ *  - processLogisticsMessageV2_ (automatic ingestion) passes the global
+ *    flag — the only path this rollout gate is meant to protect.
+ *  - upsertOutboundEmailV2_'s single-sheet shim (GmailXpoV2.gs's fallback)
+ *    and Validation.gs's human-approval commit both pass false: a human
+ *    approving a PENDING VERIFICATION row has already exercised the
+ *    judgment this flag exists to substitute for, and GmailXpoV2.gs
+ *    already writes live everywhere else in that file.
+ */
+function upsertOutboundEmailAcrossSheetsV2_(record, allowInsert, sheetNames, dryRun) {
+  var matchSheetName = chooseOutboundMatchSheetV2_(record, sheetNames);
+  var insertSheetName = chooseOutboundSheetV2_(record, sheetNames);
 
-  var scanRows = sheet.getRange(1, 1, Math.min(sheet.getLastRow(), 10), Math.max(sheet.getLastColumn(), 1)).getDisplayValues();
-  var header = spec.headerFinder(scanRows);
-  var lastRow = Math.max(sheet.getLastRow(), header.rowIndex + 1);
-  var lastCol = Math.max(sheet.getLastColumn(), 24);
-  var data = sheet.getRange(1, 1, lastRow, lastCol).getDisplayValues();
+  if (matchSheetName) {
+    var matchSpec = OUTBOUND_SHEET_SPECS_V2[matchSheetName];
+    var ss = SpreadsheetApp.openById(GMAIL_PIPELINE.masterId);
+    var sheet = ss.getSheetByName(matchSheetName);
+    if (sheet && matchSpec) {
+      var scanRows = sheet.getRange(1, 1, Math.min(sheet.getLastRow(), 10), Math.max(sheet.getLastColumn(), 1)).getDisplayValues();
+      var header = matchSpec.headerFinder(scanRows);
+      var lastRow = Math.max(sheet.getLastRow(), header.rowIndex + 1);
+      var lastCol = Math.max(sheet.getLastColumn(), 24);
+      var data = sheet.getRange(1, 1, lastRow, lastCol).getDisplayValues();
 
-  var candidates = [];
-  for (var r = header.rowIndex + 1; r < data.length; r++) {
-    var score = outboundMatchScoreV2_(data[r], record, header.map, spec.matchers);
-    if (score) candidates.push({ row: r + 1, score: score });
+      var candidates = [];
+      for (var r = header.rowIndex + 1; r < data.length; r++) {
+        var score = outboundMatchScoreV2_(data[r], record, header.map, matchSpec.matchers);
+        if (score) candidates.push({ row: r + 1, score: score });
+      }
+      candidates.sort(function (a, b) { return b.score - a.score; });
+
+      if (candidates.length) {
+        if (candidates[1] && candidates[0].score === candidates[1].score) {
+          // Tied match: never guess which row is right, and never insert a
+          // duplicate either — a tie among existing candidates means this
+          // identifier is already ambiguous on the sheet, a data problem
+          // an insert would only make worse (Codex review on PR #103).
+          return { matched: false, action: "noop" };
+        }
+        var rowNumber = candidates[0].row;
+        if (dryRun) {
+          logOutboundUpdateDryRunV2_(matchSheetName, rowNumber, record);
+          return { matched: false, action: "noop" };
+        }
+        var oldRow = data[rowNumber - 1];
+        var updateResult = updateOutboundRowV2_(sheet, rowNumber, oldRow, record, header.map, matchSpec);
+        return { matched: true, action: updateResult.changed ? "updated" : "noop", row: rowNumber, changes: updateResult.changes };
+      }
+    }
   }
-  candidates.sort(function (a, b) { return b.score - a.score; });
 
-  if (candidates.length && (!candidates[1] || candidates[0].score > candidates[1].score)) {
-    var rowNumber = candidates[0].row;
-    var oldRow = data[rowNumber - 1];
-    var updateResult = updateOutboundRowV2_(sheet, rowNumber, oldRow, record, header.map, spec);
-    return { matched: true, action: updateResult.changed ? "updated" : "noop", row: rowNumber, changes: updateResult.changes };
-  }
+  if (!allowInsert || !insertSheetName) return { matched: false, action: "noop" };
+  var insertSpec = OUTBOUND_SHEET_SPECS_V2[insertSheetName];
+  if (!insertSpec || !insertSpec.insertEligible(record)) return { matched: false, action: "noop" };
 
-  if (!allowInsert) return { matched: false, action: "noop" };
-  if (!spec.insertEligible(record)) return { matched: false, action: "noop" };
-
-  return insertOutboundRowV2_(sheetName, sheet, header, record, spec);
+  var insertSs = SpreadsheetApp.openById(GMAIL_PIPELINE.masterId);
+  var insertSheet = insertSs.getSheetByName(insertSheetName);
+  if (!insertSheet) return { matched: false, action: "noop" };
+  var insertScanRows = insertSheet.getRange(1, 1, Math.min(insertSheet.getLastRow(), 10), Math.max(insertSheet.getLastColumn(), 1)).getDisplayValues();
+  var insertHeader = insertSpec.headerFinder(insertScanRows);
+  return insertOutboundRowV2_(insertSheetName, insertSheet, insertHeader, record, insertSpec, dryRun);
 }
 
 function outboundMatchScoreV2_(row, record, map, matchers) {
@@ -292,10 +363,22 @@ function updateOutboundRowV2_(sheet, rowNumber, oldRow, record, map, spec) {
   return { changed: changed, changes: changes };
 }
 
-function insertOutboundRowV2_(sheetName, sheet, header, record, spec) {
-  if (OUTBOUND_INSERT_DRY_RUN_V2) {
+function insertOutboundRowV2_(sheetName, sheet, header, record, spec, dryRun) {
+  if (dryRun) {
     logOutboundInsertDryRunV2_(sheetName, record);
-    return { matched: true, action: "inserted", row: null, dryRun: true };
+    // matched:false, not true — a dry-run "would insert" is not a commit.
+    // Returning matched:true here (as an earlier revision did) made every
+    // caller treat this record as fully handled: the Gmail message gets
+    // marked seen, an "INGEST COMMIT" log entry and a Shipment Notices
+    // "Received:" row get written for a shipment that was never actually
+    // inserted anywhere, and a human-approved PENDING VERIFICATION row
+    // would flip to COMMITTED without ever being written live (Codex
+    // review on PR #103). Returning matched:false instead routes the
+    // record through the exact same path a genuinely no-match record
+    // takes — validateRecord_, then PENDING VERIFICATION — so a dry-run
+    // "would insert" is still fully visible and reviewable, and nothing
+    // is silently marked done.
+    return { matched: false, action: "noop", dryRun: true };
   }
 
   var width = Math.max.apply(null, Object.keys(header.map).map(function (k) { return header.map[k]; })) + 1;
@@ -319,10 +402,33 @@ function insertOutboundRowV2_(sheetName, sheet, header, record, spec) {
   sheet.getRange(startRow, 1, 1, width).setValues([newRow]);
   var exemplarRow = startRow - 1;
   if (exemplarRow > header.rowIndex + 1) {
-    sheet.getRange(exemplarRow, 1, 1, width).copyTo(sheet.getRange(startRow, 1, 1, width), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
-    sheet.getRange(exemplarRow, 1, 1, width).copyTo(sheet.getRange(startRow, 1, 1, width), SpreadsheetApp.CopyPasteType.PASTE_DATA_VALIDATION, false);
+    var exemplarRange = sheet.getRange(exemplarRow, 1, 1, width);
+    var newRange = sheet.getRange(startRow, 1, 1, width);
+    // All three paste types, matching WmsTruckingSyncV2.gs's exemplar-row
+    // pattern — PASTE_FORMULA is what keeps formula-backed columns (e.g.
+    // WH Trucking Request's VOLUME/CFT/PCF/DIMENSIONAL WEIGHT) computing
+    // once dimensions are filled in later; omitting it left every inserted
+    // row's calculated columns permanently blank (Codex review on PR #103).
+    exemplarRange.copyTo(newRange, SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
+    exemplarRange.copyTo(newRange, SpreadsheetApp.CopyPasteType.PASTE_FORMULA, false);
+    exemplarRange.copyTo(newRange, SpreadsheetApp.CopyPasteType.PASTE_DATA_VALIDATION, false);
   }
   return { matched: true, action: "inserted", row: startRow };
+}
+
+function logOutboundUpdateDryRunV2_(sheetName, rowNumber, record) {
+  try {
+    writeLog_("OUTBOUND UPDATE DRY RUN", sheetName, JSON.stringify({
+      sheet: sheetName,
+      row: rowNumber,
+      customer: record.customer || "",
+      invoice: record.invoice || "",
+      pro: record.pro || "",
+      shipDate: record.shipDate || "",
+      carrier: record.carrier || "",
+      status: record.status || ""
+    }));
+  } catch (e) { /* logging must never break ingestion */ }
 }
 
 function logOutboundInsertDryRunV2_(sheetName, record) {

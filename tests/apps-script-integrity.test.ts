@@ -292,8 +292,8 @@ describe("Apps Script production integrity", () => {
     const insert = read("google-apps-script/OutboundSheetInsertV2.gs");
     const validation = read("google-apps-script/Validation.gs");
     expect(pipeline).toContain("resolveOutboundTargetV2_({}, meta, context)");
-    expect(pipeline).toContain("upsertOutboundEmailAcrossSheetsV2_(record, false, OUTBOUND_INSERT_SHEETS_V2)");
-    expect(pipeline).toContain("upsertOutboundEmailAcrossSheetsV2_(record, true, OUTBOUND_INSERT_SHEETS_V2)");
+    expect(pipeline).toContain("upsertOutboundEmailAcrossSheetsV2_(record, false, OUTBOUND_INSERT_SHEETS_V2, OUTBOUND_INSERT_DRY_RUN_V2)");
+    expect(pipeline).toContain("upsertOutboundEmailAcrossSheetsV2_(record, true, OUTBOUND_INSERT_SHEETS_V2, OUTBOUND_INSERT_DRY_RUN_V2)");
     // A resolved customer/DC identity can only ever reach a live sheet
     // write while this stays true — flip only after reviewing several
     // dry-run cycles of "OUTBOUND INSERT DRY RUN" log entries, same
@@ -304,9 +304,12 @@ describe("Apps Script production integrity", () => {
     // customer/shipper concept at all (an internal BP<->NJ transfer log).
     expect(insert).not.toContain('"TRANSFERS"');
     // The single-sheet shim keeps GmailXpoV2.gs's fallback and any other
-    // pre-existing caller scoped to WH Trucking Request only.
-    expect(pipeline).toContain('upsertOutboundEmailAcrossSheetsV2_(record, allowInsert, ["WH Trucking Request"]);');
-    expect(validation).toContain("upsertOutboundEmailAcrossSheetsV2_(record, true, OUTBOUND_INSERT_SHEETS_V2)");
+    // pre-existing caller scoped to WH Trucking Request only, and always
+    // live (dryRun: false) — this rollout gate only ever protects the
+    // automatic-ingestion path, not a caller with no dry-run concept of
+    // its own or a human's explicit PENDING VERIFICATION approval.
+    expect(pipeline).toContain('upsertOutboundEmailAcrossSheetsV2_(record, allowInsert, ["WH Trucking Request"], false);');
+    expect(validation).toContain("upsertOutboundEmailAcrossSheetsV2_(record, true, OUTBOUND_INSERT_SHEETS_V2, false)");
   });
 
   it("reserves each Gmail search query its own thread-discovery share instead of a flat post-hoc slice", () => {

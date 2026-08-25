@@ -189,7 +189,10 @@ function commitApprovedPendingRow_(sheet, rowIndex1based, data, col) {
   // ULTA/TJX-ROSS identity into the Customer cell (a bare DC# number, an
   // "ULTA (CITY)" label, or literally "IHERB"), and that should route to
   // the matching sheet the same way automatic ingestion now does.
-  else { record.shipDate = when || record.shipDate; upsertOutboundEmailAcrossSheetsV2_(record, true, OUTBOUND_INSERT_SHEETS_V2); }
+  // dryRun: false — a human has already approved this specific write by
+  // setting the row's Status to APPROVED; the automatic-ingestion-only
+  // safety gate does not apply to an explicit human decision.
+  else { record.shipDate = when || record.shipDate; upsertOutboundEmailAcrossSheetsV2_(record, true, OUTBOUND_INSERT_SHEETS_V2, false); }
   sheet.getRange(rowIndex1based, col["Status"] + 1).setValue("COMMITTED");
   sheet.getRange(rowIndex1based, 1, 1, VALIDATION.pendingHeaders.length).setBackground(VALIDATION.colors.committed);
 }
