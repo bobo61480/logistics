@@ -1,0 +1,2113 @@
+<title>StyleKorean Logistics Hub</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700;800&family=Saira+Condensed:wght@600;700;800&display=swap">
+
+<!-- ============================================================
+     STYLEKOREAN LOGISTICS HUB — IMPORTABLE ARTIFACT TEMPLATE
+     ============================================================
+
+     This is a self-contained, portable dashboard template that
+     reproduces the full design system from stylekorean.dpdns.org.
+
+     HOW TO USE IN A NEW WEBAPP / WEBSITE:
+     ─────────────────────────────────────
+     1. CSS:   Copy the <style> block into your stylesheet.
+               All tokens are CSS custom properties on :root.
+     2. HTML:  Copy any section you need — each is marked with
+               ===== SECTION NAME ===== comments.
+     3. DATA:  The <script> block contains STYLEKOREAN_CONFIG
+               and STYLEKOREAN_DATA. Import these as JSON or
+               adapt the fetch logic to your backend.
+     4. THEME: The three-state dark mode is self-contained in CSS.
+               Just add the toggleTheme() function.
+
+     DATA SOURCES (Google Sheets):
+     ─────────────────────────────
+     • LOGISTICS MASTER 2026: 1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc
+     • Nationals:             12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8
+     • WMS/Sales:             14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I
+
+     TABS CONSUMED:
+     • IMPORTS (gid 1497250700)
+     • Outbound Shipping Schedule (gid 20260708)
+     • TRUCKING (gid 1418033635)
+     • NATIONAL ORDER PROGRESS (gid 99300389)
+     • WMS Sales (gid 0)
+     • SKW_Inbound / SKW_Stock (inventory)
+     ============================================================ -->
+
+<style>
+/* ============================================================
+   TOKEN SYSTEM — Copy this block to adopt the full palette.
+   Every component color references these tokens.
+   ============================================================ */
+:root {
+  --ink: #0f2430;
+  --ink-soft: #22404f;
+  --paper: #ecf0f1;
+  --paper-2: #e4eaec;
+  --line: #d5dee1;
+  --muted: #5b6e77;
+  --orange: #e4572e;
+  --orange-dark: #a74720;
+  --teal: #2a8f84;
+  --blue: #2f7fbf;
+  --green: #2e8b57;
+  --yellow: #b98a2e;
+
+  --surface: #ffffff;
+  --surface-2: #f6f8f8;
+  --surface-inset: #eef1f2;
+  --text: var(--ink);
+  --text-soft: var(--muted);
+  --text-faint: #8a99a0;
+  --hairline: var(--line);
+  --hairline-strong: #6a7c81;
+
+  --accent-imports: #3987e5;
+  --accent-transfers: #199e70;
+  --accent-outbound: #d95926;
+  --status-good: #0ca30c;
+  --status-warning: #b98a2e;
+  --status-serious: #c1602f;
+  --status-critical: #b23a3a;
+  --status-cleared: #2f7fbf;
+
+  --source-wholesale: #7556a8;
+  --source-ocean: #16899a;
+  --source-air: #3d6fd6;
+  --source-ups: #76522f;
+  --source-fedex: #6941a5;
+  --source-usps: #286aa6;
+  --source-amazon: #d98216;
+  --source-dhl: #cc9800;
+
+  --dept-wholesale: #7656a8;
+  --dept-b2b: #d45f2a;
+  --dept-nationals: #087f8c;
+  --dept-mbx: #3769c8;
+  --dept-nj: #2f7d55;
+}
+
+/* ---------- Dark theme (system preference) ---------- */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --surface: #111927;
+    --surface-2: #0d1420;
+    --surface-inset: #0b121f;
+    --text: #eaf0fa;
+    --text-soft: #93a0bc;
+    --text-faint: #56607a;
+    --hairline: rgba(147, 160, 188, 0.14);
+    --hairline-strong: rgba(147, 160, 188, 0.28);
+    --status-warning: #fab219;
+    --status-serious: #ec835a;
+    --status-critical: #d03b3b;
+    --status-cleared: #3987e5;
+  }
+}
+
+/* ---------- Dark theme (explicit toggle) ---------- */
+:root[data-theme="dark"] {
+  --surface: #111927;
+  --surface-2: #0d1420;
+  --surface-inset: #0b121f;
+  --text: #eaf0fa;
+  --text-soft: #93a0bc;
+  --text-faint: #56607a;
+  --hairline: rgba(147, 160, 188, 0.14);
+  --hairline-strong: rgba(147, 160, 188, 0.28);
+  --status-warning: #fab219;
+  --status-serious: #ec835a;
+  --status-critical: #d03b3b;
+  --status-cleared: #3987e5;
+}
+
+/* ============================================================
+   BASE STYLES
+   ============================================================ */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html {
+  background: var(--paper);
+  scroll-behavior: smooth;
+}
+
+body {
+  background:
+    repeating-linear-gradient(90deg, transparent 0 119px, rgba(15,36,48,.026) 119px 120px),
+    var(--paper);
+  color: var(--text);
+  font-family: "Archivo", sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) body { background: var(--surface-2); }
+  :root:not([data-theme="light"]) html { background: var(--surface-2); }
+}
+:root[data-theme="dark"] body { background: var(--surface-2); }
+:root[data-theme="dark"] html { background: var(--surface-2); }
+
+:focus-visible {
+  outline: 2.5px solid var(--orange);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+button, input, select { font: inherit; }
+button, a, select { -webkit-tap-highlight-color: transparent; }
+
+/* ============================================================
+   SITE SHELL — max-width container
+   ============================================================ */
+.site-shell {
+  width: min(100% - 32px, 1560px);
+  margin: 0 auto;
+  padding: 18px 0 40px;
+}
+
+/* ============================================================
+   MASTHEAD — dark hero block
+   ============================================================ */
+.manifest {
+  overflow: hidden;
+  border-radius: 14px;
+  background: var(--ink);
+  color: #fff;
+  box-shadow: 0 22px 44px -26px rgba(15, 36, 48, .65);
+}
+
+.route-strip {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  min-height: 39px;
+  padding: 0 26px;
+  border-bottom: 1px dashed rgba(233, 240, 242, .28);
+  color: #9fb6be;
+  font: 500 11px/1 "IBM Plex Mono", monospace;
+  letter-spacing: .14em;
+}
+
+.route-strip i {
+  height: 1px;
+  flex: 1;
+  background: repeating-linear-gradient(90deg, #51707c 0 8px, transparent 8px 14px);
+}
+
+.manifest-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 24px;
+  align-items: end;
+  padding: 30px 26px 26px;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  color: var(--orange);
+  font: 700 11px/1.2 "IBM Plex Mono", monospace;
+  letter-spacing: .18em;
+}
+
+.manifest h1 {
+  margin: 0;
+  color: #fff;
+  font: 800 clamp(44px, 6vw, 72px)/.92 "Saira Condensed", sans-serif;
+  letter-spacing: .015em;
+  text-transform: uppercase;
+}
+
+.manifest h1 em { color: var(--orange); font-style: normal; }
+
+.intro {
+  max-width: 620px;
+  margin: 14px 0 0;
+  color: #b9cbd1;
+  font-size: 14.5px;
+  line-height: 1.55;
+}
+
+.manifest-actions {
+  display: grid;
+  gap: 10px;
+  min-width: 250px;
+}
+
+.button {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 18px;
+  border: 1px solid #6a7c81;
+  border-radius: 10px;
+  color: #fff;
+  background: transparent;
+  font: 700 12px "Archivo", sans-serif;
+  text-decoration: none;
+  cursor: pointer;
+  transition: transform .15s ease, background .15s ease;
+}
+
+.button:hover { transform: translateY(-1px); }
+.button.primary { border-color: var(--orange); background: var(--orange); }
+.button.primary:hover { background: #f06438; }
+
+.source-buttons { display: grid; grid-template-columns: repeat(3, 1fr); }
+.source-buttons .button {
+  min-height: 40px;
+  padding-inline: 10px;
+  border-color: rgba(233, 240, 242, .4);
+  border-radius: 8px;
+  border-right-width: 0;
+  font: 700 9px "IBM Plex Mono", monospace;
+  letter-spacing: .035em;
+}
+.source-buttons .button:first-child { border-radius: 8px 0 0 8px; }
+.source-buttons .button:nth-child(2) { border-radius: 0; }
+.source-buttons .button:last-child { border-radius: 0 8px 8px 0; border-right-width: 1px; }
+
+/* Sync strip */
+.sync-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 13px;
+  min-height: 45px;
+  padding: 0 26px;
+  background: rgba(0, 0, 0, .28);
+  color: #c4d3d8;
+  font: 500 12.5px "Archivo", sans-serif;
+}
+
+.sync-strip > span { display: inline-flex; align-items: center; gap: 8px; }
+
+.sync-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 0 3px rgba(46, 139, 87, .25);
+}
+.sync-dot.loading { background: #f2b94b; box-shadow: 0 0 0 3px rgba(242,185,75,.18); }
+.sync-dot.error { background: #f0705f; box-shadow: 0 0 0 3px rgba(240,112,95,.18); }
+
+.mono { font-family: "IBM Plex Mono", monospace; }
+
+/* ============================================================
+   SYSTEM STATUS BADGES
+   ============================================================ */
+.badge-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+}
+
+.sys-badge {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 1;
+  min-width: 220px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 9px 14px;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.sys-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--accent-imports);
+  box-shadow: 0 0 0 3px rgba(57, 135, 229, .18);
+}
+.sys-badge.wh .sys-dot { background: var(--accent-transfers); box-shadow: 0 0 0 3px rgba(25, 158, 112, .18); }
+
+.sys-badge-name { font: 700 12px "IBM Plex Mono", monospace; }
+.sys-badge-host { color: var(--text-faint); font: 600 9px "IBM Plex Mono", monospace; }
+.sys-badge-status {
+  margin-left: auto;
+  font: 700 9px "IBM Plex Mono", monospace;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--green);
+  white-space: nowrap;
+}
+
+/* ============================================================
+   METRIC CARDS — 4-column summary strip
+   ============================================================ */
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.metrics article {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  min-height: 94px;
+  padding: 18px 18px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+}
+
+.metrics article:nth-child(1) { background: #dff5ec; border-color: #b5ddcf; }
+.metrics article:nth-child(2) { background: #ffe8da; border-color: #f3c2a8; }
+.metrics article:nth-child(3) { background: #eee8ff; border-color: #cec2f1; }
+.metrics article:nth-child(4) { background: #fff3d6; border-color: #ead49d; }
+
+.metrics article:nth-child(1) strong { color: #176a52; }
+.metrics article:nth-child(2) strong { color: #a74720; }
+.metrics article:nth-child(3) strong { color: #5c469d; }
+.metrics article:nth-child(4) strong { color: #8a6410; }
+
+.metrics span {
+  color: var(--muted);
+  font: 600 10px "IBM Plex Mono", monospace;
+  letter-spacing: .08em;
+}
+
+.metrics strong {
+  grid-row: span 2;
+  font: 800 34px/.9 "Saira Condensed", sans-serif;
+  letter-spacing: .01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.metrics small { color: var(--muted); font-size: 11px; }
+
+/* dark metric overrides */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .metrics article { background: var(--surface-2) !important; border-color: var(--hairline-strong) !important; }
+  :root:not([data-theme="light"]) .metrics strong { color: var(--text); }
+  :root:not([data-theme="light"]) .metrics span,
+  :root:not([data-theme="light"]) .metrics small { color: var(--text-faint); }
+}
+:root[data-theme="dark"] .metrics article { background: var(--surface-2) !important; border-color: var(--hairline-strong) !important; }
+:root[data-theme="dark"] .metrics strong { color: var(--text); }
+:root[data-theme="dark"] .metrics span,
+:root[data-theme="dark"] .metrics small { color: var(--text-faint); }
+
+/* ============================================================
+   KPI CONTROL TOWER — financial/operational KPI panel
+   ============================================================ */
+.kpi-panel {
+  margin-top: 18px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-top: 5px solid var(--orange);
+  border-radius: 14px;
+  background: #fff;
+}
+
+.kpi-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 18px 24px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.kpi-heading h2 {
+  margin: 0;
+  font: 800 30px/.95 "Saira Condensed", sans-serif;
+  text-transform: uppercase;
+  letter-spacing: .02em;
+}
+
+.kpi-heading > span {
+  padding: 5px 7px;
+  background: var(--ink);
+  color: #fff;
+  border-radius: 8px;
+  font: 700 8px "IBM Plex Mono", monospace;
+  letter-spacing: .08em;
+}
+
+.period-toggle {
+  display: inline-flex;
+  background: var(--surface-inset);
+  border: 1px solid var(--hairline);
+  border-radius: 20px;
+  padding: 2px;
+}
+.period-toggle button {
+  font: 700 10px "IBM Plex Mono", monospace;
+  letter-spacing: .06em;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  padding: 5px 14px;
+  border-radius: 20px;
+  cursor: pointer;
+}
+.period-toggle button.active { background: var(--accent-imports); color: #eaf0fa; }
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--line);
+}
+
+.kpi-card {
+  min-width: 0;
+  min-height: 116px;
+  padding: 10px 11px;
+  background: #fbfcfc;
+}
+
+.kpi-card:nth-child(1) { background: #fff4ed; }
+.kpi-card:nth-child(2) { background: #eef8f5; }
+.kpi-card:nth-child(3) { background: #f3f0fc; }
+.kpi-card:nth-child(4) { background: #eef3fb; }
+
+.kpi-card > span {
+  display: block;
+  min-height: 25px;
+  color: var(--muted);
+  font: 700 8px/1.25 "IBM Plex Mono", monospace;
+  letter-spacing: .06em;
+}
+
+.kpi-card > div {
+  display: grid;
+  grid-template-columns: 31px minmax(0, 1fr);
+  gap: 6px;
+  align-items: baseline;
+  padding: 5px 0;
+  border-top: 1px solid #e5e0d7;
+}
+
+.kpi-card small {
+  color: var(--muted);
+  font: 600 7px/1.2 "IBM Plex Mono", monospace;
+}
+
+.kpi-card strong {
+  overflow: hidden;
+  color: var(--ink);
+  font: 800 clamp(16px, 1.5vw, 24px)/.95 "Saira Condensed", sans-serif;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Carrier & average cards */
+.kpi-carrier { grid-column: span 2; }
+.kpi-carrier .carrier-table-head,
+.carrier-ranking li {
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) minmax(72px, .65fr) minmax(76px, .6fr);
+  gap: 8px;
+  align-items: center;
+}
+.kpi-carrier .carrier-table-head { padding: 0 0 4px; border-top: 0; }
+.carrier-table-head small:nth-child(n + 2) { text-align: right; }
+.carrier-ranking { margin: 0; padding: 0; list-style: none; }
+.carrier-ranking li { padding: 5px 0; border-top: 1px solid #e5e0d7; }
+.carrier-ranking strong {
+  overflow: hidden;
+  color: var(--orange-dark);
+  font: 800 clamp(15px, 1.35vw, 21px)/.95 "Saira Condensed", sans-serif;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.carrier-ranking b {
+  color: var(--ink);
+  font: 800 16px/.95 "Saira Condensed", sans-serif;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.carrier-ranking small { text-align: right; white-space: nowrap; }
+
+.kpi-average { grid-column: span 2; }
+.kpi-average > div {
+  grid-template-columns: minmax(76px, 1fr) minmax(62px, .65fr) minmax(62px, .65fr);
+  padding-block: 3px;
+}
+.kpi-average > .average-head { padding-top: 0; border-top: 0; }
+.kpi-average > .average-head small:nth-child(n + 2) { text-align: right; }
+.kpi-average strong { font-size: 18px; text-align: right; font-variant-numeric: tabular-nums; }
+
+.kpi-method {
+  margin: 0;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  background: #f6f8f8;
+}
+.kpi-method summary {
+  padding: 7px 12px;
+  color: var(--ink);
+  font: 700 8px/1.4 "IBM Plex Mono", monospace;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  list-style: none;
+}
+.kpi-method summary::-webkit-details-marker { display: none; }
+.kpi-method summary::before { content: "\25B8  "; }
+.kpi-method[open] summary::before { content: "\25BE  "; }
+.kpi-method p { margin: 0; padding: 0 12px 8px; font: 500 8px/1.4 "IBM Plex Mono", monospace; }
+.kpi-method a { color: var(--orange-dark); font-weight: 700; text-underline-offset: 2px; }
+
+/* dark KPI overrides */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .kpi-panel { border-color: var(--hairline-strong); background: var(--surface); }
+  :root:not([data-theme="light"]) .kpi-heading { border-bottom-color: var(--hairline); }
+  :root:not([data-theme="light"]) .kpi-heading h2,
+  :root:not([data-theme="light"]) .kpi-card strong,
+  :root:not([data-theme="light"]) .carrier-ranking b { color: var(--text); }
+  :root:not([data-theme="light"]) .kpi-grid { background: var(--hairline); }
+  :root:not([data-theme="light"]) .kpi-card { background: var(--surface); }
+  :root:not([data-theme="light"]) .kpi-card:nth-child(1) { background: #17202f; }
+  :root:not([data-theme="light"]) .kpi-card:nth-child(2) { background: #101e26; }
+  :root:not([data-theme="light"]) .kpi-card:nth-child(3) { background: #191828; }
+  :root:not([data-theme="light"]) .kpi-card:nth-child(4) { background: #10192b; }
+  :root:not([data-theme="light"]) .kpi-card > span,
+  :root:not([data-theme="light"]) .kpi-card small,
+  :root:not([data-theme="light"]) .carrier-ranking small { color: var(--text-faint); }
+  :root:not([data-theme="light"]) .kpi-card > div,
+  :root:not([data-theme="light"]) .carrier-ranking li { border-top-color: var(--hairline); }
+  :root:not([data-theme="light"]) .kpi-method { border-top-color: var(--hairline); background: var(--surface-2); color: var(--text-soft); }
+  :root:not([data-theme="light"]) .kpi-method summary { color: var(--text); }
+  :root:not([data-theme="light"]) .carrier-ranking strong { color: var(--accent-outbound); }
+}
+:root[data-theme="dark"] .kpi-panel { border-color: var(--hairline-strong); background: var(--surface); }
+:root[data-theme="dark"] .kpi-heading { border-bottom-color: var(--hairline); }
+:root[data-theme="dark"] .kpi-heading h2,
+:root[data-theme="dark"] .kpi-card strong,
+:root[data-theme="dark"] .carrier-ranking b { color: var(--text); }
+:root[data-theme="dark"] .kpi-grid { background: var(--hairline); }
+:root[data-theme="dark"] .kpi-card { background: var(--surface); }
+:root[data-theme="dark"] .kpi-card:nth-child(1) { background: #17202f; }
+:root[data-theme="dark"] .kpi-card:nth-child(2) { background: #101e26; }
+:root[data-theme="dark"] .kpi-card:nth-child(3) { background: #191828; }
+:root[data-theme="dark"] .kpi-card:nth-child(4) { background: #10192b; }
+:root[data-theme="dark"] .kpi-card > span,
+:root[data-theme="dark"] .kpi-card small,
+:root[data-theme="dark"] .carrier-ranking small { color: var(--text-faint); }
+:root[data-theme="dark"] .kpi-card > div,
+:root[data-theme="dark"] .carrier-ranking li { border-top-color: var(--hairline); }
+:root[data-theme="dark"] .kpi-method { border-top-color: var(--hairline); background: var(--surface-2); color: var(--text-soft); }
+:root[data-theme="dark"] .kpi-method summary { color: var(--text); }
+:root[data-theme="dark"] .carrier-ranking strong { color: var(--accent-outbound); }
+
+/* ============================================================
+   CONTROL PANEL / SEARCH / LEGENDS
+   ============================================================ */
+.control-panel {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  margin-top: 18px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, .94);
+}
+
+.search {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fbfcfc;
+}
+.search span { padding: 0 12px; color: var(--muted); font-size: 20px; }
+.search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font-size: 13px; }
+
+.finished-toggle { display: flex; align-items: center; gap: 8px; color: var(--ink-soft); font-size: 12px; white-space: nowrap; }
+.finished-toggle input { accent-color: var(--orange); }
+
+.source-legend {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px 14px;
+  align-items: center;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, .94);
+}
+.source-legend > strong { color: var(--ink); font: 700 9px "IBM Plex Mono", monospace; letter-spacing: .07em; text-transform: uppercase; }
+.source-legend > div { display: flex; flex-wrap: wrap; gap: 5px 12px; }
+.source-legend span { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-soft); font: 600 8px "IBM Plex Mono", monospace; white-space: nowrap; }
+.source-legend i { width: 8px; height: 8px; border-radius: 2px; }
+
+/* dark control panel overrides */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .control-panel { border-color: var(--hairline-strong); background: var(--surface); }
+  :root:not([data-theme="light"]) .search { border-color: var(--hairline-strong); background: var(--surface-inset); }
+  :root:not([data-theme="light"]) .search input { color: var(--text); }
+  :root:not([data-theme="light"]) .search span { color: var(--text-faint); }
+  :root:not([data-theme="light"]) .source-legend { border-color: var(--hairline-strong); background: var(--surface); }
+  :root:not([data-theme="light"]) .source-legend > strong { color: var(--text); }
+  :root:not([data-theme="light"]) .source-legend span { color: var(--text-soft); }
+}
+:root[data-theme="dark"] .control-panel { border-color: var(--hairline-strong); background: var(--surface); }
+:root[data-theme="dark"] .search { border-color: var(--hairline-strong); background: var(--surface-inset); }
+:root[data-theme="dark"] .search input { color: var(--text); }
+:root[data-theme="dark"] .search span { color: var(--text-faint); }
+:root[data-theme="dark"] .source-legend { border-color: var(--hairline-strong); background: var(--surface); }
+:root[data-theme="dark"] .source-legend > strong { color: var(--text); }
+:root[data-theme="dark"] .source-legend span { color: var(--text-soft); }
+
+/* ============================================================
+   IMPORT SCHEDULES TABLE
+   ============================================================ */
+.import-schedules {
+  margin-top: 18px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-top: 5px solid var(--blue);
+  border-radius: 14px;
+  background: #fff;
+}
+
+.import-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 18px 24px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.import-heading h2 { margin: 0; font: 800 30px/.95 "Saira Condensed", sans-serif; text-transform: uppercase; letter-spacing: .02em; }
+
+.import-totals {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: 650 9px "IBM Plex Mono", monospace;
+  text-transform: uppercase;
+}
+.import-totals span { padding: 6px 8px; border: 1px solid var(--line); border-radius: 999px; background: #eff3f4; }
+.import-totals span b { color: var(--blue); }
+.import-totals strong {
+  display: grid; min-width: 34px; height: 31px; place-items: center;
+  background: var(--ink); color: #fff; border-radius: 8px; font-size: 13px;
+}
+
+.import-table-wrap {
+  max-height: 420px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: #8c999b var(--paper-2);
+}
+
+.import-table {
+  width: 100%; min-width: 900px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font: 550 9px/1.35 "IBM Plex Mono", monospace;
+}
+
+.import-table th {
+  position: sticky; top: 0; z-index: 2;
+  padding: 7px 8px;
+  border-right: 1px solid #3a5056;
+  background: var(--ink);
+  color: #d8e1e3;
+  font-size: 8px;
+  letter-spacing: .07em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.import-table td {
+  overflow: hidden;
+  padding: 6px 8px;
+  border-top: 1px solid #ded9cf;
+  border-right: 1px solid #eee9e0;
+  color: var(--ink-soft);
+  text-overflow: ellipsis;
+  vertical-align: top;
+  white-space: pre-line;
+}
+
+.import-table tbody tr:nth-child(even) { background: #f7f9f9; }
+.import-table tbody tr:hover { background: #f1f6f7; }
+.import-table tbody tr { box-shadow: inset 4px 0 0 var(--source-ocean); }
+.import-table a { color: var(--ink); font-weight: 650; text-decoration-color: rgba(228, 87, 46, .55); text-underline-offset: 2px; }
+.import-table a:hover { color: var(--orange-dark); }
+
+.mode-pill {
+  display: inline-flex;
+  min-width: 45px;
+  justify-content: center;
+  padding: 3px 5px;
+  border-radius: 99px;
+  background: #e5e8e7;
+  color: #526165;
+  font-size: 8px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.mode-pill.ocean { background: #dceef1; color: #166d74; }
+.mode-pill.air { background: #e3e8f4; color: #355d91; }
+
+/* dark import overrides */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .import-schedules { border-color: var(--hairline-strong); background: var(--surface); }
+  :root:not([data-theme="light"]) .import-heading h2 { color: var(--text); }
+  :root:not([data-theme="light"]) .import-heading { border-bottom-color: var(--hairline); }
+  :root:not([data-theme="light"]) .import-totals span { border-color: var(--hairline-strong); background: var(--surface-inset); color: var(--text-soft); }
+  :root:not([data-theme="light"]) .import-totals span b { color: var(--accent-imports); }
+  :root:not([data-theme="light"]) .import-totals strong { background: var(--surface-inset); color: var(--text); }
+  :root:not([data-theme="light"]) .import-table td { border-top-color: var(--hairline); border-right-color: var(--hairline); color: var(--text-soft); }
+  :root:not([data-theme="light"]) .import-table tbody tr:nth-child(even) { background: rgba(147, 160, 188, .06); }
+  :root:not([data-theme="light"]) .import-table tbody tr:hover { background: var(--surface-inset); }
+  :root:not([data-theme="light"]) .import-table a { color: var(--text); }
+}
+:root[data-theme="dark"] .import-schedules { border-color: var(--hairline-strong); background: var(--surface); }
+:root[data-theme="dark"] .import-heading h2 { color: var(--text); }
+:root[data-theme="dark"] .import-heading { border-bottom-color: var(--hairline); }
+:root[data-theme="dark"] .import-totals span { border-color: var(--hairline-strong); background: var(--surface-inset); color: var(--text-soft); }
+:root[data-theme="dark"] .import-totals span b { color: var(--accent-imports); }
+:root[data-theme="dark"] .import-totals strong { background: var(--surface-inset); color: var(--text); }
+:root[data-theme="dark"] .import-table td { border-top-color: var(--hairline); border-right-color: var(--hairline); color: var(--text-soft); }
+:root[data-theme="dark"] .import-table tbody tr:nth-child(even) { background: rgba(147, 160, 188, .06); }
+:root[data-theme="dark"] .import-table tbody tr:hover { background: var(--surface-inset); }
+:root[data-theme="dark"] .import-table a { color: var(--text); }
+
+/* ============================================================
+   SCHEDULE PANELS (14-day calendar board)
+   ============================================================ */
+.schedule-stack { display: grid; gap: 18px; margin-top: 18px; }
+
+.schedule-panel {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+}
+.inbound-panel { border-top: 5px solid var(--teal); }
+.outbound-panel { border-top: 5px solid var(--orange); }
+
+.panel-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 18px 24px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.panel-heading h2 { margin: 0; font: 800 30px/.95 "Saira Condensed", sans-serif; text-transform: uppercase; letter-spacing: .02em; }
+
+.board-total {
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: end;
+  gap: 2px 10px;
+  min-width: 125px;
+  padding-left: 10px;
+  border-left: 4px solid var(--teal);
+}
+.board-total.outbound { border-color: var(--orange); }
+.board-total span { color: var(--muted); font: 700 9px "IBM Plex Mono", monospace; letter-spacing: .08em; }
+.board-total strong { grid-row: span 2; color: var(--ink); font: 800 30px/.8 "Saira Condensed", sans-serif; font-variant-numeric: tabular-nums; }
+.board-total small { color: var(--muted); font-size: 10px; }
+
+.board-wrap {
+  max-height: 500px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #8c999b var(--paper-2);
+  scroll-snap-type: x proximity;
+}
+
+.board {
+  display: grid;
+  grid-template-columns: repeat(14, minmax(178px, 1fr));
+  min-width: 2492px;
+}
+
+.day-column {
+  min-height: 260px;
+  border-right: 1px solid var(--line);
+  background: #fff;
+  scroll-snap-align: start;
+}
+.day-column:last-child { border-right: 0; }
+.day-column.today { background: rgba(228, 87, 46, .045); }
+
+.day-column > header {
+  position: sticky; top: 0; z-index: 2;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-rows: auto auto;
+  align-items: center;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--line);
+  background: #eff3f4;
+}
+
+.day-column.today > header { background: var(--ink); color: #fff; }
+.day-column header span { color: var(--orange); font: 700 10px "IBM Plex Mono", monospace; letter-spacing: .08em; }
+.day-column header strong { grid-row: span 2; align-self: center; margin-left: 7px; font: 800 27px/.8 "Saira Condensed", sans-serif; }
+.day-column header small { color: var(--muted); font: 600 9px "IBM Plex Mono", monospace; }
+.day-column.today header small { color: #9eb0b4; }
+.day-column header b { grid-column: 3; grid-row: 1 / span 2; display: grid; width: 23px; height: 23px; place-items: center; border: 1px solid var(--line); border-radius: 50%; color: var(--ink-soft); font: 600 9px "IBM Plex Mono", monospace; }
+.day-column.today header b { border-color: #51666c; color: #fff; }
+
+.day-items { display: grid; gap: 6px; padding: 6px; }
+
+.schedule-card {
+  position: relative;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--teal);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--teal) 7%, white);
+  box-shadow: none;
+}
+.schedule-card.outbound { border-left-color: var(--orange); background: color-mix(in srgb, var(--orange) 8%, white); }
+
+.card-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px 8px;
+  align-items: start;
+  min-height: 57px;
+  padding: 7px 26px 7px 7px;
+  cursor: pointer;
+}
+
+.summary-primary { display: grid; min-width: 0; gap: 2px; }
+.summary-primary small { color: var(--muted); font: 600 10px/1.1 "IBM Plex Mono", monospace; letter-spacing: .05em; }
+.summary-primary strong { min-width: 0; overflow: hidden; color: var(--ink); font: 700 10px/1.25 "IBM Plex Mono", monospace; text-overflow: ellipsis; white-space: nowrap; }
+
+.source-badge {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 150px;
+  align-items: center;
+  overflow: hidden;
+  padding: 3px 6px;
+  border-radius: 5px;
+  color: #fff;
+  font: 800 10px "IBM Plex Mono", monospace;
+  letter-spacing: .04em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-pill {
+  max-width: 115px;
+  overflow: hidden;
+  padding: 3px 9px;
+  min-height: 24px;
+  border-radius: 99px;
+  font: 700 8px "IBM Plex Mono", monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-transform: uppercase;
+  display: inline-flex;
+  align-items: center;
+}
+.status-pill.neutral { background: #def0f2; color: #176b71; }
+.status-pill.good { background: #deeee4; color: #2a6848; }
+.status-pill.warn { background: #f7e9ca; color: #7e5812; }
+.status-pill.hold { background: #fbe3d8; color: #a1481f; }
+.status-pill.stop { background: #fbdada; color: #a12f2f; }
+
+/* dark schedule overrides */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .schedule-panel { border-color: var(--hairline-strong); background: var(--surface); }
+  :root:not([data-theme="light"]) .panel-heading { border-bottom-color: var(--hairline); }
+  :root:not([data-theme="light"]) .panel-heading h2 { color: var(--text); }
+  :root:not([data-theme="light"]) .board-total { background: var(--surface-inset); color: var(--text-soft); }
+  :root:not([data-theme="light"]) .day-column { border-right-color: var(--hairline); background: var(--surface-2); }
+  :root:not([data-theme="light"]) .day-column > header { border-bottom-color: var(--hairline); background: var(--surface-inset); }
+  :root:not([data-theme="light"]) .day-column.today > header { background: #0a1420; color: var(--text); }
+  :root:not([data-theme="light"]) .day-column header span { color: var(--accent-outbound); }
+  :root:not([data-theme="light"]) .day-column header strong { color: var(--text); }
+  :root:not([data-theme="light"]) .day-column header small { color: var(--text-faint); }
+  :root:not([data-theme="light"]) .day-column header b { border-color: var(--hairline-strong); color: var(--text-soft); }
+  :root:not([data-theme="light"]) .schedule-card { border-color: var(--hairline-strong); background: var(--surface); color: var(--text); }
+  :root:not([data-theme="light"]) .summary-primary strong { color: var(--text); }
+  :root:not([data-theme="light"]) .summary-primary small { color: var(--text-faint); }
+  :root:not([data-theme="light"]) .status-pill.good { background: rgba(12,163,12,.16); color: #7be08a; }
+  :root:not([data-theme="light"]) .status-pill.warn { background: rgba(250,178,25,.16); color: #ffcf7d; }
+  :root:not([data-theme="light"]) .status-pill.hold { background: rgba(236,131,90,.18); color: #ff9d80; }
+  :root:not([data-theme="light"]) .status-pill.stop { background: rgba(208,59,59,.18); color: #ff9a95; }
+  :root:not([data-theme="light"]) .status-pill.neutral { background: rgba(57,135,229,.16); color: #8fb4ff; }
+}
+:root[data-theme="dark"] .schedule-panel { border-color: var(--hairline-strong); background: var(--surface); }
+:root[data-theme="dark"] .panel-heading { border-bottom-color: var(--hairline); }
+:root[data-theme="dark"] .panel-heading h2 { color: var(--text); }
+:root[data-theme="dark"] .board-total { background: var(--surface-inset); color: var(--text-soft); }
+:root[data-theme="dark"] .day-column { border-right-color: var(--hairline); background: var(--surface-2); }
+:root[data-theme="dark"] .day-column > header { border-bottom-color: var(--hairline); background: var(--surface-inset); }
+:root[data-theme="dark"] .day-column.today > header { background: #0a1420; color: var(--text); }
+:root[data-theme="dark"] .day-column header span { color: var(--accent-outbound); }
+:root[data-theme="dark"] .day-column header strong { color: var(--text); }
+:root[data-theme="dark"] .day-column header small { color: var(--text-faint); }
+:root[data-theme="dark"] .day-column header b { border-color: var(--hairline-strong); color: var(--text-soft); }
+:root[data-theme="dark"] .schedule-card { border-color: var(--hairline-strong); background: var(--surface); color: var(--text); }
+:root[data-theme="dark"] .summary-primary strong { color: var(--text); }
+:root[data-theme="dark"] .summary-primary small { color: var(--text-faint); }
+:root[data-theme="dark"] .status-pill.good { background: rgba(12,163,12,.16); color: #7be08a; }
+:root[data-theme="dark"] .status-pill.warn { background: rgba(250,178,25,.16); color: #ffcf7d; }
+:root[data-theme="dark"] .status-pill.hold { background: rgba(236,131,90,.18); color: #ff9d80; }
+:root[data-theme="dark"] .status-pill.stop { background: rgba(208,59,59,.18); color: #ff9a95; }
+:root[data-theme="dark"] .status-pill.neutral { background: rgba(57,135,229,.16); color: #8fb4ff; }
+
+/* ============================================================
+   CONTROL TOWER PANELS (always-dark carrier/freight panels)
+   ============================================================ */
+.ct-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 14px; }
+
+.ct-panel {
+  --ct-bg: #111927;
+  --ct-bg-inset: #0b121f;
+  --ct-ink: #eaf0fa;
+  --ct-ink-soft: #93a0bc;
+  --ct-ink-faint: #56607a;
+  --ct-hairline: rgba(147, 160, 188, .14);
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--ct-hairline);
+  border-top: 5px solid #3987e5;
+  border-radius: 14px;
+  background: var(--ct-bg);
+  color: var(--ct-ink);
+  padding: 18px 20px 20px;
+}
+
+.ct-eyebrow { display: block; margin-bottom: 2px; color: var(--ct-ink-faint); font: 700 8px "IBM Plex Mono", monospace; letter-spacing: .08em; text-transform: uppercase; }
+.ct-panel h2 { margin: 0; color: var(--ct-ink); font: 800 26px/.95 "Saira Condensed", sans-serif; text-transform: uppercase; }
+
+.ct-carrier-categories { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 14px; }
+.ct-carrier-category { min-width: 0; padding: 10px 12px; border: 1px solid var(--ct-hairline); border-radius: 8px; background: var(--ct-bg-inset); }
+.ct-carrier-category-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 10px; margin-bottom: 8px; }
+.ct-carrier-category-name { color: var(--ct-ink); font: 800 12px "IBM Plex Mono", monospace; letter-spacing: .02em; text-transform: uppercase; }
+.ct-carrier-category-counts { color: var(--ct-ink-soft); font: 600 10px "IBM Plex Mono", monospace; }
+.ct-carrier-category-counts b { color: var(--ct-ink); font-weight: 800; }
+.ct-carrier-category-list { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.ct-carrier-category-list li { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; font-size: 11.5px; }
+.ct-carrier-category-carrier { min-width: 0; overflow: hidden; color: var(--ct-ink); font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.ct-carrier-category-carrier-count { flex: 0 0 auto; color: var(--ct-ink-soft); font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; }
+
+.ct-split-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; margin: 4px 0 10px; background: var(--ct-bg-inset); }
+.ct-split-seg { height: 100%; }
+.ct-split-legend { display: flex; flex-wrap: wrap; gap: 12px 16px; color: var(--ct-ink-soft); font-size: 11px; }
+.ct-split-legend i { display: inline-block; width: 8px; height: 8px; margin-right: 5px; border-radius: 2px; vertical-align: middle; }
+
+/* ============================================================
+   PARCEL CARDS
+   ============================================================ */
+.parcel-panel {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-top: 5px solid var(--teal);
+  border-radius: 14px;
+  background: #fff;
+}
+.parcel-panel.outbound-panel { border-top-color: var(--orange); }
+
+.parcel-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 18px 24px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.parcel-heading h2 { margin: 0; font: 800 30px/.95 "Saira Condensed", sans-serif; text-transform: uppercase; letter-spacing: .02em; }
+
+.parcel-total {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 11px;
+  border-radius: 999px;
+  background: #edf1f1;
+  color: var(--ink-soft);
+  font: 700 9px "IBM Plex Mono", monospace;
+}
+.parcel-total strong { font-size: 12px; font-variant-numeric: tabular-nums; }
+
+.parcel-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(220px, 1fr));
+  gap: 12px;
+  padding: 4px 24px 24px;
+}
+
+.parcel-card {
+  position: relative;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-top: 4px solid var(--source-ocean);
+  border-radius: 12px;
+  background: #fbfcfc;
+}
+
+.parcel-summary {
+  display: grid;
+  gap: 5px;
+  min-height: 78px;
+  padding: 9px 28px 9px 10px;
+  cursor: pointer;
+}
+
+.parcel-invoice { overflow: hidden; color: var(--muted); font: 600 10px "IBM Plex Mono", monospace; text-overflow: ellipsis; white-space: nowrap; }
+
+.parcel-detail { padding: 9px 10px 10px; border-top: 1px solid #e4e5e2; }
+.parcel-tracking { display: block; overflow: hidden; margin-top: 10px; color: var(--ink); font: 700 11px/1.25 "IBM Plex Mono", monospace; text-overflow: ellipsis; white-space: nowrap; }
+.parcel-tracking-number { display: block; overflow: hidden; color: var(--muted); font: 600 10px "IBM Plex Mono", monospace; text-overflow: ellipsis; white-space: nowrap; }
+
+.parcel-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--ink-soft);
+  font: 600 10px "IBM Plex Mono", monospace;
+}
+.parcel-footer a {
+  min-height: 28px; padding: 7px 9px;
+  border: 1px solid #b9d8dc; border-radius: 8px;
+  background: #ecf7f6; color: #0a6e75;
+  text-decoration: none; font-weight: 700;
+}
+
+/* dark parcel overrides */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .parcel-panel { border-color: var(--hairline-strong); background: var(--surface); }
+  :root:not([data-theme="light"]) .parcel-heading { border-bottom-color: var(--hairline); }
+  :root:not([data-theme="light"]) .parcel-heading h2 { color: var(--text); }
+  :root:not([data-theme="light"]) .parcel-total { background: var(--surface-inset); color: var(--text-soft); }
+  :root:not([data-theme="light"]) .parcel-card { border-color: var(--hairline-strong); background: var(--surface); color: var(--text); }
+  :root:not([data-theme="light"]) .parcel-detail { border-top-color: var(--hairline); }
+  :root:not([data-theme="light"]) .parcel-invoice { color: var(--text-faint); }
+}
+:root[data-theme="dark"] .parcel-panel { border-color: var(--hairline-strong); background: var(--surface); }
+:root[data-theme="dark"] .parcel-heading { border-bottom-color: var(--hairline); }
+:root[data-theme="dark"] .parcel-heading h2 { color: var(--text); }
+:root[data-theme="dark"] .parcel-total { background: var(--surface-inset); color: var(--text-soft); }
+:root[data-theme="dark"] .parcel-card { border-color: var(--hairline-strong); background: var(--surface); color: var(--text); }
+:root[data-theme="dark"] .parcel-detail { border-top-color: var(--hairline); }
+:root[data-theme="dark"] .parcel-invoice { color: var(--text-faint); }
+
+/* ============================================================
+   FOOTER
+   ============================================================ */
+footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 8px 6px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+footer strong {
+  margin-right: 5px;
+  padding: 3px 6px;
+  background: var(--ink);
+  color: #fff;
+  border-radius: 6px;
+  font-family: "Saira Condensed", sans-serif;
+  letter-spacing: .05em;
+}
+
+/* ============================================================
+   THEME TOGGLE (in-page button)
+   ============================================================ */
+.theme-toggle-btn {
+  display: inline-flex;
+  min-height: 35px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 14px;
+  border: 1px solid rgba(233, 240, 242, .4);
+  border-radius: 10px;
+  color: #fff;
+  background: transparent;
+  font: 700 11px "IBM Plex Mono", monospace;
+  letter-spacing: .035em;
+  cursor: pointer;
+}
+.theme-toggle-btn:hover { transform: translateY(-1px); }
+
+/* ============================================================
+   RESPONSIVE BREAKPOINTS
+   ============================================================ */
+@media (max-width: 900px) {
+  .site-shell { width: min(100% - 20px, 1560px); }
+  .manifest-main { grid-template-columns: 1fr; padding: 24px 18px 20px; }
+  .manifest-actions { grid-template-columns: 1fr 1fr; min-width: 0; }
+  .metrics { grid-template-columns: repeat(2, 1fr); }
+  .kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .control-panel { grid-template-columns: 1fr; }
+  .source-legend { grid-template-columns: 1fr; }
+  .parcel-grid { grid-template-columns: repeat(2, minmax(210px, 1fr)); padding-inline: 16px; }
+  .ct-row { grid-template-columns: 1fr; }
+  .kpi-heading, .panel-heading { padding: 16px 16px 12px; }
+}
+
+@media (max-width: 580px) {
+  .manifest h1 { font-size: 42px; }
+  .manifest-actions { grid-template-columns: 1fr; }
+  .metrics { grid-template-columns: 1fr 1fr; }
+  .kpi-grid { grid-template-columns: 1fr 1fr; }
+  .panel-heading { align-items: flex-start; flex-direction: column; }
+  .parcel-grid { grid-template-columns: 1fr; }
+  .ct-carrier-categories { grid-template-columns: 1fr; }
+  footer { flex-direction: column; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition: none !important; }
+}
+</style>
+
+<!-- ============================================================
+     DATA PACKAGE — All configuration, data sources, schemas,
+     and sample data in one portable JavaScript module.
+     Import STYLEKOREAN_CONFIG and STYLEKOREAN_DATA into any app.
+     ============================================================ -->
+<script>
+// ================================================================
+// STYLEKOREAN_CONFIG — Data source registry
+// Copy this object into your app to connect to the same backends.
+// ================================================================
+const STYLEKOREAN_CONFIG = {
+  version: "1.0.0",
+  generatedFrom: "stylekorean.dpdns.org",
+  generatedAt: "2026-08-25",
+
+  // ──── Google Sheets (primary data sources) ────
+  sheets: {
+    logisticsMaster: {
+      id: "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc",
+      name: "LOGISTICS MASTER 2026",
+      url: "https://docs.google.com/spreadsheets/d/1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc/edit",
+      tabs: {
+        imports:          { name: "IMPORTS",                   gid: 1497250700 },
+        outbound:         { name: "Outbound Shipping Schedule", gid: 20260708 },
+        trucking:         { name: "TRUCKING",                  gid: 1418033635 },
+        whTrucking:       { name: "WH Trucking Request",       gid: null },
+        b2bEcom:          { name: "B2B/E-COM TRUCKING",        gid: null },
+        transfers:        { name: "TRANSFERS",                 gid: null },
+        ulta:             { name: "ULTA",                      gid: null },
+        iherb:            { name: "IHERB",                     gid: null },
+        tjxRoss:          { name: "TJX/ROSS",                  gid: null },
+      }
+    },
+    nationals: {
+      id: "12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8",
+      name: "Nationals",
+      url: "https://docs.google.com/spreadsheets/d/12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8/edit",
+      tabs: {
+        nationalOrderProgress: { name: "NATIONAL ORDER PROGRESS", gid: 99300389 }
+      }
+    },
+    wmsSales: {
+      id: "14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I",
+      name: "WMS/Sales",
+      url: "https://docs.google.com/spreadsheets/d/14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I/edit",
+      tabs: {
+        wmsSales:    { name: "WMS Sales",    gid: 0 },
+        skwInbound:  { name: "SKW_Inbound",  gid: null },
+        skwStock:    { name: "SKW_Stock",     gid: null }
+      }
+    }
+  },
+
+  // ──── API Endpoints ────
+  endpoints: {
+    snapshot:    "/api/logistics/snapshot",
+    status:      "/api/logistics/status",
+    workerBase:  "https://stylekorean.dpdns.org"
+  },
+
+  // ──── Google Sheets direct CSV (fallback read path) ────
+  gvizCsvUrl: function(sheetId, gid) {
+    return "https://docs.google.com/spreadsheets/d/" + sheetId +
+           "/gviz/tq?tqx=out:csv&gid=" + gid;
+  },
+
+  // ──── Auto-refresh interval ────
+  autoRefreshMs: 30 * 60 * 1000,
+
+  // ──── Status values ────
+  statuses: {
+    outbound: ["", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "SHIPPING",
+               "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED"],
+    inbound:  ["", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "SHIPPING",
+               "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED",
+               "N/A", "Customs Clearance", "FDA Review/Hold", "FWS Review/Hold", "Delayed"],
+    finished: ["shipped", "delivered", "received", "cancelled", "completed"]
+  },
+
+  // ──── Source / Department classification ────
+  sources: ["Wholesale", "Ocean", "Air", "UPS (Parcel)", "FedEx (Parcel)",
+            "USPS", "Amazon", "DHL (Small Parcel)", "UPS (Freight)",
+            "FedEx (Freight)", "DHL (Freight)"],
+  departments: ["Wholesale", "B2B/E-Com", "Nationals", "MBX", "NJ"],
+
+  // ──── Typography system ────
+  fonts: {
+    display:  "Saira Condensed",
+    mono:     "IBM Plex Mono",
+    body:     "Archivo",
+    googleFontsUrl: "https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700;800&family=Saira+Condensed:wght@600;700;800&display=swap"
+  },
+
+  // ──── Color tokens (for programmatic use) ────
+  tokens: {
+    ink:     "#0f2430",  paper:    "#ecf0f1",
+    orange:  "#e4572e",  teal:     "#2a8f84",
+    blue:    "#2f7fbf",  green:    "#2e8b57",
+    yellow:  "#b98a2e",  muted:    "#5b6e77",
+    dark:    { surface: "#111927", surface2: "#0d1420", text: "#eaf0fa" }
+  }
+};
+
+// ================================================================
+// STYLEKOREAN_DATA — Sample/fixture data for the dashboard.
+// Replace these arrays with live data from the APIs above.
+// ================================================================
+const STYLEKOREAN_DATA = {
+  // ──── Type Definitions (TypeScript reference) ────
+  // ScheduleItem: { id, direction, date, dateText, title, reference,
+  //   secondary, status, sourceSheet, sourceRow, sourceUrl, editable,
+  //   customer, customerNo, po, invoice, shipmentNo, shipmentUrl,
+  //   invoiceUrl, container, containerUrl, mbl, hbl, pro, carrier,
+  //   carrierReference, trackingNumber, shipDate, mode, vessel, pod,
+  //   eta, deliveryExpected, isSmallParcel, shippingMethod, sourceType,
+  //   department }
+  //
+  // KpiSnapshot: { shippingMtd, shippingYtd, transfersMtd, transfersYtd,
+  //   njTransferMtd, njTransferYtd, nationalsSalesMtd, nationalsSalesYtd,
+  //   wmsSalesMtd, wmsSalesYtd, topCarriers[], ltlPercent, ftlPercent,
+  //   avgLocal, avgCalifornia, avgOutOfState, avgLocalMtd, avgCaliforniaMtd,
+  //   avgOutOfStateMtd }
+  //
+  // InventoryItem: { id, shipmentNo, productName, sku, upc,
+  //   expirationDate, palletNumber, quantity, location, status }
+
+  // ──── KPI data ────
+  kpis: {
+    shippingMtd: 84210, shippingYtd: 612480,
+    transfersMtd: 31590, transfersYtd: 228170,
+    njTransferMtd: 12800, njTransferYtd: 96400,
+    nationalsSalesMtd: 194520, nationalsSalesYtd: 1842300,
+    wmsSalesMtd: 87640, wmsSalesYtd: 743100,
+    topCarriers: [
+      { name: "XPO LOGISTICS",  earnings: 148200, moves: 42, shipmentPercent: 31.2 },
+      { name: "ESTES EXPRESS",  earnings: 112800, moves: 35, shipmentPercent: 26.0 },
+      { name: "FedEx FREIGHT",  earnings: 89400,  moves: 28, shipmentPercent: 20.7 }
+    ],
+    ltlPercent: 58, ftlPercent: 42,
+    avgLocalMtd: 680,  avgLocal: 720,
+    avgCaliforniaMtd: 1240, avgCalifornia: 1180,
+    avgOutOfStateMtd: 2890, avgOutOfState: 3120,
+  },
+
+  // ──── Metric card summaries ────
+  metrics: {
+    inbound: 12, outbound: 47, dueToday: 8, exceptions: 3
+  },
+
+  // ──── Import schedules ────
+  imports: [
+    { shipNo: "OSL-12", container: "SMCU 7284901", vessel: "SM BUSAN",     mode: "ocean", eta: "08/28/2026", status: "SCHEDULED",         invoices: "IN00462018, IN00462019" },
+    { shipNo: "OSL-13", container: "MAEU 3917205", vessel: "MAERSK ELBA",  mode: "ocean", eta: "09/02/2026", status: "CUSTOMS CLEARANCE", invoices: "IN00463011" },
+    { shipNo: "AIR-08", container: null,            vessel: "KE 017",       mode: "air",   eta: "08/26/2026", status: "PENDING",            invoices: "IN00464502" },
+    { shipNo: "OSL-14", container: "HDMU 6104823", vessel: "HMM PROMISE",  mode: "ocean", eta: "09/08/2026", status: "SCHEDULED",         invoices: "IN00465030, IN00465031" },
+    { shipNo: "AIR-09", container: null,            vessel: "OZ 201",       mode: "air",   eta: "08/27/2026", status: "DELIVERED",          invoices: "IN00464710" },
+  ],
+
+  // ──── Inbound schedule items (calendar board) ────
+  inboundSchedule: [
+    { date: "2026-08-25", items: [
+      { id: "AIR-08",  ref: "KE 017",        title: "Incheon Air Freight",       status: "PENDING" },
+      { id: "OSL-11",  ref: "FedEx Freight",  title: "Transfer from NJ Warehouse", status: "DELIVERED" }
+    ]},
+    { date: "2026-08-26", items: [
+      { id: "AIR-09",  ref: "OZ 201",         title: "Asiana Air Shipment",       status: "SCHEDULED" }
+    ]},
+    { date: "2026-08-28", items: [
+      { id: "OSL-12",  ref: "SMCU 7284901",   title: "SM Line Ocean Import",      status: "SCHEDULED" }
+    ]},
+    { date: "2026-09-01", items: [
+      { id: "OSL-13",  ref: "MAEU 3917205",   title: "Maersk Ocean Import",       status: "CUSTOMS CLEARANCE" }
+    ]},
+  ],
+
+  // ──── Outbound schedule items (calendar board) ────
+  outboundSchedule: [
+    { date: "2026-08-25", items: [
+      { id: "WH-2841", ref: "XPO Logistics",  title: "ULTA Beauty DC",           status: "WORK IN PROGRESS", dept: "Nationals" },
+      { id: "WH-2842", ref: "Estes Express",  title: "TJX Framingham",           status: "SHIPPING",         dept: "Nationals" },
+      { id: "WH-2843", ref: "FedEx Freight",  title: "NJ Warehouse Transfer",    status: "SCHEDULED",        dept: "NJ" }
+    ]},
+    { date: "2026-08-26", items: [
+      { id: "WH-2844", ref: "XPO Logistics",  title: "Ross Stores DC",           status: "SCHEDULED",        dept: "Nationals" },
+      { id: "WH-2845", ref: "Old Dominion",   title: "Burlington Coat Factory",   status: "SCHEDULED",        dept: "Nationals" }
+    ]},
+    { date: "2026-08-27", items: [
+      { id: "B2B-112", ref: "UPS",            title: "E-Commerce Batch",          status: "SCHEDULED",        dept: "B2B/E-Com" }
+    ]},
+  ],
+
+  // ──── Carrier mix (Control Tower) ────
+  carriers: {
+    trucking: [
+      { name: "XPO Logistics",  count: 7 },
+      { name: "Estes Express",  count: 5 },
+      { name: "FedEx Freight",  count: 4 },
+      { name: "Old Dominion",   count: 2 }
+    ],
+    parcel: [
+      { name: "UPS",   count: 14 },
+      { name: "FedEx", count: 10 },
+      { name: "USPS",  count: 5 }
+    ]
+  },
+
+  // ──── Freight mode split (Control Tower) ────
+  freightModes: [
+    { name: "Air",      percent: 42, color: "#3987e5" },
+    { name: "Ocean",    percent: 28, color: "#199e70" },
+    { name: "Trucking", percent: 18, color: "#d95926" },
+    { name: "Parcel",   percent: 12, color: "#b98a2e" }
+  ],
+
+  // ──── Parcel shipments ────
+  parcels: [
+    { carrier: "UPS",    source: "--source-ups",    title: "Sample from Korea HQ",  invoice: "INV-2026-0891", tracking: "1Z 999 AA1 01 2345 6784", trackingStatus: "In Transit - Departed Incheon",  shipDate: "08/23" },
+    { carrier: "FedEx",  source: "--source-fedex",  title: "Marketing Materials",   invoice: "INV-2026-0894", tracking: "7489 2748 0192",           trackingStatus: "Delivered - Buena Park",         shipDate: "08/21" },
+    { carrier: "USPS",   source: "--source-usps",   title: "Returns from Customer", invoice: "RMA-2026-0412", tracking: "9400 1118 9956 4728 1403 25", trackingStatus: "In Transit - Los Angeles",   shipDate: "08/24" },
+    { carrier: "Amazon", source: "--source-amazon", title: "Warehouse Supplies",    invoice: "PO-2026-3881",  tracking: "TBA 304819274810",          trackingStatus: "Out for Delivery",               shipDate: "08/24" }
+  ],
+
+  // ──── Document links (packing lists & invoices by shipment) ────
+  documentLinks: {
+    packingLists: {
+      "ER11": "https://docs.google.com/spreadsheets/d/13BC25uxEEESG5VdXFe933ovemUZGj7Zi/edit"
+    },
+    shipmentFolders: {
+      "TW2": "https://drive.google.com/drive/folders/1jfuGE7P5meftAEyjpvmc-mJtj1pxodP5",
+      "TW3": "https://drive.google.com/drive/folders/1nlSkU1LLHBnXK-CzqKUvJrHW91xXDnXk",
+      "TW4": "https://drive.google.com/drive/folders/1ljKGssG5ZArPkyW28c43D7_DIk-qos50",
+      "OSL1 - 2026": "https://drive.google.com/drive/folders/18yePWJKIOfzctOOMAkfvtXktaZB13Cyn",
+      "OSL2 - 2026": "https://drive.google.com/drive/folders/1JCsw8bwe9rDVEiP3Wv3eFdHtOLMAchTu",
+      "OSL3 - 2026": "https://drive.google.com/drive/folders/1ze48VaDZgp0xY-rM6E1xMrhUVrGqL70p",
+      "OSL4 - 2026": "https://drive.google.com/drive/folders/1o5ZcxlpSiZTryQRYfafuxnpKCzRGRIep",
+      "OSL5 - 2026": "https://drive.google.com/drive/folders/1FOB7O7Dc3QvtyTUag290xA2spms05nEa",
+      "OSL6 - 2026": "https://drive.google.com/drive/folders/1hredrp7TZeGpg_W0iLhMkieFnlv-24Sw",
+      "OSL7 - 2026 / CLIO": "https://drive.google.com/drive/folders/1S7DmExjizQd76BzztbvhTSVaaMu-ZIvJ",
+      "OSL8 - 2026": "https://drive.google.com/drive/folders/11keujBD_O2a7KaKPntiU0nK-zpKCVEdH",
+      "OSL9 - 2026": "https://drive.google.com/drive/folders/15CZQWz8_cs4XNr_reeOMDdcoFRKbYrz-",
+      "HJ1 - 2026": "https://drive.google.com/drive/folders/1Cc8QUryKUJcftLgisX0mnEGFJ5KFdRb0",
+      "HJ2 - 2026": "https://drive.google.com/drive/folders/1qaknG_IvBdSnFeeX1FqcyxFpJvy0H5IE",
+      "HJ3 - 2026": "https://drive.google.com/drive/folders/1zKFvPkC-uET_F1vzPmV62glIlVJzz_tf",
+      "ES2 - 2026": "https://drive.google.com/drive/folders/197_04i4pPi04tIoPmvUYlxDJFn5xDpU8",
+      "ES3 - 2026": "https://drive.google.com/drive/folders/1hCPnGpezelD8iZ9w61lN8CdGf0jtrZY0",
+      "ES4 - 2026": "https://drive.google.com/drive/folders/1WZrJDrdtoTj-h70mWmMqEStongtQHn3n",
+      "ES5 - 2026": "https://drive.google.com/drive/folders/1l54bzQNmd6kD2a5IcSFAxd9dYD3-k_Vb",
+      "ES6 - 2026": "https://drive.google.com/drive/folders/1pLH7MiYOEAyfS_AJWlu6NGBlzqO0KYhT"
+    },
+    invoiceLinks: {
+      "IN00450138": "https://drive.google.com/file/d/1DMswm8vkSEGnCC0FgSmG_TlbYmYefcKP",
+      "IN00450146": "https://drive.google.com/file/d/1CaGhjnJQLfxTWz-Z4clZH4lfxN9h-J5B",
+      "IN00450317": "https://drive.google.com/file/d/1gFTMl8Q3XTVQF-ruOIeYcBoEPLzs5Nye",
+      "IN00450699": "https://drive.google.com/file/d/1aPle07IEDVk1qQs24T5gOP0pYP-3fg4-",
+      "IN00451011": "https://drive.google.com/file/d/1k9ltwzqw5dVfgiH4usv2gYE2oCsIrKfh",
+      "IN00451012": "https://drive.google.com/file/d/1Wg51_3Eo2tz8OtSkFU4oInGbD7IVtQSi",
+      "IN00452033": "https://drive.google.com/file/d/1m6OxeUGJAfzjYv6duR35JIdTByh-vuj2",
+      "IN00454464": "https://drive.google.com/file/d/1hev9r5-u5cdYB4hTLC_gIoAb8MB9avoU"
+    }
+  },
+
+  // ──── Pallet mapping sample (from packing list spreadsheets) ────
+  palletsBySku: {
+    "ER11": {
+      "ABIBP20-MEYE": ["20"],
+      "ABIBS20-I": ["20"],
+      "ACPS05-PTCR": ["16"],
+      "CMXS06-TR": ["4", "20"],
+      "DRAS01-SABC": ["9", "11", "13"],
+      "IDCP02-PKSTG": ["1", "3"],
+      "IDCP08-PKW": ["2", "3"]
+    }
+  }
+};
+
+// ================================================================
+// HELPER: Format money values
+// ================================================================
+function formatMoney(n) {
+  return '$' + n.toLocaleString('en-US');
+}
+
+// ================================================================
+// HELPER: Status pill class mapping
+// ================================================================
+function statusClass(status) {
+  const s = (status || '').toLowerCase();
+  if (['delivered','received','completed','shipped','shipping'].includes(s)) return 'good';
+  if (['pending','work in progress'].includes(s)) return 'warn';
+  if (['customs clearance','fda review/hold','fws review/hold','delayed'].includes(s)) return 'hold';
+  if (['cancelled'].includes(s)) return 'stop';
+  return 'neutral';
+}
+
+// ================================================================
+// THEME TOGGLE — Three-state dark mode support
+// ================================================================
+function toggleTheme() {
+  var current = document.documentElement.getAttribute('data-theme');
+  var next = current === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  try { localStorage.setItem('sk-theme', next); } catch(e) {}
+  var btn = document.querySelector('.theme-toggle-btn');
+  if (btn) btn.textContent = next === 'dark' ? 'Dark' : 'Light';
+}
+
+// Restore theme on load
+try {
+  var stored = localStorage.getItem('sk-theme');
+  if (stored === 'dark') {
+    document.documentElement.setAttribute('data-theme', 'dark');
+  }
+} catch(e) {}
+
+// ================================================================
+// RENDER ENGINE — Builds dashboard from STYLEKOREAN_DATA
+// Call renderDashboard() after DOM is ready or after data refresh.
+// ================================================================
+function renderDashboard(data) {
+  data = data || STYLEKOREAN_DATA;
+
+  // Update metric cards
+  var metricEls = document.querySelectorAll('.metrics article strong');
+  if (metricEls.length >= 4) {
+    metricEls[0].textContent = data.metrics.inbound;
+    metricEls[1].textContent = data.metrics.outbound;
+    metricEls[2].textContent = data.metrics.dueToday;
+    metricEls[3].textContent = data.metrics.exceptions;
+  }
+
+  // Update KPI figures
+  var kpiCards = document.querySelectorAll('.kpi-card:not(.kpi-carrier):not(.kpi-average)');
+  var kpiValues = [
+    [data.kpis.shippingMtd, data.kpis.shippingYtd],
+    [data.kpis.transfersMtd, data.kpis.transfersYtd],
+    [data.kpis.njTransferMtd, data.kpis.njTransferYtd],
+    [data.kpis.nationalsSalesMtd, data.kpis.nationalsSalesYtd],
+    [data.kpis.wmsSalesMtd, data.kpis.wmsSalesYtd]
+  ];
+  kpiCards.forEach(function(card, i) {
+    if (kpiValues[i]) {
+      var strongs = card.querySelectorAll('strong');
+      if (strongs[0]) strongs[0].textContent = formatMoney(kpiValues[i][0]);
+      if (strongs[1]) strongs[1].textContent = formatMoney(kpiValues[i][1]);
+    }
+  });
+}
+
+// Auto-render on load
+document.addEventListener('DOMContentLoaded', function() { renderDashboard(); });
+</script>
+
+<!-- ============================================================
+     TEMPLATE CONTENT — Every section is self-contained.
+     Copy individual sections into your app as needed.
+     ============================================================ -->
+
+<main class="site-shell">
+
+  <!-- ===== MASTHEAD ===== -->
+  <header class="manifest">
+    <div class="route-strip">
+      <span>KRPUS &#9875; USLAX</span>
+      <i></i>
+      <span>ICN &#9992; LAX</span>
+      <i></i>
+      <span>5609 RIVERWAY &middot; BUENA PARK CA</span>
+    </div>
+    <div class="manifest-main">
+      <div>
+        <p class="eyebrow">LOGISTICS MASTER 2026 &middot; LIVE WORKBOOK SYNC</p>
+        <h1>StyleKorean<br>Logistics <em>Hub</em></h1>
+        <p class="intro">
+          Every import, inbound delivery, trucking move, and small-parcel shipment
+          across the next fourteen days&mdash;one operational board.
+        </p>
+      </div>
+      <div class="manifest-actions">
+        <button type="button" class="theme-toggle-btn" onclick="toggleTheme()">Theme</button>
+        <button class="button primary">&#x21BB; REFRESH DATA</button>
+        <div class="source-buttons">
+          <a class="button" href="#">MASTER</a>
+          <a class="button" href="#">NATIONAL</a>
+          <a class="button" href="#">SALES</a>
+        </div>
+      </div>
+    </div>
+    <div class="sync-strip" role="status">
+      <span>
+        <b class="sync-dot"></b>
+        Worker snapshot &middot; 3 live workbooks connected
+      </span>
+      <span class="mono">AUTO SYNC 30 MIN &middot; LAST SYNC 02:15 PM &middot; NEXT CHECK 02:45 PM</span>
+    </div>
+  </header>
+
+  <!-- ===== SYSTEM BADGES ===== -->
+  <div class="badge-row">
+    <div class="sys-badge">
+      <span class="sys-dot" aria-hidden="true"></span>
+      <div>
+        <div class="sys-badge-name">Logistics Control Tower</div>
+        <div class="sys-badge-host">stylekorean.dpdns.org</div>
+      </div>
+      <span class="sys-badge-status">Operational</span>
+    </div>
+    <a class="sys-badge wh" href="#">
+      <span class="sys-dot" aria-hidden="true"></span>
+      <div>
+        <div class="sys-badge-name">Warehouse Control Tower</div>
+        <div class="sys-badge-host">skwarehouse.dpdns.org</div>
+      </div>
+      <span class="sys-badge-status">Operational</span>
+    </a>
+  </div>
+
+  <!-- ===== METRIC CARDS ===== -->
+  <section class="metrics" aria-label="Two-week schedule totals">
+    <article>
+      <span>INBOUND</span>
+      <strong>12</strong>
+      <small>arrivals in view</small>
+    </article>
+    <article>
+      <span>OUTBOUND</span>
+      <strong>47</strong>
+      <small>shipments in view</small>
+    </article>
+    <article>
+      <span>DUE TODAY</span>
+      <strong>8</strong>
+      <small>tracked moves</small>
+    </article>
+    <article>
+      <span>EXCEPTIONS</span>
+      <strong>3</strong>
+      <small>pending / hold / delayed</small>
+    </article>
+  </section>
+
+  <!-- ===== KPI CONTROL TOWER ===== -->
+  <section class="kpi-panel" aria-labelledby="kpi-heading">
+    <div class="kpi-heading">
+      <div>
+        <p class="eyebrow">2026 ACTUALS &middot; INVOICE FIRST / RATE FALLBACK</p>
+        <h2 id="kpi-heading">KPI Control Tower</h2>
+      </div>
+      <div class="period-toggle" role="group" aria-label="KPI view">
+        <button type="button" class="active">Summary</button>
+        <button type="button">Details</button>
+      </div>
+    </div>
+    <div class="kpi-grid">
+      <article class="kpi-card">
+        <span>SHIPPING COSTS</span>
+        <div><small>MTD</small><strong>$84,210</strong></div>
+        <div><small>YTD</small><strong>$612,480</strong></div>
+      </article>
+      <article class="kpi-card">
+        <span>TRANSFER SHIPPING</span>
+        <div><small>MTD</small><strong>$31,590</strong></div>
+        <div><small>YTD</small><strong>$228,170</strong></div>
+      </article>
+      <article class="kpi-card">
+        <span>TRUCKING TRANSFERS TO NJ</span>
+        <div><small>MTD</small><strong>$12,800</strong></div>
+        <div><small>YTD</small><strong>$96,400</strong></div>
+      </article>
+      <article class="kpi-card">
+        <span>SALES &middot; NATIONALS</span>
+        <div><small>MTD</small><strong>$194,520</strong></div>
+        <div><small>YTD</small><strong>$1,842,300</strong></div>
+      </article>
+      <article class="kpi-card">
+        <span>SALES &middot; WMS WHOLESALE</span>
+        <div><small>MTD</small><strong>$87,640</strong></div>
+        <div><small>YTD</small><strong>$743,100</strong></div>
+      </article>
+      <article class="kpi-card" style="opacity:.82">
+        <span>NET MARGIN</span>
+        <div style="border-top:1px solid #e5e0d7; padding:5px 0; display:flex; flex-direction:column; gap:2px;">
+          <strong style="color:var(--text-faint)">&mdash;</strong>
+          <small style="color:var(--text-faint); text-transform:none; letter-spacing:normal">No cost/margin data source yet</small>
+        </div>
+      </article>
+      <article class="kpi-card kpi-carrier">
+        <span>TOP 3 CARRIERS &middot; YTD</span>
+        <div class="carrier-table-head" aria-hidden="true">
+          <small>Carrier</small><small>Freight Spend</small><small>Shipments</small>
+        </div>
+        <ol class="carrier-ranking">
+          <li><strong>XPO LOGISTICS</strong><b>$148,200</b><small>42 &middot; 31.2%</small></li>
+          <li><strong>ESTES EXPRESS</strong><b>$112,800</b><small>35 &middot; 26.0%</small></li>
+          <li><strong>FedEx FREIGHT</strong><b>$89,400</b><small>28 &middot; 20.7%</small></li>
+        </ol>
+      </article>
+      <article class="kpi-card kpi-average">
+        <span>AVG TRUCKING COST &middot; MTD / YTD</span>
+        <div class="average-head" aria-hidden="true"><small>Lane</small><small>MTD</small><small>YTD</small></div>
+        <div><small>LOCAL / REGIONAL</small><strong>$680</strong><strong>$720</strong></div>
+        <div><small>CALIFORNIA</small><strong>$1,240</strong><strong>$1,180</strong></div>
+        <div><small>OUT OF STATE</small><strong>$2,890</strong><strong>$3,120</strong></div>
+      </article>
+    </div>
+    <details class="kpi-method">
+      <summary>Methodology &amp; data sources</summary>
+      <p>Shipping costs are summed from the TRUCKING tab&rsquo;s invoice/rate columns using an invoice-first, rate-fallback strategy. Transfer totals include all inter-warehouse moves. All figures are calculated client-side from live workbook data.</p>
+    </details>
+  </section>
+
+  <!-- ===== CONTROL TOWER: CARRIER & FREIGHT MODE ===== -->
+  <div class="ct-row">
+    <div class="ct-panel">
+      <div class="ct-panel-head">
+        <span class="ct-eyebrow">Active Carrier Mix &middot; Rolling 14 Days</span>
+        <h2>Active Carriers</h2>
+      </div>
+      <div class="ct-carrier-categories">
+        <div class="ct-carrier-category">
+          <div class="ct-carrier-category-head">
+            <span class="ct-carrier-category-name">TRUCKING</span>
+            <span class="ct-carrier-category-counts"><b>4</b> carriers &middot; 18 moves</span>
+          </div>
+          <ul class="ct-carrier-category-list">
+            <li><span class="ct-carrier-category-carrier">XPO Logistics</span><span class="ct-carrier-category-carrier-count">7</span></li>
+            <li><span class="ct-carrier-category-carrier">Estes Express</span><span class="ct-carrier-category-carrier-count">5</span></li>
+            <li><span class="ct-carrier-category-carrier">FedEx Freight</span><span class="ct-carrier-category-carrier-count">4</span></li>
+            <li><span class="ct-carrier-category-carrier">Old Dominion</span><span class="ct-carrier-category-carrier-count">2</span></li>
+          </ul>
+        </div>
+        <div class="ct-carrier-category">
+          <div class="ct-carrier-category-head">
+            <span class="ct-carrier-category-name">PARCEL</span>
+            <span class="ct-carrier-category-counts"><b>3</b> carriers &middot; 29 parcels</span>
+          </div>
+          <ul class="ct-carrier-category-list">
+            <li><span class="ct-carrier-category-carrier">UPS</span><span class="ct-carrier-category-carrier-count">14</span></li>
+            <li><span class="ct-carrier-category-carrier">FedEx</span><span class="ct-carrier-category-carrier-count">10</span></li>
+            <li><span class="ct-carrier-category-carrier">USPS</span><span class="ct-carrier-category-carrier-count">5</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <div class="ct-panel" style="border-top-color:#199e70">
+      <div class="ct-panel-head">
+        <span class="ct-eyebrow">Freight Mode Distribution &middot; YTD</span>
+        <h2>Freight Mode Split</h2>
+      </div>
+      <div class="ct-split-bar">
+        <div class="ct-split-seg" style="width:42%; background:#3987e5"></div>
+        <div class="ct-split-seg" style="width:28%; background:#199e70"></div>
+        <div class="ct-split-seg" style="width:18%; background:#d95926"></div>
+        <div class="ct-split-seg" style="width:12%; background:#b98a2e"></div>
+      </div>
+      <div class="ct-split-legend">
+        <span><i style="background:#3987e5"></i> Air 42%</span>
+        <span><i style="background:#199e70"></i> Ocean 28%</span>
+        <span><i style="background:#d95926"></i> Trucking 18%</span>
+        <span><i style="background:#b98a2e"></i> Parcel 12%</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== SEARCH / FILTER ===== -->
+  <div class="control-panel">
+    <div class="search">
+      <span>&#x1F50D;</span>
+      <input type="text" placeholder="Search shipments, invoices, containers, POs&hellip;" aria-label="Search">
+    </div>
+    <label class="finished-toggle">
+      <input type="checkbox"> Show finished
+    </label>
+  </div>
+
+  <div class="source-legend">
+    <strong>Sources</strong>
+    <div>
+      <span><i style="background:var(--source-wholesale)"></i> Wholesale</span>
+      <span><i style="background:var(--source-ocean)"></i> Ocean</span>
+      <span><i style="background:var(--source-air)"></i> Air</span>
+      <span><i style="background:var(--source-ups)"></i> UPS</span>
+      <span><i style="background:var(--source-fedex)"></i> FedEx</span>
+      <span><i style="background:var(--source-usps)"></i> USPS</span>
+      <span><i style="background:var(--source-amazon)"></i> Amazon</span>
+    </div>
+  </div>
+
+  <!-- ===== IMPORT SCHEDULES TABLE ===== -->
+  <section class="import-schedules">
+    <div class="import-heading">
+      <div>
+        <p class="eyebrow">Active Import Pipeline</p>
+        <h2>Import Schedules</h2>
+      </div>
+      <div class="import-totals">
+        <span><b>5</b> active &middot; <b>2</b> in customs</span>
+        <strong>7</strong>
+      </div>
+    </div>
+    <div class="import-table-wrap">
+      <table class="import-table">
+        <thead>
+          <tr>
+            <th style="width:70px">Ship #</th>
+            <th style="width:150px">Container</th>
+            <th style="width:130px">Vessel</th>
+            <th style="width:80px">Mode</th>
+            <th style="width:90px">ETA</th>
+            <th style="width:110px">Status</th>
+            <th>Invoice / Reference</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><a href="#">OSL-12</a></td>
+            <td>SMCU 7284901</td>
+            <td>SM BUSAN</td>
+            <td><span class="mode-pill ocean">OCEAN</span></td>
+            <td>08/28/2026</td>
+            <td><span class="status-pill neutral">SCHEDULED</span></td>
+            <td>IN00462018, IN00462019</td>
+          </tr>
+          <tr>
+            <td><a href="#">OSL-13</a></td>
+            <td>MAEU 3917205</td>
+            <td>MAERSK ELBA</td>
+            <td><span class="mode-pill ocean">OCEAN</span></td>
+            <td>09/02/2026</td>
+            <td><span class="status-pill hold">CUSTOMS CLEARANCE</span></td>
+            <td>IN00463011</td>
+          </tr>
+          <tr>
+            <td><a href="#">AIR-08</a></td>
+            <td>&mdash;</td>
+            <td>KE 017</td>
+            <td><span class="mode-pill air">AIR</span></td>
+            <td>08/26/2026</td>
+            <td><span class="status-pill warn">PENDING</span></td>
+            <td>IN00464502</td>
+          </tr>
+          <tr>
+            <td><a href="#">OSL-14</a></td>
+            <td>HDMU 6104823</td>
+            <td>HMM PROMISE</td>
+            <td><span class="mode-pill ocean">OCEAN</span></td>
+            <td>09/08/2026</td>
+            <td><span class="status-pill neutral">SCHEDULED</span></td>
+            <td>IN00465030, IN00465031</td>
+          </tr>
+          <tr>
+            <td><a href="#">AIR-09</a></td>
+            <td>&mdash;</td>
+            <td>OZ 201</td>
+            <td><span class="mode-pill air">AIR</span></td>
+            <td>08/27/2026</td>
+            <td><span class="status-pill good">DELIVERED</span></td>
+            <td>IN00464710</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ===== INBOUND SCHEDULE BOARD ===== -->
+  <div class="schedule-stack">
+    <section class="schedule-panel inbound-panel">
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">14-Day View</p>
+          <h2>Inbound Schedule</h2>
+        </div>
+        <div class="board-total">
+          <span>TOTAL</span>
+          <strong>12</strong>
+          <small>arrivals</small>
+        </div>
+      </div>
+      <div class="board-wrap">
+        <div class="board">
+          <div class="day-column today">
+            <header>
+              <span>AUG</span>
+              <small>Monday</small>
+              <strong>25</strong>
+              <b>2</b>
+            </header>
+            <div class="day-items">
+              <div class="schedule-card">
+                <div class="card-summary">
+                  <div class="summary-primary">
+                    <small>AIR-08 &middot; KE 017</small>
+                    <strong>Incheon Air Freight</strong>
+                  </div>
+                  <span class="status-pill warn">PENDING</span>
+                </div>
+              </div>
+              <div class="schedule-card">
+                <div class="card-summary">
+                  <div class="summary-primary">
+                    <small>OSL-11 &middot; FedEx Freight</small>
+                    <strong>Transfer from NJ Warehouse</strong>
+                  </div>
+                  <span class="status-pill good">DELIVERED</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="day-column">
+            <header><span>AUG</span><small>Tuesday</small><strong>26</strong><b>1</b></header>
+            <div class="day-items">
+              <div class="schedule-card">
+                <div class="card-summary">
+                  <div class="summary-primary">
+                    <small>AIR-09 &middot; OZ 201</small>
+                    <strong>Asiana Air Shipment</strong>
+                  </div>
+                  <span class="status-pill neutral">SCHEDULED</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="day-column"><header><span>AUG</span><small>Wednesday</small><strong>27</strong><b>0</b></header><div class="day-items"></div></div>
+          <div class="day-column">
+            <header><span>AUG</span><small>Thursday</small><strong>28</strong><b>1</b></header>
+            <div class="day-items">
+              <div class="schedule-card">
+                <div class="card-summary">
+                  <div class="summary-primary">
+                    <small>OSL-12 &middot; SMCU 7284901</small>
+                    <strong>SM Line Ocean Import</strong>
+                  </div>
+                  <span class="status-pill neutral">SCHEDULED</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="day-column"><header><span>AUG</span><small>Friday</small><strong>29</strong><b>0</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>AUG</span><small>Saturday</small><strong>30</strong><b>0</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>AUG</span><small>Sunday</small><strong>31</strong><b>0</b></header><div class="day-items"></div></div>
+          <div class="day-column">
+            <header><span>SEP</span><small>Monday</small><strong>01</strong><b>1</b></header>
+            <div class="day-items">
+              <div class="schedule-card">
+                <div class="card-summary">
+                  <div class="summary-primary">
+                    <small>OSL-13 &middot; MAEU 3917205</small>
+                    <strong>Maersk Ocean Import</strong>
+                  </div>
+                  <span class="status-pill hold">CUSTOMS</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="day-column"><header><span>SEP</span><small>Tuesday</small><strong>02</strong><b>0</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>SEP</span><small>Wednesday</small><strong>03</strong><b>0</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>SEP</span><small>Thursday</small><strong>04</strong><b>0</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>SEP</span><small>Friday</small><strong>05</strong><b>0</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>SEP</span><small>Saturday</small><strong>06</strong><b>0</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>SEP</span><small>Sunday</small><strong>07</strong><b>0</b></header><div class="day-items"></div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== OUTBOUND SCHEDULE BOARD ===== -->
+    <section class="schedule-panel outbound-panel">
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">14-Day View</p>
+          <h2>Outbound Schedule</h2>
+        </div>
+        <div class="board-total outbound">
+          <span>TOTAL</span>
+          <strong>47</strong>
+          <small>shipments</small>
+        </div>
+      </div>
+      <div class="board-wrap">
+        <div class="board">
+          <div class="day-column today">
+            <header><span>AUG</span><small>Monday</small><strong>25</strong><b>5</b></header>
+            <div class="day-items">
+              <div class="schedule-card outbound">
+                <div class="card-summary">
+                  <div class="summary-primary">
+                    <small>WH-2841 &middot; XPO Logistics</small>
+                    <strong>ULTA Beauty DC</strong>
+                  </div>
+                  <span class="status-pill neutral">WORK IN PROGRESS</span>
+                </div>
+              </div>
+              <div class="schedule-card outbound">
+                <div class="card-summary">
+                  <div class="summary-primary">
+                    <small>WH-2842 &middot; Estes Express</small>
+                    <strong>TJX Framingham</strong>
+                  </div>
+                  <span class="status-pill good">SHIPPING</span>
+                </div>
+              </div>
+              <div class="schedule-card outbound">
+                <div class="card-summary">
+                  <div class="summary-primary">
+                    <small>WH-2843 &middot; FedEx Freight</small>
+                    <strong>NJ Warehouse Transfer</strong>
+                  </div>
+                  <span class="status-pill neutral">SCHEDULED</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="day-column">
+            <header><span>AUG</span><small>Tuesday</small><strong>26</strong><b>3</b></header>
+            <div class="day-items">
+              <div class="schedule-card outbound">
+                <div class="card-summary">
+                  <div class="summary-primary">
+                    <small>WH-2844 &middot; XPO Logistics</small>
+                    <strong>Ross Stores DC</strong>
+                  </div>
+                  <span class="status-pill neutral">SCHEDULED</span>
+                </div>
+              </div>
+              <div class="schedule-card outbound">
+                <div class="card-summary">
+                  <div class="summary-primary">
+                    <small>WH-2845 &middot; Old Dominion</small>
+                    <strong>Burlington Coat Factory</strong>
+                  </div>
+                  <span class="status-pill neutral">SCHEDULED</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="day-column"><header><span>AUG</span><small>Wednesday</small><strong>27</strong><b>2</b></header><div class="day-items"><div class="schedule-card outbound"><div class="card-summary"><div class="summary-primary"><small>B2B-112 &middot; UPS</small><strong>E-Commerce Batch</strong></div><span class="status-pill neutral">SCHEDULED</span></div></div></div></div>
+          <div class="day-column"><header><span>AUG</span><small>Thursday</small><strong>28</strong><b>2</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>AUG</span><small>Friday</small><strong>29</strong><b>1</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>AUG</span><small>Saturday</small><strong>30</strong><b>0</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>AUG</span><small>Sunday</small><strong>31</strong><b>0</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>SEP</span><small>Monday</small><strong>01</strong><b>4</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>SEP</span><small>Tuesday</small><strong>02</strong><b>3</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>SEP</span><small>Wednesday</small><strong>03</strong><b>2</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>SEP</span><small>Thursday</small><strong>04</strong><b>1</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>SEP</span><small>Friday</small><strong>05</strong><b>2</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>SEP</span><small>Saturday</small><strong>06</strong><b>0</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>SEP</span><small>Sunday</small><strong>07</strong><b>0</b></header><div class="day-items"></div></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ===== PARCEL CARDS ===== -->
+  <section class="parcel-panel" style="margin-top:18px">
+    <div class="parcel-heading">
+      <div>
+        <p class="eyebrow">Small Parcel Shipments</p>
+        <h2>Inbound Parcels</h2>
+      </div>
+      <div class="parcel-total">ACTIVE <strong>6</strong></div>
+    </div>
+    <div class="parcel-grid">
+      <div class="parcel-card">
+        <div class="parcel-summary">
+          <span class="source-badge" style="background:var(--source-ups)">UPS</span>
+          <strong style="font:700 10px/1.25 'IBM Plex Mono',monospace; margin-top:4px">Sample from Korea HQ</strong>
+          <span class="parcel-invoice">INV-2026-0891</span>
+        </div>
+        <div class="parcel-detail">
+          <span class="parcel-tracking">In Transit &middot; Departed Incheon</span>
+          <span class="parcel-tracking-number">1Z 999 AA1 01 2345 6784</span>
+          <div class="parcel-footer" style="margin-top:8px">
+            <span>Ship 08/23</span>
+            <a href="#">Track</a>
+          </div>
+        </div>
+      </div>
+      <div class="parcel-card" style="border-top-color:var(--source-fedex)">
+        <div class="parcel-summary">
+          <span class="source-badge" style="background:var(--source-fedex)">FedEx</span>
+          <strong style="font:700 10px/1.25 'IBM Plex Mono',monospace; margin-top:4px">Marketing Materials</strong>
+          <span class="parcel-invoice">INV-2026-0894</span>
+        </div>
+        <div class="parcel-detail">
+          <span class="parcel-tracking">Delivered &middot; Buena Park</span>
+          <span class="parcel-tracking-number">7489 2748 0192</span>
+          <div class="parcel-footer" style="margin-top:8px">
+            <span>Ship 08/21</span>
+            <a href="#">Track</a>
+          </div>
+        </div>
+      </div>
+      <div class="parcel-card" style="border-top-color:var(--source-usps)">
+        <div class="parcel-summary">
+          <span class="source-badge" style="background:var(--source-usps)">USPS</span>
+          <strong style="font:700 10px/1.25 'IBM Plex Mono',monospace; margin-top:4px">Returns from Customer</strong>
+          <span class="parcel-invoice">RMA-2026-0412</span>
+        </div>
+        <div class="parcel-detail">
+          <span class="parcel-tracking">In Transit &middot; Los Angeles</span>
+          <span class="parcel-tracking-number">9400 1118 9956 4728 1403 25</span>
+          <div class="parcel-footer" style="margin-top:8px">
+            <span>Ship 08/24</span>
+            <a href="#">Track</a>
+          </div>
+        </div>
+      </div>
+      <div class="parcel-card" style="border-top-color:var(--source-amazon)">
+        <div class="parcel-summary">
+          <span class="source-badge" style="background:var(--source-amazon)">Amazon</span>
+          <strong style="font:700 10px/1.25 'IBM Plex Mono',monospace; margin-top:4px">Warehouse Supplies</strong>
+          <span class="parcel-invoice">PO-2026-3881</span>
+        </div>
+        <div class="parcel-detail">
+          <span class="parcel-tracking">Out for Delivery</span>
+          <span class="parcel-tracking-number">TBA 304819274810</span>
+          <div class="parcel-footer" style="margin-top:8px">
+            <span>Ship 08/24</span>
+            <a href="#">Track</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== FOOTER ===== -->
+  <footer>
+    <span><strong>SK</strong> StyleKorean Logistics Hub &middot; Template v1.0</span>
+    <span>Built from stylekorean.dpdns.org &middot; 2026</span>
+  </footer>
+
+</main>
