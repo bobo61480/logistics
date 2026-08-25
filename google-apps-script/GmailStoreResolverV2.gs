@@ -82,18 +82,28 @@ function gmailStoreLineLabelSegmentsV2_(line) {
 /**
  * Buckets the text under "destination" or "origin" based on labels (SHIP TO
  * / DELIVER TO / CONSIGNEE / DESTINATION vs. PICKUP / ORIGIN / SHIP FROM),
- * carrying the last label on a line forward onto the following unlabeled
- * line too — shipment emails often write a label on its own line with the
- * address below it. An unlabeled line with no label carried forward is
- * dropped from both buckets: guessing which block it belongs to would
- * reintroduce the exact ambiguity this exists to remove.
+ * carrying the last label on a line forward onto following unlabeled lines
+ * too — shipment emails often write a label on its own line with the
+ * address below it. That carry-forward resets at the next BLANK line: a
+ * footer or quoted-history block below the labeled address (typically
+ * separated by a blank line) must not silently inherit that label forever
+ * — e.g. "Ship-to: Phoenix" followed by a blank line and then an unrelated
+ * "Dallas office" footer must not put Dallas in the destination bucket
+ * just because it's textually below the last label seen (Codex review
+ * round 5 on PR #102). Splitting on single line breaks (not `[\r\n]+`,
+ * which collapses consecutive breaks and hides blank lines entirely) is
+ * what makes a blank line detectable as its own empty entry here. An
+ * unlabeled line with no label carried forward is dropped from both
+ * buckets: guessing which block it belongs to would reintroduce the exact
+ * ambiguity this exists to remove.
  */
 function gmailStoreLabeledLinesV2_(haystack) {
-  var lines = String(haystack || "").split(/[\r\n]+/);
+  var lines = String(haystack || "").split(/\r\n|\r|\n/);
   var destination = [];
   var origin = [];
   var carry = null;
   lines.forEach(function (line) {
+    if (!line.trim()) { carry = null; return; }
     var segments = gmailStoreLineLabelSegmentsV2_(line);
     if (segments.length) {
       segments.forEach(function (segment) {

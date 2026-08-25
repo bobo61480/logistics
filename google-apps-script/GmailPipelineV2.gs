@@ -81,16 +81,40 @@ function processLogisticsEmailsV2() {
     // every run can permanently starve a genuinely new thread ranked just
     // below the cap in that same query's results (Codex review on PR #102,
     // a failure mode this per-query cap made newly reachable).
+    // A query's reserved share can go unused when it simply has fewer than
+    // perQueryThreadCap unprocessed matches — e.g. only one of three
+    // queries has any hits, so 8 of 12 global slots would otherwise sit
+    // idle while that query's overflow (past its own 4-thread share) goes
+    // unprocessed and can age past the lookback window (Codex review round
+    // 5 on PR #102). A second fill pass below spends exactly that leftover
+    // global budget on each query's overflow, in query order, so the total
+    // admitted across all queries can still reach GMAIL_V2_MAX_THREADS.
     var threadsById = {};
+    var overflowByQuery = [];
     perQueryResults.forEach(function (threads, queryIndex) {
       var addedForThisQuery = 0;
+      var overflow = [];
       threads.forEach(function (thread) {
         var id = thread.getId();
         if (id in threadsById) return;
-        if (addedForThisQuery >= perQueryThreadCap) return;
         if (!gmailV2ThreadHasUnprocessedMessageV2_(thread)) return;
+        if (addedForThisQuery < perQueryThreadCap) {
+          threadsById[id] = thread;
+          addedForThisQuery++;
+        } else {
+          overflow.push(thread);
+        }
+      });
+      overflowByQuery.push(overflow);
+    });
+    var remainingGlobalBudget = GMAIL_V2_MAX_THREADS - Object.keys(threadsById).length;
+    overflowByQuery.forEach(function (overflow) {
+      overflow.forEach(function (thread) {
+        if (remainingGlobalBudget <= 0) return;
+        var id = thread.getId();
+        if (id in threadsById) return;
         threadsById[id] = thread;
-        addedForThisQuery++;
+        remainingGlobalBudget--;
       });
     });
 
