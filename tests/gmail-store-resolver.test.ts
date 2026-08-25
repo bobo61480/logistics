@@ -103,4 +103,12 @@ describe("resolveTjxDcFromEmailV2_", () => {
     const helpers = loadStoreResolverHelpers([], tjxRows);
     expect(helpers.resolveTjxDcFromEmailV2_("Split load: DC# 1234 and DC# 5678")).toBeNull();
   });
+
+  // Regression for a Codex review finding: an unknown DC# mentioned
+  // alongside a known one must still reject as ambiguous, not silently
+  // narrow down to the one that happens to already be on file.
+  it("never guesses when one mentioned DC# is known and the other is not", () => {
+    const helpers = loadStoreResolverHelpers([], tjxRows);
+    expect(helpers.resolveTjxDcFromEmailV2_("Split load: DC# 1234 and DC# 9999")).toBeNull();
+  });
 });

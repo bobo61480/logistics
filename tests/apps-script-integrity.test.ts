@@ -296,4 +296,24 @@ describe("Apps Script production integrity", () => {
     expect(pipeline).not.toContain("resolveUltaDcFromEmailV2_(");
     expect(pipeline).not.toContain("resolveTjxDcFromEmailV2_(");
   });
+
+  it("reserves each Gmail search query its own thread-discovery share instead of a flat post-hoc slice", () => {
+    const pipeline = read("google-apps-script/GmailPipelineV2.gs");
+    // Codex review on PR #102: filling threadsById in query order and then
+    // slicing the combined set to GMAIL_V2_MAX_THREADS let the broadened
+    // query's results (always inserted last) get silently discarded
+    // whenever the first two queries alone already filled every slot.
+    expect(pipeline).toContain("var perQueryThreadCap = Math.ceil(GMAIL_V2_MAX_THREADS / queries.length);");
+    expect(pipeline).not.toMatch(/Object\.keys\(threadsById\)\.slice\(/);
+  });
+
+  it("only archives Gmail attachments once at least one shipment record was actually extracted", () => {
+    const pipeline = read("google-apps-script/GmailPipelineV2.gs");
+    // Codex review on PR #102: the broadened search query is generic
+    // enough that an unrelated email can match with zero extractable
+    // records — gating purely on documentAttachments.length would still
+    // create a permanent Drive folder for a shipment that was never
+    // matched or inserted anywhere.
+    expect(pipeline).toContain('if (documentAttachments.length && records.length && context.kind !== "outbound") {');
+  });
 });

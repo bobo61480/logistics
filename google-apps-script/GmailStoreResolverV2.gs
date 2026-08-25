@@ -104,12 +104,19 @@ function resolveTjxDcFromEmailV2_(text) {
     var found = haystack.match(/\bDC\s*#?\s*[:#]?\s*(\d{3,6})\b/gi) || [];
     var seen = {};
     var distinct = [];
+    // Collect every distinct mention BEFORE checking directory membership —
+    // an email naming one known DC and one unknown/mistyped DC (e.g. "DC#
+    // 1234 and DC# 9999") must still be rejected as ambiguous, not silently
+    // narrowed down to the one that happens to be on file (Codex review on
+    // PR #102: filtering to directory-known numbers first let the unknown
+    // one disappear before the ambiguity check ever saw it).
     found.forEach(function (mention) {
       var numberMatch = mention.match(/(\d{3,6})/);
       var number = numberMatch ? numberMatch[1] : "";
-      if (number && directory[number] && !seen[number]) { seen[number] = true; distinct.push(number); }
+      if (number && !seen[number]) { seen[number] = true; distinct.push(number); }
     });
     if (distinct.length !== 1) return null;
+    if (!directory[distinct[0]]) return null;
     return { customer: distinct[0], method: "tjx-dc-number", confidence: "medium" };
   } catch (err) {
     writeLog_("GMAIL V2 STORE RESOLVE ERROR", "TJX/ROSS", String(err));

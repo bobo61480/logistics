@@ -96,32 +96,95 @@ function matchCustomerBySenderV2_(fromHeader, dbValues, dbHeader) {
 }
 
 /**
- * Tier B: word-boundary-anchored match of each distinct canonical customer
- * key (grouped the same way CustomerLookup.gs's isAmbiguousLocationFamily_
- * groups multi-location families) against the email text. Requires exactly
- * one canonical key to appear, and that key must map to exactly one
- * TRUCKING row — a multi-location family (e.g. two "ULTA (...)"-style
- * per-location rows sharing a brand) is never guessed between.
+ * Tier B, two safe sub-tiers, checked in order:
+ *
+ *  - Exact: the candidate's own full name (including any location
+ *    qualifier, e.g. "MEGA MART (PALO ALTO)" or "MEGA MART - 1") literally
+ *    appears in the email. Always trusted — mirrors CustomerLookup.gs's
+ *    own exact-name trust tier.
+ *  - Brand: a shared canonical/brand key appears, but ONLY among
+ *    candidates with NO location qualifier at all. A record carrying a
+ *    parenthetical or "- N" suffix is excluded from this tier entirely —
+ *    even when it is currently the sole TRUCKING row for that brand, an
+ *    email naming a DIFFERENT, not-yet-on-file location of the same brand
+ *    (e.g. "MEGA MART (FREMONT)" when only "MEGA MART (PALO ALTO)" exists)
+ *    would otherwise silently resolve to the wrong physical location —
+ *    exactly the class of bug that caused the 2026-08-12 KORHEIM incident,
+ *    flagged again here by Codex review on PR #102. A brand with only
+ *    location-qualified candidates therefore has no safe brand-level
+ *    match at all and falls through to null (never guessed).
+ *
+ * Both sub-tiers compare against the SAME lightly-normalized haystack
+ * (uppercased, "&" expanded to "AND", punctuation collapsed to spaces) so
+ * that a candidate name reduced through canonicalWmsCustomer_'s aliasing
+ * (which also strips legal suffixes like "INC"/"LLC") still matches a real
+ * email that spells the name out with that suffix or an ampersand present
+ * (Codex review on PR #102) — deliberately NOT running the haystack
+ * through canonicalWmsCustomer_'s own legal-suffix stripping, since doing
+ * that to arbitrary free text (not a known customer-name field) risks
+ * collapsing an unrelated phrase into a false match (e.g. "Mega Corp Mart
+ * Inc" stripping down to "Mega Mart").
  */
 function matchCustomerByTextV2_(haystack, records) {
   if (!haystack) return null;
-  var text = String(haystack).toUpperCase();
+  var text = normalizedCustomerHaystackV2_(haystack);
+  if (text === "  ") return null;
+
+  var exactMatches = records.filter(function (record) {
+    return customerKeyAppearsV2_(text, normalizedCustomerHaystackV2_(record.name).trim());
+  });
+  if (exactMatches.length === 1) return { record: exactMatches[0], method: "text-exact", confidence: "high" };
+  if (exactMatches.length > 1) return null;
+
   var byCanonicalKey = {};
   records.forEach(function (record) {
-    var strippedName = stripCustomerLocationSuffix_(record.name);
-    var canonicalKey = normalizeWmsCustomerKey_(canonicalWmsCustomer_(strippedName));
+    if (hasCustomerLocationQualifierV2_(record.name)) return;
+    var canonicalKey = normalizeWmsCustomerKey_(canonicalWmsCustomer_(record.name));
     if (!canonicalKey) return;
     if (!byCanonicalKey[canonicalKey]) byCanonicalKey[canonicalKey] = [];
     if (byCanonicalKey[canonicalKey].indexOf(record) === -1) byCanonicalKey[canonicalKey].push(record);
   });
 
   var matchedKeys = Object.keys(byCanonicalKey).filter(function (key) {
-    return new RegExp("\\b" + key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b").test(text);
+    return customerKeyAppearsV2_(text, key);
   });
   if (matchedKeys.length !== 1) return null;
   var candidates = byCanonicalKey[matchedKeys[0]];
   if (candidates.length !== 1) return null;
-  return { record: candidates[0], method: "text", confidence: "medium" };
+  return { record: candidates[0], method: "text-brand", confidence: "medium" };
+}
+
+/**
+ * True when name carries a location-disambiguation qualifier — a
+ * parenthetical ("(FRESNO)") or a trailing "- N" suffix (the sheet's
+ * existing multi-location convention, see CustomerLookup.gs's
+ * stripCustomerLocationSuffix_) — meaning it is one of possibly several
+ * per-location entries for the same brand.
+ */
+function hasCustomerLocationQualifierV2_(name) {
+  return /\([^)]*\)/.test(name) || /-\s*\d+\s*$/.test(name);
+}
+
+/**
+ * Lighter-touch than normalizeWmsCustomerKey_: uppercases, expands "&" to
+ * "AND", and collapses punctuation/whitespace to single spaces, but does
+ * NOT strip legal suffixes (INC/LLC/CORP/...) — that step is only safe to
+ * apply to a known customer-name field, not arbitrary email text (see the
+ * function doc comment above). Padded with a leading/trailing space so
+ * every comparison below can use a simple, unambiguous substring test.
+ */
+function normalizedCustomerHaystackV2_(text) {
+  return " " + String(text || "")
+    .toUpperCase()
+    .replace(/&/g, " AND ")
+    .replace(/[^A-Z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim() + " ";
+}
+
+function customerKeyAppearsV2_(paddedHaystack, key) {
+  if (!key) return false;
+  return paddedHaystack.indexOf(" " + key + " ") !== -1;
 }
 
 function gmailCustomerResolutionTextV2_(meta, context, record) {
