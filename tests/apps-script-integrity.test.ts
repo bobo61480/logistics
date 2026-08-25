@@ -65,12 +65,12 @@ describe("Apps Script production integrity", () => {
     expect(triggers).not.toContain('{ handler: "requestSiteRedeploy"');
   });
 
-  it("re-enables the hardened WMS trucking importer in dry-run mode with the customer-canonicalization fix", () => {
+  it("runs the hardened WMS trucking importer live with the customer-canonicalization fix", () => {
     const importer = read("google-apps-script/WmsTruckingSyncV2.gs");
     const code = read("google-apps-script/Code.gs");
 
     expect(importer).toContain("var WMS_TRUCKING_SYNC_ENABLED = true;");
-    expect(importer).toContain("var WMS_TRUCKING_DRY_RUN = true;");
+    expect(importer).toContain("var WMS_TRUCKING_DRY_RUN = false;");
     expect(importer).toContain("function logWmsDryRun_(");
     expect(importer).toContain("function wouldChangeMappedValue_(");
     // Word-boundary anchored — must not collapse "MEGA MARTINEZ..." into
@@ -137,7 +137,7 @@ describe("Apps Script production integrity", () => {
     expect(lookup).toContain("function logCanonicalMatchNeedsReview_(");
     expect(lookup).toContain('"canonical-match-needs-review"');
     expect(lookup).toMatch(
-      /if\s*\(\s*!matchedByExactName_\(customerValue,\s*record\)\s*\)\s*\{\s*logCanonicalMatchNeedsReview_\(/,
+      /if\s*\(\s*!matchedByExactName_\(customerValue,\s*record\)\s*\)\s*\{[\s\S]*?logCanonicalMatchNeedsReview_\(/,
     );
     // Round 9 of the same review: staff typing the customer name and its
     // address as two separate edits (round 6) matches the same record
