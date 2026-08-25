@@ -439,5 +439,6 @@
                 "openrouter/OpenRouter/z-ai/glm-5v-turbo"
             ]
         }
-    }
+    },
+    "claudeCode.useCtrlEnterToSend": true
 }

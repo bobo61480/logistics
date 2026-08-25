@@ -5,38 +5,48 @@ import { INBOUND_DOCUMENT_LINKS, INBOUND_PACKING_LIST_LINKS } from "./inbound-li
 import { INBOUND_INVOICE_LINKS } from "./inbound-invoice-links";
 import { packingListPallets } from "./inbound-pallets";
 import { computeLiveKpis } from "../lib/sales-kpis";
+import FulfillmentTkOrders from "./FulfillmentTkOrders";
+import { GmailIngestionCard, type GmailIngestionEvent } from "./gmail-ingestion-card";
+import { DriveArchiveCard, driveLinkGlyph } from "./drive-archive-card";
+import ShipmentEventTrackerCard from "./ShipmentEventTrackerCard";
+import { LiveMapPanel, useParcelTracking, type MilestoneShipment, type TrackableShipment, type TrackingResult } from "./live-map";
+import { ThemeToggle } from "./theme-toggle";
+import { DataGrids } from "./data-grids";
+import { IngestionRoadmapCard } from "./ingestion-roadmap-card";
+import { LOGISTICS_STATUS_OPTIONS, normalizeLogisticsStatus } from "../lib/domain/status";
+import { inboundScheduleDateSource } from "../lib/domain/inbound-schedule";
 
-const SHEET_ID = "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc";
+const SHEET_ID =
+  process.env.NEXT_PUBLIC_LOGISTICS_MASTER_SHEET_ID ??
+  "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc";
 const SHEET_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit`;
-const NATIONAL_SHEET_ID = "12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8";
-const NATIONAL_SHEET_URL = `https://docs.google.com/spreadsheets/d/${NATIONAL_SHEET_ID}/edit?gid=99300389#gid=99300389`;
-const SALES_SHEET_ID = "14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I";
-const SALES_SHEET_URL = `https://docs.google.com/spreadsheets/d/${SALES_SHEET_ID}/edit?gid=0#gid=0`;
-const FULFILLMENT_SALES_URL = "https://sk-b2b-mobile.github.io/fulfillment/sales.html";
-const FULFILLMENT_API_URL =
-  "https://script.google.com/macros/s/AKfycbykK9DWjem9ORHxfR_mpdZl5DVh-en0D6JpCdIuel305QmfqxoNU_NqSnjkhFk401hI/exec";
-const SALES_SNAPSHOT = {
-  nationalsMtd: 2_209_375.46,
-  nationalsYtd: 6_244_884.52,
-  wmsMtd: 3_601_652.95,
-  wmsYtd: 15_591_074.08,
-};
-// Deployed from google-apps-script/Code.gs (doPost), bound to LOGISTICS MASTER 2026.
-// 2026-08-07: repointed to a fresh deployment of the sheet-bound Apps Script project
-// after discovering the previous /exec URL (...MjDl) was pinned to an unrelated,
-// pre-migration legacy project (function surface: getMasterWorkbook/buildKPIs/etc,
-// none of which exist in this repo) that could never be fixed by editing this repo's
-// Code.gs. See DEPLOYMENT_NOTE.md for the full trail.
-// VERIFY: confirm this /exec URL is the CURRENT deployment of google-apps-script/Code.gs --
-// if you redeploy that script, Apps Script gives you a new URL and this must be updated too.
-const WRITE_ENDPOINT =
-  "https://script.google.com/macros/s/AKfycbz770kmpwqMTA-h-lzeLARgVnDh_VDjh-70OOKk_yE-iXJTmzAsVXUtln17QTOURO1R/exec";
-const AUTO_REFRESH_MS = 15 * 60 * 1000;
+const NATIONAL_SHEET_ID =
+  process.env.NEXT_PUBLIC_NATIONAL_SHEET_ID ??
+  "12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8";
+const SALES_SHEET_ID =
+  process.env.NEXT_PUBLIC_WMS_SHEET_ID ??
+  "14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I";
+const IMPORTS_GID = Number(process.env.NEXT_PUBLIC_IMPORTS_GID ?? 1497250700);
+const OUTBOUND_GID = Number(process.env.NEXT_PUBLIC_OUTBOUND_GID ?? 20260708);
+const TRUCKING_GID = Number(process.env.NEXT_PUBLIC_TRUCKING_GID ?? 1418033635);
+const NATIONAL_GID = Number(process.env.NEXT_PUBLIC_NATIONAL_GID ?? 99300389);
+const SALES_GID = Number(process.env.NEXT_PUBLIC_WMS_GID ?? 0);
+const NATIONAL_SHEET_URL = `https://docs.google.com/spreadsheets/d/${NATIONAL_SHEET_ID}/edit?gid=${NATIONAL_GID}#gid=${NATIONAL_GID}`;
+const SALES_SHEET_URL = `https://docs.google.com/spreadsheets/d/${SALES_SHEET_ID}/edit?gid=${SALES_GID}#gid=${SALES_GID}`;
+// The browser talks to same-origin server routes. Secrets stay server-side.
+// A direct Apps Script URL can be supplied only as a temporary static-host fallback.
+const DATA_ENDPOINT =
+  process.env.NEXT_PUBLIC_LOGISTICS_SNAPSHOT_URL ?? "/api/logistics/snapshot";
+const STATUS_ENDPOINT =
+  process.env.NEXT_PUBLIC_LOGISTICS_STATUS_URL ?? "/api/logistics/status";
+const LEGACY_WRITE_ENDPOINT =
+  process.env.NEXT_PUBLIC_APPS_SCRIPT_WRITE_URL ?? "";
+const AUTO_REFRESH_MS = 30 * 60 * 1000;
 
 type Direction = "inbound" | "outbound";
 type OutboundDepartment = "Wholesale" | "B2B/E-Com" | "Nationals" | "MBX" | "NJ";
 
-type ScheduleItem = {
+export type ScheduleItem = {
   id: string;
   direction: Direction;
   date: Date;
@@ -74,7 +84,6 @@ type ScheduleItem = {
   shippingMethod?: string;
   sourceType?: string;
   department?: OutboundDepartment;
-  fulfillment?: FulfillmentTkJob;
 };
 
 type KpiSnapshot = {
@@ -104,7 +113,7 @@ type KpiSnapshot = {
   avgOutOfStateMtd: number;
 };
 
-type InventoryItem = {
+export type InventoryItem = {
   id: string;
   shipmentNo: string;
   productName: string;
@@ -122,29 +131,6 @@ type InventoryCollections = {
   inStock: InventoryItem[];
 };
 
-type FulfillmentTkJob = {
-  invoice?: unknown;
-  remarks?: unknown;
-  shipDate?: unknown;
-  method?: unknown;
-  amount?: unknown;
-  inspection?: unknown;
-  inspEnd?: unknown;
-  movedToPacking?: unknown;
-  dimsCount?: unknown;
-  dimIncludedIn?: unknown;
-  pickStart?: unknown;
-  pickComplete?: unknown;
-  status?: unknown;
-  pickAnomaly?: unknown;
-  [key: string]: unknown;
-};
-
-type FulfillmentTkLoad = {
-  jobs: FulfillmentTkJob[];
-  error: string;
-};
-
 const EMPTY_KPIS: KpiSnapshot = {
   shippingMtd: 0,
   shippingYtd: 0,
@@ -152,10 +138,10 @@ const EMPTY_KPIS: KpiSnapshot = {
   transfersYtd: 0,
   njTransferMtd: 0,
   njTransferYtd: 0,
-  nationalsSalesMtd: SALES_SNAPSHOT.nationalsMtd,
-  nationalsSalesYtd: SALES_SNAPSHOT.nationalsYtd,
-  wmsSalesMtd: SALES_SNAPSHOT.wmsMtd,
-  wmsSalesYtd: SALES_SNAPSHOT.wmsYtd,
+  nationalsSalesMtd: 0,
+  nationalsSalesYtd: 0,
+  wmsSalesMtd: 0,
+  wmsSalesYtd: 0,
   topCarriers: [],
   ltlPercent: 0,
   ftlPercent: 0,
@@ -169,7 +155,6 @@ const EMPTY_KPIS: KpiSnapshot = {
 
 const SOURCE_LEGEND = [
   "Wholesale",
-  "Fulfillment TK",
   "Ocean",
   "Air",
   "UPS (Parcel)",
@@ -190,41 +175,19 @@ const DEPARTMENT_LEGEND: OutboundDepartment[] = [
   "NJ",
 ];
 
-const STATUS_OPTIONS = [
-  "Scheduled",
-  "Work in Progress",
-  "Pending",
-  "Shipping",
-  "Shipped",
-  "Delivered",
-  "Received",
-  "Cancelled",
-  "Completed",
-];
-
-const INBOUND_STATUS_OPTIONS = [
-  ...STATUS_OPTIONS,
+const INBOUND_ONLY_STATUSES = new Set([
+  "N/A",
   "Customs Clearance",
-  "FDA Review/Hold",
-  "FWS Review/Hold",
-  "Delayed",
-];
+  "FDA Review / Hold",
+  "FWS Review / Hold",
+  "FDA Detained",
+  "AQI Examination",
+]);
+const STATUS_OPTIONS: string[] = LOGISTICS_STATUS_OPTIONS.filter((status) => !INBOUND_ONLY_STATUSES.has(status));
+const INBOUND_STATUS_OPTIONS: string[] = LOGISTICS_STATUS_OPTIONS;
 
 const finished = new Set(["shipped", "delivered", "received", "cancelled", "completed"]);
 const finishedImports = new Set(["delivered", "received", "cancelled", "completed"]);
-
-// Defined here (before IMPORT_STALE_CUTOFF) so the IIFE below has no forward-reference
-// dependency on the later startOfToday declaration.
-function startOfToday() {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Los_Angeles",
-    year: "numeric",
-    month: "numeric",
-    day: "numeric",
-  }).formatToParts(new Date());
-  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return new Date(Number(value.year), Number(value.month) - 1, Number(value.day));
-}
 
 // Any import whose ETA is before this date is treated as effectively received/delivered/completed
 // and hidden from the "current + upcoming" Import Schedules table, even if the sheet's Status
@@ -232,13 +195,14 @@ function startOfToday() {
 //
 // This used to be a fixed literal date, which meant it silently stopped working once "today"
 // caught up to it -- every row eventually aged past the cutoff and the whole table (and the
-// Inbound Schedule calendar it feeds) went empty. The cutoff is now the explicit July 1, 2026
-// operational boundary, while source status determines whether a July+ shipment is still current.
-// Operational import history starts July 1, 2026. Keep every non-terminal import
-// from that point forward visible until its source status says it is done.
-// This is intentionally not a rolling window: an overdue Pending/Scheduled import
-// must remain visible instead of silently aging out of the current Import Schedule.
-const IMPORT_STALE_CUTOFF = new Date(2026, 6, 1).getTime();
+// Inbound Schedule calendar it feeds) went empty. It's now a rolling window measured back from
+// today, computed at module load, so it keeps working without needing a manual date bump.
+const IMPORT_STALE_WINDOW_DAYS = 30;
+const IMPORT_STALE_CUTOFF = (() => {
+  const cutoff = startOfToday();
+  cutoff.setDate(cutoff.getDate() - IMPORT_STALE_WINDOW_DAYS);
+  return cutoff.getTime();
+})();
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -348,22 +312,81 @@ function moneyWithCents(value: number) {
   }).format(value);
 }
 
+function KpiPeriodValues({ mtd, ytd, format = money }: { mtd: number; ytd: number; format?: (value: number) => string }) {
+  return (
+    <>
+      <div><small>MTD</small><strong>{format(mtd)}</strong></div>
+      <div><small>YTD</small><strong>{format(ytd)}</strong></div>
+    </>
+  );
+}
+
 function dayKey(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(
     date.getDate(),
   ).padStart(2, "0")}`;
 }
 
-function statusClass(status: string) {
+function startOfToday() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+  }).formatToParts(new Date());
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return new Date(Number(value.year), Number(value.month) - 1, Number(value.day));
+}
+
+// Five-bucket classification covering every value in LOGISTICS_STATUS_OPTIONS
+// (lib/domain/status.ts) with no gaps — see tests/status-pills.test.ts, which
+// asserts every canonical status maps to exactly one bucket.
+// Regex-based (not an exact lookup) so it still classifies reasonably for
+// free-text status variants real sheet data can contain beyond the
+// canonical list.
+export function statusClass(status: string) {
   const value = status.toLowerCase();
-  if (/delay|hold|review|pending/.test(value)) return "status warning";
-  if (/deliver|receive|complete|shipped/.test(value)) return "status done";
-  if (/work|shipping|clearance/.test(value)) return "status active";
-  return "status";
+  if (/cancel/.test(value)) return "status stop";
+  if (/delay|pending/.test(value)) return "status warn";
+  if (/customs|fda|fws|aqi|detained|hold|review/.test(value)) return "status hold";
+  if (/deliver|receive|complete|shipped/.test(value)) return "status good";
+  return "status neutral";
+}
+
+/**
+ * Every canonical status this app recognizes (lib/domain/status.ts), each
+ * shown through the same statusClass() pill classifier the schedule cards
+ * and Data Grids use — so this legend can never silently drift from what
+ * those actually render, and can never omit a real status the way a
+ * hand-maintained list could.
+ */
+function StatusLegend() {
+  return (
+    <section className="status-legend-panel" aria-labelledby="status-legend-heading">
+      <div className="panel-heading status-legend-heading">
+        <div>
+          <p className="eyebrow">Shared Vocabulary</p>
+          <h2 id="status-legend-heading">Status Workflow</h2>
+        </div>
+      </div>
+      <div className="status-legend-row">
+        {LOGISTICS_STATUS_OPTIONS.map((option) => (
+          <span key={option} className={statusClass(option)}>
+            {option}
+          </span>
+        ))}
+      </div>
+      <p className="panel-note status-legend-note">
+        Normalized from raw sheet text (lib/domain/status.ts). The five colors group statuses by
+        what they mean operationally — complete, needs attention now, delayed/pending, held for
+        review, or in progress — not by which department&apos;s sheet a row came from.
+      </p>
+    </section>
+  );
 }
 
 function importsCellUrl(row: number, column: string) {
-  return `${SHEET_URL}?gid=1497250700&range=${column}${row}#gid=1497250700&range=${column}${row}`;
+  return `${SHEET_URL}?gid=${IMPORTS_GID}&range=${column}${row}#gid=${IMPORTS_GID}&range=${column}${row}`;
 }
 
 function sourceRowUrl(item: ScheduleItem) {
@@ -374,13 +397,16 @@ function sourceRowUrl(item: ScheduleItem) {
     return importsCellUrl(item.sourceRow, "A");
   }
   if (item.sourceSheet === "Outbound Shipping Schedule") {
-    return `${SHEET_URL}?gid=20260708&range=A${item.sourceRow}#gid=20260708&range=A${item.sourceRow}`;
+    return `${SHEET_URL}?gid=${OUTBOUND_GID}&range=A${item.sourceRow}#gid=${OUTBOUND_GID}&range=A${item.sourceRow}`;
+  }
+  if (item.sourceSheet === "WH Trucking Request") {
+    return `${SHEET_URL}?gid=${TRUCKING_GID}&range=A${item.sourceRow}#gid=${TRUCKING_GID}&range=A${item.sourceRow}`;
   }
   if (item.sourceSheet === "NATIONAL ORDER PROGRESS") {
-    return `https://docs.google.com/spreadsheets/d/${NATIONAL_SHEET_ID}/edit?gid=99300389&range=A${item.sourceRow}#gid=99300389&range=A${item.sourceRow}`;
+    return `https://docs.google.com/spreadsheets/d/${NATIONAL_SHEET_ID}/edit?gid=${NATIONAL_GID}&range=A${item.sourceRow}#gid=${NATIONAL_GID}&range=A${item.sourceRow}`;
   }
   if (item.sourceSheet === "Stylekorean") {
-    return `https://docs.google.com/spreadsheets/d/${SALES_SHEET_ID}/edit?gid=0&range=A${item.sourceRow}#gid=0&range=A${item.sourceRow}`;
+    return `https://docs.google.com/spreadsheets/d/${SALES_SHEET_ID}/edit?gid=${SALES_GID}&range=A${item.sourceRow}#gid=${SALES_GID}&range=A${item.sourceRow}`;
   }
   return item.sourceUrl ?? SHEET_URL;
 }
@@ -404,7 +430,10 @@ function officialTrackingUrl(container: string, carrierKey: string, fallback: st
   }
   if (/AMAZON/.test(carrier) || /^TBA/.test(value)) return "https://track.amazon.com/";
   if (/^(SMCU)|SMLM|SM LINES?/.test(`${value} ${carrier}`)) {
-    return `https://esvc.smlines.com/smline/CUP_HOM_3301GS.do?_search=false&f_cmd=121&page=1&rows=10000&search_name=${encodeURIComponent(value)}&search_type=C&sidx=&sord=asc`;
+    // CUP_HOM_3301GS.do is SM Line's internal JSON data endpoint. Linking to it
+    // exposes implementation fields such as hashColumns instead of a readable
+    // tracking view. Send users to the carrier's human-facing Cargo Tracking UI.
+    return "https://esvc.smlines.com/smline/CUP_HOM_3301.do?sessLocale=en";
   }
   if (/^(HDMU)|(^| )HMM( |$)/.test(`${value} ${carrier}`)) {
     return "https://www.hmm21.com/e-service/general/trackNTrace/TrackNTrace.do";
@@ -434,12 +463,35 @@ function parcelCarrier(value: string) {
   return match ? match[1].toUpperCase().replace("FEDEX", "FedEx") : "";
 }
 
+function carrierFromTrackingNumber(value: string) {
+  const tracking = clean(value).replace(/[\s-]+/g, "").toUpperCase();
+  if (!tracking) return "";
+  if (/^1Z[A-Z0-9]{10,}$/.test(tracking)) return "UPS";
+  if (/^TBA[A-Z0-9]{8,}$/.test(tracking)) return "AMAZON";
+  if (/^JJD[A-Z0-9]{8,}$/.test(tracking)) return "DHL";
+  if (/^[A-Z]{2}\d{9}US$/.test(tracking)) return "USPS";
+  if (/^9\d{19,21}$/.test(tracking)) return "USPS";
+  if (/^\d{12}$/.test(tracking) || /^\d{15}$/.test(tracking)) return "FedEx";
+  if (/^\d{20,22}$/.test(tracking) && !tracking.startsWith("9")) return "FedEx";
+  return "";
+}
+
+// Amazon tracking remains excluded because it has no supported server-side
+// shipment API; UPS/FedEx/USPS/DHL use official carrier integrations.
+function trackableCarrier(value?: string): "ups" | "fedex" | "usps" | "dhl" | null {
+  const normalized = clean(value).toLowerCase();
+  if (normalized.includes("ups")) return "ups";
+  if (normalized.includes("fedex")) return "fedex";
+  if (normalized.includes("usps")) return "usps";
+  if (normalized.includes("dhl")) return "dhl";
+  return null;
+}
+
 function sourceClass(value: string) {
   const normalized = clean(value).toLowerCase();
   if (normalized === "ocean") return "source-ocean";
   if (normalized === "air") return "source-air";
   if (normalized === "wholesale") return "source-wholesale";
-  if (normalized === "fulfillment tk") return "source-fulfillment-tk";
   if (normalized.includes("ups") && normalized.includes("freight")) return "source-ups-freight";
   if (normalized.includes("fedex") && normalized.includes("freight")) return "source-fedex-freight";
   if (normalized.includes("dhl") && normalized.includes("freight")) return "source-dhl-freight";
@@ -511,12 +563,7 @@ function firstDatedValue(...values: string[]) {
   return null;
 }
 
-function lastDateToken(value: string) {
-  const matches = clean(value).match(/\d{1,2}\/\d{1,2}(?:\/\d{2,4})?/g);
-  return matches ? matches[matches.length - 1] : clean(value);
-}
-
-function sanitizeSecondary(value: string) {
+function lastDateToken(value: string) { const matches = clean(value).match(/\d{1,2}\/\d{1,2}(?:\/\d{2,4})?/g); return matches ? matches[matches.length - 1] : clean(value); } function sanitizeSecondary(value: string) {
   return clean(value)
     .split(/\s*·\s*/)
     .filter((part) => part && !/^imported from\b/i.test(part))
@@ -557,6 +604,62 @@ function inventoryProductsMatch(left: InventoryItem, right: InventoryItem) {
   );
 }
 
+function parseFullDate(value: string): Date | null {
+  const text = clean(value);
+  if (!text) return null;
+  const mdy = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (mdy) {
+    let year = Number(mdy[3]);
+    if (year < 100) year += 2000;
+    return new Date(year, Number(mdy[1]) - 1, Number(mdy[2]));
+  }
+  const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (iso) return new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
+  return null;
+}
+
+// Buckets relative to today: already-expired or expiring within a year is urgent, 1-2 years out
+// is a warning, anything further away (or unparseable) needs no emphasis.
+function expirationBucketClass(expirationDate: string): string {
+  const date = parseFullDate(expirationDate);
+  if (!date) return "";
+  const today = new Date();
+  const oneYearOut = new Date(today.getFullYear() + 1, today.getMonth(), today.getDate());
+  const twoYearsOut = new Date(today.getFullYear() + 2, today.getMonth(), today.getDate());
+  if (date.getTime() < oneYearOut.getTime()) return "exp-urgent";
+  if (date.getTime() < twoYearsOut.getTime()) return "exp-soon";
+  return "exp-ok";
+}
+
+// No fixed warehouse-zone vocabulary exists in the data — this is a best-guess prefix/substring
+// match against common zone codes (SK/BP/FT) and exception states (HOLD/DAMAGED), not a verified
+// enum. Needs checking against real location values.
+function inventoryLocationClass(location: string): string {
+  const text = clean(location).toUpperCase();
+  if (!text) return "";
+  if (text.includes("DAMAG")) return "loc-damaged";
+  if (text.includes("HOLD")) return "loc-hold";
+  if (text.startsWith("SK")) return "loc-sk";
+  if (text.startsWith("BP")) return "loc-bp";
+  if (text.startsWith("FT")) return "loc-ft";
+  return "loc-other";
+}
+
+// No confirmed SKU-revision naming convention exists — this is a best-guess heuristic (a
+// -R/-REV/-V# suffix with a separator, or a single trailing letter glued onto a numeric SKU body)
+// grouping a SKU with its likely revised/renewed sibling. Needs checking against real SKUs.
+function skuBaseGroup(sku: string): string {
+  const text = clean(sku).toUpperCase();
+  if (!text) return "";
+  const withSeparator = text.match(/^(.+)[-_ ](?:REV\d*|R\d*|V\d+|RENEW(?:ED)?)$/);
+  if (withSeparator) return withSeparator[1];
+  const trailingLetter = text.match(/^([A-Z]*\d+)[A-Z]$/);
+  if (trailingLetter) return trailingLetter[1];
+  return text;
+}
+
+const SKU_GROUP_PALETTE = ["sku-group-0", "sku-group-1", "sku-group-2", "sku-group-3", "sku-group-4", "sku-group-5"];
+
 function inventoryShipmentCodes(item: InventoryItem) {
   return new Set(
     inventoryShipmentReferences(item.shipmentNo)
@@ -573,14 +676,6 @@ function scheduleMatchesInventoryShipment(item: ScheduleItem, selected: Inventor
     .flatMap((value) => inventoryShipmentReferences(value ?? ""))
     .map(normalizedShipmentCode)
     .some((value) => selectedCodes.has(value));
-}
-
-function inventoryForActiveImports(item: InventoryItem, activeCodes: Set<string>) {
-  const activeReferences = inventoryShipmentReferences(item.shipmentNo).filter((reference) =>
-    activeCodes.has(normalizedShipmentCode(reference)),
-  );
-  if (!activeReferences.length) return null;
-  return { ...item, shipmentNo: activeReferences.join(", ") };
 }
 
 function packingListUrl(shipment: string) {
@@ -647,107 +742,6 @@ async function fetchOptionalSheet(sheetName: string, range: string) {
   } catch {
     return null;
   }
-}
-
-function parseFulfillmentDate(value: unknown) {
-  const text = clean(value);
-  const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-  if (iso) return new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
-  return parseDate(text);
-}
-
-function fulfillmentBool(value: unknown) {
-  return value === true || /^(TRUE|YES|1)$/i.test(clean(value));
-}
-
-function fulfillmentTkStatus(job: FulfillmentTkJob) {
-  const inspection = clean(job.inspection);
-  if (/ISSUE|HOLD|ERROR|MISMATCH/i.test(inspection) || fulfillmentBool(job.pickAnomaly)) {
-    return "Pending";
-  }
-  const hasProgress = Boolean(
-    clean(job.pickStart) ||
-      fulfillmentBool(job.pickComplete) ||
-      inspection ||
-      fulfillmentBool(job.movedToPacking) ||
-      Number(job.dimsCount || 0) > 0,
-  );
-  return hasProgress ? "Work in Progress" : "Scheduled";
-}
-
-async function fetchFulfillmentTkJobs(): Promise<FulfillmentTkLoad> {
-  try {
-    const url = new URL(FULFILLMENT_API_URL);
-    url.searchParams.set("op", "getSalesOverview");
-    url.searchParams.set("t", String(Date.now()));
-    const response = await fetch(url, { cache: "no-store" });
-    if (!response.ok) throw new Error(`Fulfillment read failed (${response.status}).`);
-    const payload = await response.json();
-    if (payload?.ok === false) throw new Error(clean(payload.error) || "Fulfillment source rejected the request.");
-    const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
-    return {
-      jobs: jobs.filter((job: FulfillmentTkJob) => clean(job.method).toUpperCase() === "TK"),
-      error: "",
-    };
-  } catch (error) {
-    return {
-      jobs: [],
-      error: error instanceof Error ? error.message : "Fulfillment TK source could not be loaded.",
-    };
-  }
-}
-
-function fulfillmentTkItems(jobs: FulfillmentTkJob[]): ScheduleItem[] {
-  return jobs.flatMap((job, index) => {
-    const shipDate = clean(job.shipDate);
-    const date = parseFulfillmentDate(shipDate);
-    if (!date) return [];
-    const invoice = clean(job.invoice);
-    const customer = clean(job.remarks) || "TK Fulfillment";
-    const amount = parseMoney(clean(job.amount));
-    const inspection = clean(job.inspection);
-    const dimsCount = Number(job.dimsCount || 0) || 0;
-    const pickLabel = fulfillmentBool(job.pickComplete)
-      ? "Picking complete"
-      : clean(job.pickStart)
-        ? "Picking active"
-        : "Picking waiting";
-    const secondary = [
-      "FULFILLMENT TK",
-      pickLabel,
-      inspection ? `Inspection: ${inspection}` : "",
-      fulfillmentBool(job.movedToPacking) ? "Moved to packing" : "",
-      dimsCount ? `Dims: ${dimsCount}` : "",
-      amount ? `Amount: ${moneyWithCents(amount)}` : "",
-    ]
-      .filter(Boolean)
-      .join(" · ");
-    return [
-      {
-        id: `fulfillment-tk-${normalizedIdentifier(invoice) || index}`,
-        direction: "outbound" as const,
-        date,
-        dateText: shipDate,
-        title: customer,
-        reference: invoice || "TK fulfillment order",
-        secondary,
-        status: fulfillmentTkStatus(job),
-        sourceSheet: "SK Fulfillment Sales · TK",
-        sourceRow: index + 1,
-        sourceUrl: FULFILLMENT_SALES_URL,
-        editable: false,
-        customer,
-        customerNo: customer,
-        invoice,
-        carrier: "TK",
-        shipDate,
-        shippingMethod: "Trucking",
-        sourceType: "Fulfillment TK",
-        department: "B2B/E-Com" as const,
-        fulfillment: job,
-      },
-    ];
-  });
 }
 
 function inventoryHeader(value: unknown) {
@@ -920,13 +914,13 @@ function InventoryPanel({
   const filteredItems = useMemo(() => {
     const needle = inventoryQuery.trim().toLowerCase();
     if (!needle) return items;
-    return items.filter((item) => [item.productName, item.sku, item.upc, item.expirationDate, item.location, item.shipmentNo]
+    return items.filter((item) => [item.productName, item.sku, item.upc, item.expirationDate, item.location, item.shipmentNo, item.palletNumber]
       .join(" ")
       .toLowerCase()
       .includes(needle));
   }, [inventoryQuery, items]);
   const displayedItems = useMemo(() => {
-    if (!selectedItem) return filteredItems.slice(0, 250);
+    if (!selectedItem || !showLocation) return filteredItems.slice(0, 250);
     const selectedMatches = items.filter((item) => inventoryProductsMatch(item, selectedItem));
     const visibleById = new Map(
       [...selectedMatches, ...filteredItems].map((item) => [item.id, item]),
@@ -938,15 +932,35 @@ function InventoryPanel({
       )
       .slice(0, 250);
   }, [filteredItems, items, selectedItem, showLocation]);
+  // Only color a SKU family when it actually has more than one distinct SKU sharing a base —
+  // otherwise every row would get tinted for no reason.
+  const skuGroupColors = useMemo(() => {
+    const bases = new Map<string, Set<string>>();
+    displayedItems.forEach((item) => {
+      const sku = clean(item.sku);
+      if (!sku) return;
+      const base = skuBaseGroup(sku);
+      const set = bases.get(base) ?? new Set<string>();
+      set.add(sku);
+      bases.set(base, set);
+    });
+    const colors = new Map<string, string>();
+    let paletteIndex = 0;
+    bases.forEach((skus, base) => {
+      if (skus.size < 2) return;
+      colors.set(base, SKU_GROUP_PALETTE[paletteIndex % SKU_GROUP_PALETTE.length]);
+      paletteIndex += 1;
+    });
+    return colors;
+  }, [displayedItems]);
   useEffect(() => {
-    if (!selectedItem) return;
+    if (!selectedItem || !showLocation) return;
     const frame = window.requestAnimationFrame(() => {
       const wrap = tableWrapRef.current;
       const matchedRow = wrap?.querySelector<HTMLTableRowElement>("tr.inventory-match");
       if (!wrap || !matchedRow) return;
       const targetTop = matchedRow.offsetTop - (wrap.clientHeight - matchedRow.offsetHeight) / 2;
       wrap.scrollTo({ top: Math.max(0, targetTop), behavior: "smooth" });
-      matchedRow.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(frame);
   }, [displayedItems, selectedItem, showLocation]);
@@ -961,7 +975,7 @@ function InventoryPanel({
         <input
           aria-label={`Search ${title}`}
           onChange={(event) => setInventoryQuery(event.target.value)}
-          placeholder="Search product, SKU, UPC, shipment, location…"
+          placeholder="Search product, SKU, UPC, shipment, pallet #, location…"
           type="search"
           value={inventoryQuery}
         />
@@ -972,8 +986,8 @@ function InventoryPanel({
           <thead><tr><th>Product name</th><th>SKU #</th><th>UPC #</th><th>Expiration</th>{!showLocation && <th>Pallet #</th>}<th>Qty</th>{showLocation && <th>Location</th>}</tr></thead>
           <tbody>
             {displayedItems.map((item) => {
-              const selected = selectedItem?.id === item.id;
-              const matching = Boolean(selectedItem && inventoryProductsMatch(item, selectedItem));
+              const selected = selectable && selectedItem?.id === item.id;
+              const matching = !selectable && Boolean(selectedItem && inventoryProductsMatch(item, selectedItem));
               return <tr
                 aria-label={selectable ? `Select ${item.productName || item.sku || item.upc}` : undefined}
                 aria-selected={selected || matching || undefined}
@@ -1008,16 +1022,19 @@ function InventoryPanel({
                         target="_blank"
                         title={`Open packing-list documents for ${shipment}`}
                       >
+                        <span aria-hidden="true">{driveLinkGlyph(shipment, packingListUrl(shipment))}</span>{" "}
                         {shipment} <span aria-hidden="true">↗</span>
                       </a>
                     ))}
                   </small>
                 )}
               </td>
-              <td>{item.sku || "—"}</td><td>{item.upc || "—"}</td><td>{item.expirationDate || "—"}</td>
+              <td className={skuGroupColors.get(skuBaseGroup(item.sku)) ?? ""}>{item.sku || "—"}</td>
+              <td>{item.upc || "—"}</td>
+              <td className={expirationBucketClass(item.expirationDate)}>{item.expirationDate || "—"}</td>
               {!showLocation && <td className="inventory-pallet">{item.palletNumber || "—"}</td>}
               <td>{item.quantity.toLocaleString()}</td>
-              {showLocation && <td>{item.location || "Unassigned"}</td>}
+              {showLocation && <td className={inventoryLocationClass(item.location)}>{item.location || "Unassigned"}</td>}
             </tr>})}
             {!loading && filteredItems.length === 0 && <tr><td className="import-empty" colSpan={6}>No matching inventory records are currently available.</td></tr>}
             {loading && <tr><td className="import-empty" colSpan={6}>Syncing inventory…</td></tr>}
@@ -1032,89 +1049,66 @@ function LowStockPanel({
   items,
   inboundItems,
   loading,
-  selectedItem,
-  onSelect,
 }: {
   items: InventoryItem[];
   inboundItems: InventoryItem[];
   loading: boolean;
-  selectedItem: InventoryItem | null;
-  onSelect?: (item: InventoryItem) => void;
 }) {
   const lowStockItems = useMemo(
     () => items.filter((item) => item.quantity < 200).sort((a, b) => a.quantity - b.quantity),
     [items],
   );
-  const tableWrapRef = useRef<HTMLDivElement>(null);
-  const displayedLowStockItems = useMemo(() => {
-    if (!selectedItem) return lowStockItems;
-    return [...lowStockItems].sort((left, right) =>
-      Number(inventoryProductsMatch(right, selectedItem)) -
-      Number(inventoryProductsMatch(left, selectedItem)),
-    );
-  }, [lowStockItems, selectedItem]);
-  useEffect(() => {
-    if (!selectedItem) return;
-    const frame = window.requestAnimationFrame(() => {
-      const wrap = tableWrapRef.current;
-      const matchedRow = wrap?.querySelector<HTMLTableRowElement>("tr.inventory-match");
-      if (!wrap || !matchedRow) return;
-      const targetTop = matchedRow.offsetTop - (wrap.clientHeight - matchedRow.offsetHeight) / 2;
-      wrap.scrollTo({ top: Math.max(0, targetTop), behavior: "smooth" });
-      matchedRow.focus({ preventScroll: true });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [displayedLowStockItems, selectedItem]);
   const incomingShipmentsFor = (item: InventoryItem) =>
     Array.from(new Set(
       inboundItems
         .filter((inbound) => inventoryProductsMatch(inbound, item))
         .flatMap((inbound) => inventoryShipmentReferences(inbound.shipmentNo)),
     ));
+  const skuGroupColors = useMemo(() => {
+    const bases = new Map<string, Set<string>>();
+    lowStockItems.forEach((item) => {
+      const sku = clean(item.sku);
+      if (!sku) return;
+      const base = skuBaseGroup(sku);
+      const set = bases.get(base) ?? new Set<string>();
+      set.add(sku);
+      bases.set(base, set);
+    });
+    const colors = new Map<string, string>();
+    let paletteIndex = 0;
+    bases.forEach((skus, base) => {
+      if (skus.size < 2) return;
+      colors.set(base, SKU_GROUP_PALETTE[paletteIndex % SKU_GROUP_PALETTE.length]);
+      paletteIndex += 1;
+    });
+    return colors;
+  }, [lowStockItems]);
   return (
     <section className="inventory-panel low-stock-panel" aria-label="Low Stock">
       <div className="panel-heading inventory-heading">
         <div><p className="eyebrow">QTY UNDER 200 · CURRENT WAREHOUSE ON HAND</p><h2>Low Stock</h2></div>
         <div className="inventory-total"><strong>{lowStockItems.length}</strong><span>products</span></div>
       </div>
-      <div className="inventory-table-wrap" ref={tableWrapRef}>
+      <div className="inventory-table-wrap">
         <table className="inventory-table">
           <thead><tr><th>Product name</th><th>SKU #</th><th>UPC #</th><th>Expiration</th><th>Qty</th><th>Location</th><th>Incoming shipment #</th></tr></thead>
           <tbody>
-            {displayedLowStockItems.map((item) => {
+            {lowStockItems.map((item) => {
               const shipments = incomingShipmentsFor(item);
               return (
-                <tr
-                  key={item.id}
-                  aria-label={`Select ${item.productName || item.sku || item.upc}`}
-                  aria-selected={Boolean(selectedItem && inventoryProductsMatch(item, selectedItem)) || undefined}
-                  className={[
-                    "inventory-selectable",
-                    selectedItem?.id === item.id ? "inventory-selected" : "",
-                    selectedItem && inventoryProductsMatch(item, selectedItem) ? "inventory-match" : "",
-                  ].filter(Boolean).join(" ")}
-                  data-product-key={normalizedIdentifier(item.sku || item.upc || item.productName)}
-                  onClick={() => onSelect?.(item)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      onSelect?.(item);
-                    }
-                  }}
-                  role="button"
-                  tabIndex={0}
-                >
+                <tr key={item.id}>
                   <td><strong>{item.productName || "—"}</strong></td>
-                  <td>{item.sku || "—"}</td>
+                  <td className={skuGroupColors.get(skuBaseGroup(item.sku)) ?? ""}>{item.sku || "—"}</td>
                   <td>{item.upc || "—"}</td>
-                  <td>{item.expirationDate || "—"}</td>
+                  <td className={expirationBucketClass(item.expirationDate)}>{item.expirationDate || "—"}</td>
                   <td>{item.quantity.toLocaleString()}</td>
-                  <td>{item.location || "Unassigned"}</td>
+                  <td className={inventoryLocationClass(item.location)}>{item.location || "Unassigned"}</td>
                   <td>
                     {shipments.length ? (
                       <span className="inventory-shipment-links">
                         {shipments.map((shipment) => (
                           <a href={packingListUrl(shipment)} key={shipment} rel="noreferrer" target="_blank">
+                            <span aria-hidden="true">{driveLinkGlyph(shipment, packingListUrl(shipment))}</span>{" "}
                             {shipment} <span aria-hidden="true">↗</span>
                           </a>
                         ))}
@@ -1144,12 +1138,160 @@ async function fetchCsvRows(spreadsheetId: string, gid: number) {
 }
 
 async function fetchLiveKpis() {
-  // GitHub Pages build: KPIs are computed in the browser from the same
-  // link-readable workbook CSVs the old /api/sales-kpis route used.
+  // During migration this remains a Sheets-derived fallback. Once the database
+  // is fully authoritative, the snapshot API can provide the same KPI payload.
   return (await computeLiveKpis()) as unknown as KpiSnapshot;
 }
 
+type WorkerSnapshot = {
+  ok: true;
+  generatedAt?: string;
+  version?: string;
+  storage?: "d1" | "sheets";
+  stale?: boolean;
+  staleReason?: string;
+  sourceHealth?: Array<{ name: string; ok: boolean; error?: string }>;
+  sources: {
+    imports?: string[][];
+    outbound?: string[][];
+    outboundMeta?: OutboundSourceMeta;
+    nationalOutbound?: any;
+    salesOutbound?: any;
+    inventoryDashboardTable?: any;
+    skwInboundTable?: any;
+    skwStockTable?: any;
+    gmailIngestion?: GmailIngestionEvent[] | null;
+  };
+  kpis?: KpiSnapshot | null;
+};
+
+type OutboundSourceMeta = {
+  sheetName: "Outbound Shipping Schedule" | "WH Trucking Request";
+  headerRow: number;
+  rowCount: number;
+  fallback: boolean;
+  reason?: string;
+};
+
+const OUTBOUND_SCHEDULE_META: OutboundSourceMeta = {
+  sheetName: "Outbound Shipping Schedule",
+  headerRow: 1,
+  rowCount: 0,
+  fallback: false,
+};
+
+function populatedOutboundRows(rows: string[][], headerRow: number) {
+  return rows.slice(headerRow).some((row) => Boolean(cell(row, 0) && cell(row, 3)));
+}
+
+async function fetchWorkerSnapshot(): Promise<WorkerSnapshot> {
+  const response = await fetch(DATA_ENDPOINT, { cache: "no-store" });
+  const payload = (await response.json().catch(() => null)) as
+    | (Partial<WorkerSnapshot> & { error?: string })
+    | null;
+  if (!response.ok || payload?.ok !== true || !payload?.sources) {
+    throw new Error(payload?.error || `Worker snapshot unavailable (${response.status}).`);
+  }
+  if (!Array.isArray(payload.sources.imports) || !Array.isArray(payload.sources.outbound)) {
+    throw new Error("Worker snapshot is missing required imports/outbound sources.");
+  }
+  return payload as WorkerSnapshot;
+}
+
+async function fetchSheetSnapshot() {
+  const [
+    imports,
+    outbound,
+    trucking,
+    nationalOutbound,
+    salesOutbound,
+    liveKpis,
+    inventoryDashboardTable,
+    skwInboundTable,
+    skwStockTable,
+  ] = await Promise.all([
+    fetchCsvRows(SHEET_ID, IMPORTS_GID),
+    fetchCsvRows(SHEET_ID, OUTBOUND_GID),
+    fetchCsvRows(SHEET_ID, TRUCKING_GID),
+    fetchTable(NATIONAL_SHEET_ID, NATIONAL_GID, "A1:U3500", 1),
+    fetchTable(SALES_SHEET_ID, SALES_GID, "A2:AG4200", 1),
+    fetchLiveKpis(),
+    fetchOptionalSheet("INVENTORY", "A1:O6500"),
+    fetchOptionalSheet("SKW_Inbound", "A1:R2500"),
+    fetchOptionalSheet("SKW_Stock", "A1:J2500"),
+  ]);
+  const useSchedule = populatedOutboundRows(outbound, OUTBOUND_SCHEDULE_META.headerRow);
+  const outboundMeta: OutboundSourceMeta = useSchedule
+    ? { ...OUTBOUND_SCHEDULE_META, rowCount: outbound.slice(OUTBOUND_SCHEDULE_META.headerRow).filter((row) => Boolean(cell(row, 0) && cell(row, 3))).length }
+    : {
+        sheetName: "WH Trucking Request",
+        headerRow: 2,
+        rowCount: trucking.slice(2).filter((row) => Boolean(cell(row, 0) && cell(row, 3))).length,
+        fallback: true,
+        reason: "Outbound Shipping Schedule has no shipment rows",
+      };
+  return {
+    imports,
+    outbound: useSchedule ? outbound : trucking,
+    outboundMeta,
+    nationalOutbound,
+    salesOutbound,
+    liveKpis,
+    inventoryDashboardTable,
+    skwInboundTable,
+    skwStockTable,
+  };
+}
+
+async function fetchOperationalSnapshot() {
+  try {
+    const snapshot = await fetchWorkerSnapshot();
+    const sources = snapshot.sources;
+    return {
+      imports: sources.imports!,
+      outbound: sources.outbound!,
+      outboundMeta: sources.outboundMeta ?? OUTBOUND_SCHEDULE_META,
+      nationalOutbound: sources.nationalOutbound ?? { cols: [], rows: [] },
+      salesOutbound: sources.salesOutbound ?? { cols: [], rows: [] },
+      liveKpis: snapshot.kpis ?? (await fetchLiveKpis()),
+      inventoryDashboardTable: sources.inventoryDashboardTable ?? null,
+      skwInboundTable: sources.skwInboundTable ?? null,
+      skwStockTable: sources.skwStockTable ?? null,
+      // null (not []) when the deployed Worker predates the feed, so the card
+      // reports "unavailable" instead of claiming the inbox is empty.
+      gmailIngestion: sources.gmailIngestion ?? null,
+      connection: {
+        mode: snapshot.stale ? "stale" as const : "worker" as const,
+        storage: snapshot.storage,
+        version: snapshot.version,
+        detail: snapshot.staleReason,
+        degradedSources: (snapshot.sourceHealth ?? []).filter((source) => !source.ok).length,
+      },
+    };
+  } catch (workerError) {
+    // Keep a read-only direct-Sheets fallback so the schedule remains visible
+    // during a Worker routing incident. Status writes still require the Worker.
+    console.warn("Worker snapshot unavailable; falling back to Google Sheets.", workerError);
+    return {
+      ...(await fetchSheetSnapshot()),
+      // The direct-Sheets fallback carries no ingestion feed.
+      gmailIngestion: null,
+      connection: {
+        mode: "sheets" as const,
+        storage: "sheets" as const,
+        version: undefined,
+        detail: workerError instanceof Error ? workerError.message : "Worker snapshot unavailable",
+        degradedSources: 0,
+      },
+    };
+  }
+}
+
+type ConnectionState = Awaited<ReturnType<typeof fetchOperationalSnapshot>>["connection"];
+
 function normalizeStatus(value: string) {
+  const canonical = normalizeLogisticsStatus(value);
+  if (canonical) return canonical;
   const normalized = clean(value).toLowerCase();
   if (!normalized) return "Scheduled";
   if (normalized === "wip") return "Work in Progress";
@@ -1219,13 +1361,11 @@ function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
     const hasShipmentIdentity = Boolean(record.shipmentNo);
     const shipmentLabel = clean(record.shipmentNo).toUpperCase();
     const planningRow = /^(?:AS OF\b|SCHEDULING\b|SCHEDULED\b|NEED SCHEDULING\b|MONTH OF\b|URGENT\b|COMPLETED\b|ESTIMATED\b)/.test(shipmentLabel);
-    // Current imports can have incomplete documents, but planning-grid labels can never
-    // become shipment rows even when neighboring cells look like dates or identifiers.
+    // Newly scheduled imports remain visible before invoice/MBL/container documents arrive,
+    // while planning-grid labels are never promoted into shipment rows.
     if (!hasShipmentIdentity || planningRow || parcelCarrier(record.shipmentNo)) return [];
 
     // Import Schedule is authoritative from IMPORTS column O (ETA) only.
-    // Delivery Expected belongs to receiving/trucking planning and ETD is an origin date;
-    // neither may move a shipment into a different inbound ETA slot.
     const dated = firstDatedValue(record.eta);
     if (!dated) return [];
     const date = dated.date;
@@ -1274,6 +1414,11 @@ function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
       eta,
       deliveryExpected: record.deliveryExpected,
       isSmallParcel: false,
+      // No dedicated carrier column exists in IMPORTS for Air/Ocean freight —
+      // vessel is the closest available proxy (ocean vessel names are usually
+      // carrier-branded, e.g. "MAERSK EDMONTON") and is already surfaced in
+      // `secondary` above, so reuse it rather than leaving Top Carriers blank.
+      carrier: record.vessel,
       shippingMethod: mode,
       sourceType: mode,
     }];
@@ -1283,11 +1428,8 @@ function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
 function inboundParcelItems(rows: string[][]): ScheduleItem[] {
   let currentCarrier = "";
   const today = startOfToday();
-  const parcelsMarkerIndex = importSectionMarkerIndex(rows, "PARCELS");
-  if (parcelsMarkerIndex === -1) return [];
 
-  return rows.slice(parcelsMarkerIndex + 1).flatMap((row, offset) => {
-    const index = parcelsMarkerIndex + 1 + offset;
+  return rows.flatMap((row, index) => {
     const firstColumn = cell(row, 0);
     const sectionCarrier = parcelCarrier(firstColumn);
     if (sectionCarrier) {
@@ -1295,9 +1437,11 @@ function inboundParcelItems(rows: string[][]): ScheduleItem[] {
     } else if (firstColumn) {
       currentCarrier = "";
     }
-    if (!currentCarrier) return [];
-
     const trackingNumber = trackingCandidate(cell(row, 1), cell(row, 10));
+    const trackingCarrier = carrierFromTrackingNumber(trackingNumber);
+    const resolvedCarrier = trackingCarrier || currentCarrier;
+    if (!resolvedCarrier) return [];
+
     const invoice = cell(row, 2);
     const department = cell(row, 3);
     const etaSource = lastDateToken(cell(row, 4));
@@ -1308,9 +1452,7 @@ function inboundParcelItems(rows: string[][]): ScheduleItem[] {
     if (isSectionHeader) return [];
 
     const sourceRow = index + 1;
-    // WEBSITE STATUS is column AB (index 27) on IMPORTS; AD/29 lands on the small-parcel
-    // section's "BRAND" header block, which silently returned blank statuses.
-    const status = normalizeStatus(cell(row, 27));
+    const status = normalizeStatus(cell(row, 27)); // Column AB holds the small-parcel status ("Delivered", "FDA Review / Hold", etc.); column AD is "BRAND", not status.
     const datedValue = firstDatedValue(etaSource);
     const sourceDate = datedValue?.date ?? today;
     const unfinished = !finished.has(status.toLowerCase());
@@ -1324,7 +1466,7 @@ function inboundParcelItems(rows: string[][]): ScheduleItem[] {
     const etaText = datedValue?.text
       ? `${datedValue.text}${overdue ? " · OVERDUE" : ""}`
       : "ETA pending";
-    const shipmentNo = trackingNumber || `${currentCarrier}-${sourceRow}`;
+    const shipmentNo = trackingNumber || `${resolvedCarrier}-${sourceRow}`;
 
     return [
       {
@@ -1333,7 +1475,7 @@ function inboundParcelItems(rows: string[][]): ScheduleItem[] {
         date,
         dateText: etaText,
         title: trackingNumber || "Tracking pending",
-        reference: trackingNumber || invoice || `${currentCarrier} parcel`,
+        reference: trackingNumber || invoice || `${resolvedCarrier} parcel`,
         secondary: department,
         status,
         sourceSheet: "IMPORTS",
@@ -1346,16 +1488,16 @@ function inboundParcelItems(rows: string[][]): ScheduleItem[] {
         invoiceUrl: invoice ? invoiceFileUrl(splitValues(invoice)[0] ?? "") : "",
         containerUrl: officialTrackingUrl(
           trackingNumber,
-          currentCarrier,
+          resolvedCarrier,
           importsCellUrl(sourceRow, "B"),
         ),
         eta: etaText,
-        carrier: currentCarrier,
+        carrier: resolvedCarrier,
         trackingNumber,
         pro: trackingNumber,
         isSmallParcel: true,
-        shippingMethod: currentCarrier,
-        sourceType: outboundSourceType(currentCarrier, true),
+        shippingMethod: resolvedCarrier,
+        sourceType: outboundSourceType(resolvedCarrier, true),
       },
     ];
   });
@@ -1428,6 +1570,90 @@ function resolvedInboundMode(
   }
   if (isOceanScac || /\bOCEAN\b/i.test(reportedMode)) return "Ocean";
   return clean(reportedMode) || "Ocean";
+}
+
+function inboundItems(table: any, importsRows: string[][]): ScheduleItem[] {
+  const imports = importSourceRecords(importsRows);
+  return (table.rows ?? []).flatMap((row: any, index: number) => {
+    const eta = cell(row, 12);
+    const expectedDelivery = cell(row, 14);
+    const shipmentNo = cell(row, 1);
+    const invoiceValue = cell(row, 3);
+    const mbl = cell(row, 4);
+    const hbl = cell(row, 5);
+    const importSource = resolveImportSource(
+      imports,
+      shipmentNo,
+      invoiceValue,
+      mbl,
+      hbl,
+    );
+    const importsSourceRow = importSource?.sourceRow;
+    const container = cell(row, 6) || importSource?.container || "";
+    const reportedMode = cell(row, 0);
+    const vessel = cell(row, 10) || importSource?.vessel || "";
+    const mode = resolvedInboundMode(reportedMode, shipmentNo, mbl, hbl, container, vessel);
+    const smallParcelCarrier = parcelCarrier([mode, shipmentNo].join(" "));
+    const isSmallParcel = Boolean(smallParcelCarrier);
+    if (isSmallParcel) return [];
+    const datedValue = firstDatedValue(expectedDelivery, eta);
+    if (
+      !datedValue ||
+      !importsSourceRow ||
+      (!shipmentNo && !container)
+    ) {
+      return [];
+    }
+    const { date, text: dateText } = datedValue;
+    const sourceRow = importsSourceRow;
+    const status = normalizeStatus(importSource?.status || cell(row, 16));
+    const folderUrl = INBOUND_DOCUMENT_LINKS[shipmentNo] ?? importsCellUrl(sourceRow, "B");
+    const carrierKey = [cell(row, 0), cell(row, 4), cell(row, 5), cell(row, 10), shipmentNo]
+      .filter(Boolean)
+      .join(" ");
+    const invoice = correctedInboundInvoice(shipmentNo, invoiceValue);
+    const trackingNumber = container;
+    return [
+      {
+        id: `inbound-${sourceRow}-${index}`,
+        direction: "inbound",
+        date,
+        dateText,
+        title: shipmentNo || container,
+        reference: trackingNumber || invoice || "Inbound shipment",
+        secondary: [cell(row, 0), cell(row, 10)].filter(Boolean).join(" · "),
+        status,
+        sourceSheet: "IMPORTS",
+        sourceRow,
+        sourceUrl: SHEET_URL,
+        editable: true,
+        shipmentNo,
+        shipmentUrl: folderUrl,
+        container,
+        containerUrl: officialTrackingUrl(
+          trackingNumber,
+          `${carrierKey} ${smallParcelCarrier}`,
+          importsCellUrl(sourceRow, "H"),
+        ),
+        mbl,
+        hbl,
+        invoice,
+        invoiceUrl: invoiceFileUrl(splitValues(invoice)[0] ?? ""),
+        mode,
+        vessel,
+        pod: /^OSL/i.test(shipmentNo) ? "LGB" : "LAX",
+        eta: expectedDelivery || eta,
+        // See pendingImportItems: no dedicated carrier column exists for Air/Ocean
+        // freight, so vessel (already computed above) is the best available proxy.
+        carrier: vessel,
+        trackingNumber: "",
+        pro: "",
+        isSmallParcel: false,
+        shippingMethod: mode,
+        sourceType: mode === "Ocean" ? "Ocean" : "Air",
+      },
+    ];
+  });
 }
 
 function ImportSchedules({
@@ -1595,12 +1821,7 @@ type OutboundSourceRecord = {
 function outboundSourceRecords(rows: string[][]): OutboundSourceRecord[] {
   return rows.flatMap((row, index) => {
     const sourceRow = index + 1;
-    // Outbound Shipping Schedule now has a single header row (row 1) -- verified
-    // against the live sheet, which lists every field (CUSTOMER, INVOICE NO.,
-    // CARRIER, STATUS, WEBSITE STATUS, etc.) in row 1 alone. The old `< 4` cutoff
-    // was silently dropping the first two real shipment rows as if they were
-    // leftover header rows from a previous (3-row) header layout.
-    if (sourceRow < 2) return [];
+    if (sourceRow < 4) return [];
     const customer = cell(row, 0);
     const invoice = cell(row, 1);
     const shipDate = cell(row, 3);
@@ -1643,11 +1864,13 @@ function resolveOutboundSource(records: OutboundSourceRecord[], item: ScheduleIt
   );
 }
 
-function outboundItems(rows: string[][]): ScheduleItem[] {
+function outboundItems(
+  rows: string[][],
+  meta: OutboundSourceMeta = OUTBOUND_SCHEDULE_META,
+): ScheduleItem[] {
   return rows.flatMap((row, index) => {
     const sourceRow = index + 1;
-    // See matching note in outboundSourceRecords -- only row 1 is a real header now.
-    if (sourceRow < 2) return [];
+    if (sourceRow <= meta.headerRow) return [];
     const customer = cell(row, 0);
     const invoice = cell(row, 1);
     const shipDate = cell(row, 3);
@@ -1667,7 +1890,7 @@ function outboundItems(rows: string[][]): ScheduleItem[] {
         reference: invoice || cell(row, 18) || "Outbound shipment",
         secondary: [cell(row, 16), cell(row, 18)].filter(Boolean).join(" · "),
         status,
-        sourceSheet: "Outbound Shipping Schedule",
+        sourceSheet: meta.sheetName,
         sourceRow,
         sourceUrl: SHEET_URL,
         editable: true,
@@ -1716,7 +1939,7 @@ function nationalOutboundItems(table: any): ScheduleItem[] {
         sourceSheet: "NATIONAL ORDER PROGRESS",
         sourceRow,
         sourceUrl: NATIONAL_SHEET_URL,
-        editable: false,
+        editable: true,
         customer: channel,
         customerNo: channel,
         po,
@@ -1742,13 +1965,15 @@ function salesOutboundItems(table: any): ScheduleItem[] {
     const isSmallParcel = Boolean(carrier) && !/truck/i.test(shippingMethod);
     const isTrucking = /\btruck(?:ing)?\b/i.test(shippingMethod);
     if (!date || !customer || (!isSmallParcel && !isTrucking)) return [];
-    // Verified against the live sheet: fetchTable(SALES_SHEET_ID, 0, "A2:AF4200", 1)
-    // returns table.rows[0] as sheet row 2 (headers=1 uses the sheet's real row 1
-    // regardless of the A2 range start), so the source row is index + 2, not + 3 --
-    // the old off-by-one pointed every "view source row" link one row too far down.
-    const sourceRow = index + 2;
+    const sourceRow = index + 3;
     const issue = cell(row, 7);
-    const status = /yes|issue|hold|pending/i.test(issue) ? "Pending" : "Scheduled";
+    const websiteStatus = cell(row, 32);
+    const autoTrackedStatus = issue.match(/\[AUTO TRACK[^\]]*·\s*(Delivered|Received|Shipping|Shipped|Delayed|Customs Clearance|FDA Review\s*\/\s*Hold|Scheduled)\b/i)?.[1];
+    const status = websiteStatus
+      ? normalizeStatus(websiteStatus)
+      : autoTrackedStatus
+      ? normalizeStatus(autoTrackedStatus)
+      : /yes|issue|hold|pending/i.test(issue) ? "Pending" : "Scheduled";
     const trackingNumber = isSmallParcel
       ? trackingCandidate(...Array.from({ length: 24 }, (_, offset) => cell(row, offset + 8)))
       : "";
@@ -1767,7 +1992,7 @@ function salesOutboundItems(table: any): ScheduleItem[] {
         sourceSheet: "Stylekorean",
         sourceRow,
         sourceUrl: SALES_SHEET_URL,
-        editable: false,
+        editable: true,
         customer,
         customerNo: customer,
         invoice: cell(row, 1),
@@ -1854,6 +2079,10 @@ function consolidateTruckingItems(records: ScheduleItem[]) {
       items.flatMap((item) => splitValues(item.invoice ?? "")).map((value) => value.trim()).filter(Boolean),
     ));
     const warningStatus = items.find((item) => /pending|delay|hold|review/i.test(item.status));
+    const unfinishedStatus = items.find((item) => !finished.has(item.status.toLowerCase()));
+    // Only report a finished status once every grouped shipment is finished — otherwise the
+    // whole group would hide while a constituent shipment is still outstanding.
+    const statusSource = warningStatus ?? unfinishedStatus ?? primary;
     const secondary = Array.from(new Set(items.map((item) => item.secondary).filter(Boolean))).join(" · ");
     const invoice = invoices.join("\n");
     return {
@@ -1862,7 +2091,12 @@ function consolidateTruckingItems(records: ScheduleItem[]) {
       invoice,
       reference: invoice || primary.reference,
       secondary,
-      status: warningStatus?.status ?? primary.status,
+      status: statusSource.status,
+      // The status dropdown and source link follow the exact constituent row
+      // that supplied the displayed status, even when that row is not primary.
+      editable: statusSource.editable,
+      sourceSheet: statusSource.sourceSheet,
+      sourceRow: statusSource.sourceRow,
     };
   });
 
@@ -1870,108 +2104,68 @@ function consolidateTruckingItems(records: ScheduleItem[]) {
 }
 
 async function postStatus(item: ScheduleItem, status: string) {
-  let sourceRow = item.sourceRow;
-  if (item.sourceSheet === "IMPORTS") {
-    const importsRows = await fetchCsvRows(SHEET_ID, 1497250700);
-    const source = item.isSmallParcel
-      ? inboundParcelItems(importsRows).find(
-          (record) =>
-            record.sourceRow === item.sourceRow &&
-            normalizedIdentifier(record.trackingNumber || record.invoice || "") ===
-              normalizedIdentifier(item.trackingNumber || item.invoice || ""),
-        )
-      : resolveImportSource(
-          importSourceRecords(importsRows),
-          item.shipmentNo ?? "",
-          item.invoice ?? "",
-          item.mbl ?? "",
-          item.hbl ?? "",
-        );
-    if (!source) {
-      throw new Error("The IMPORTS sheet did not contain one unique matching shipment row.");
-    }
-    sourceRow = source.sourceRow;
-  } else if (item.sourceSheet === "Outbound Shipping Schedule") {
-    const outbound = outboundSourceRecords(await fetchCsvRows(SHEET_ID, 20260708));
-    const source = resolveOutboundSource(outbound, item);
-    if (!source) {
-      throw new Error("The outbound sheet did not contain one unique matching shipment row.");
-    }
-    sourceRow = source.sourceRow;
-  }
-
   const payload = {
     kind: item.direction,
     sourceSheet: item.sourceSheet,
-    sourceRow,
+    sourceRow: item.sourceRow,
     shipmentNo: item.shipmentNo ?? "",
     container: item.container ?? "",
     mbl: item.mbl ?? "",
     hbl: item.hbl ?? "",
     pro: item.pro ?? "",
-    trackingNumber: item.trackingNumber ?? "",
-    isSmallParcel: Boolean(item.isSmallParcel),
     invoice: item.invoice ?? "",
     customer: item.customer ?? "",
     shipDate: item.shipDate ?? "",
     currentStatus: item.status,
+    // findInboundTarget_ (Code.gs) needs isSmallParcel to route the write into the
+    // IMPORTS sheet's PARCELS section instead of validating it as a regular import row.
+    isSmallParcel: item.isSmallParcel ?? false,
+    trackingNumber: item.trackingNumber ?? "",
     status,
   };
-  const body = JSON.stringify(payload);
-  const response = await fetch(WRITE_ENDPOINT, {
-    method: "POST",
-    headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body,
-  });
-  const result = await response.json().catch(() => null);
-  if (!response.ok || result?.ok === false) {
-    throw new Error(result?.error || "The source sheet rejected this status change.");
-  }
-  if (!result || result.ok !== true) {
-    throw new Error("The source sheet returned an invalid confirmation.");
-  }
-  if (result.row && Number(result.row) !== sourceRow) {
-    throw new Error("The update was rejected because the confirmed source row changed.");
-  }
 
-  const expectedStatus = normalizeStatus(status);
-  for (const delay of [350, 900, 1800]) {
-    await new Promise((resolve) => window.setTimeout(resolve, delay));
-    try {
-      let persisted = "";
-      if (item.sourceSheet === "IMPORTS") {
-        // WEBSITE STATUS lives in column AB (index 27) on the IMPORTS tab — AD is
-        // "CONTAINER RAW (SYSTEM)". Reading the wrong column here made every status
-        // write look unconfirmed even when the Apps Script backend saved it correctly.
-        const table = await fetchTable(
-          SHEET_ID,
-          1497250700,
-          `AB${sourceRow}:AB${sourceRow}`,
-          0,
-        );
-        persisted = cell(table.rows?.[0], 0);
-      } else if (item.sourceSheet === "Outbound Shipping Schedule") {
-        const table = await fetchTable(
-          SHEET_ID,
-          20260708,
-          `U${sourceRow}:X${sourceRow}`,
-          0,
-        );
-        persisted = cell(table.rows?.[0], 3) || cell(table.rows?.[0], 0);
-      }
-      if (
-        persisted &&
-        normalizeStatus(persisted) === expectedStatus
-      ) {
-        return;
-      }
-    } catch {
-      // Retry while the workbook recalculates and publishes its latest values.
+  const parseConfirmation = async (response: Response) => {
+    const result = (await response.json().catch(() => null)) as
+      | { ok?: boolean; error?: string; status?: string }
+      | null;
+    if (!response.ok || result?.ok === false) {
+      const error = new Error(result?.error || `Status update failed (${response.status}).`);
+      (error as Error & { status?: number }).status = response.status;
+      throw error;
     }
+    if (!result || result.ok !== true) {
+      throw new Error("The status service returned an invalid confirmation.");
+    }
+    if (normalizeStatus(String(result.status ?? "")) !== normalizeStatus(status)) {
+      throw new Error("The persisted status did not match the requested status.");
+    }
+    return result;
+  };
+
+  try {
+    const response = await fetch(STATUS_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return await parseConfirmation(response);
+  } catch (error) {
+    const statusCode = (error as Error & { status?: number })?.status;
+    const mayUseLegacy =
+      Boolean(LEGACY_WRITE_ENDPOINT) &&
+      (statusCode === 404 || statusCode === 405 || statusCode === undefined);
+
+    // Static-host migration fallback only. Do not fall back on validation or
+    // concurrency errors, because doing so could overwrite a newer status.
+    if (!mayUseLegacy) throw error;
+
+    const response = await fetch(LEGACY_WRITE_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(payload),
+    });
+    return await parseConfirmation(response);
   }
-  throw new Error(
-    "The source sheet did not confirm this status change. The card was left unchanged.",
-  );
 }
 
 function ScheduleCard({
@@ -2123,20 +2317,103 @@ function ScheduleCard({
   );
 }
 
+function ParcelCard({
+  direction,
+  item,
+  savingId,
+  onStatus,
+  tracking,
+}: {
+  direction: Direction;
+  item: ScheduleItem;
+  savingId: string;
+  onStatus: (item: ScheduleItem, status: string) => void;
+  tracking?: Record<string, TrackingResult>;
+}) {
+  const trackingNumber = item.trackingNumber || item.pro || "";
+  const carrierCode = trackableCarrier(item.carrier || item.shippingMethod);
+  const liveStatus = carrierCode && trackingNumber ? tracking?.[`${carrierCode}:${trackingNumber}`] : undefined;
+  return (
+    <details
+      className={`parcel-card ${sourceClass(item.sourceType ?? "")} ${
+        direction === "outbound" ? departmentClass(item.department) : ""
+      }`}
+    >
+      <summary className="parcel-summary">
+        <span className="parcel-badges">
+          {direction === "outbound" ? (
+            <span className="department-badge">{item.department ?? "B2B/E-Com"}</span>
+          ) : null}
+          <span className="source-badge">{item.sourceType || item.carrier || "Parcel"}</span>
+        </span>
+        <strong className="parcel-tracking">{item.customer || item.title || "Customer pending"}</strong>
+        {trackingNumber ? (
+          <span className="parcel-tracking-number">
+            Tracking# {trackingNumber}
+            {liveStatus?.ok && liveStatus.status ? ` · ${liveStatus.status}` : ""}
+          </span>
+        ) : null}
+        <span className="parcel-invoice">{item.invoice ? `Invoice # ${item.invoice}` : "Invoice # —"}</span>
+        <span className="expand-mark" aria-hidden="true">＋</span>
+      </summary>
+      <div className="parcel-detail">
+        <div className="parcel-topline">
+          <span className={statusClass(item.status)}>{item.status}</span>
+          <span>{item.customer || item.shipmentNo || ""}</span>
+        </div>
+        <div className="parcel-footer">
+          <span><b>ETA</b> {item.dateText || "—"}</span>
+          {trackingNumber && item.containerUrl ? (
+            <a href={item.containerUrl} target="_blank" rel="noreferrer">
+              Track ↗
+            </a>
+          ) : (
+            <a href={sourceRowUrl(item)} target="_blank" rel="noreferrer">
+              Source ↗
+            </a>
+          )}
+        </div>
+        {item.editable ? (
+          <label className="status-field parcel-status-field">
+            <span>Status</span>
+            <select
+              aria-label={`Update ${item.title} status`}
+              disabled={savingId === item.id}
+              value={
+                (direction === "inbound" ? INBOUND_STATUS_OPTIONS : STATUS_OPTIONS).includes(item.status)
+                  ? item.status
+                  : "Scheduled"
+              }
+              onChange={(event) => onStatus(item, event.target.value)}
+            >
+              {(direction === "inbound" ? INBOUND_STATUS_OPTIONS : STATUS_OPTIONS).map((option) => (
+                <option key={option}>{option}</option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+      </div>
+    </details>
+  );
+}
+
 function SmallParcelSchedule({
   direction,
+  days,
   items,
   loading,
   savingId,
   onStatus,
+  tracking,
 }: {
   direction: Direction;
+  days: Date[];
   items: ScheduleItem[];
   loading: boolean;
   savingId: string;
   onStatus: (item: ScheduleItem, status: string) => void;
+  tracking?: Record<string, TrackingResult>;
 }) {
-  const sortedItems = [...items].sort((a, b) => a.date.getTime() - b.date.getTime());
   const isInbound = direction === "inbound";
   const headingId = `${direction}-small-parcel-heading`;
 
@@ -2155,77 +2432,52 @@ function SmallParcelSchedule({
           </h2>
         </div>
         <div className="parcel-total">
-          <strong>{sortedItems.length}</strong>
+          <strong>{items.length}</strong>
           <span>active</span>
         </div>
       </div>
-      <div className="parcel-grid">
-        {sortedItems.map((item) => {
-          const tracking = item.trackingNumber || item.pro || "";
-          return (
-            <details
-              className={`parcel-card ${sourceClass(item.sourceType ?? "")} ${
-                direction === "outbound" ? departmentClass(item.department) : ""
-              }`}
-              key={`parcel-${item.id}`}
-            >
-              <summary className="parcel-summary">
-                <span className="parcel-badges">
-                  {direction === "outbound" ? (
-                    <span className="department-badge">{item.department ?? "B2B/E-Com"}</span>
-                  ) : null}
-                  <span className="source-badge">{item.sourceType || item.carrier || "Parcel"}</span>
-                </span>
-                <strong className="parcel-tracking">{tracking || "Tracking pending"}</strong>
-                <span className="parcel-invoice">{item.invoice ? `Invoice # ${item.invoice}` : "Invoice # —"}</span>
-                <span className="expand-mark" aria-hidden="true">＋</span>
-              </summary>
-              <div className="parcel-detail">
-                <div className="parcel-topline">
-                  <span className={statusClass(item.status)}>{item.status}</span>
-                  <span>{item.customer || item.shipmentNo || ""}</span>
-                </div>
-                <div className="parcel-footer">
-                  <span><b>ETA</b> {item.dateText || "—"}</span>
-                  {tracking && item.containerUrl ? (
-                    <a href={item.containerUrl} target="_blank" rel="noreferrer">
-                      Track ↗
-                    </a>
-                  ) : (
-                    <a href={sourceRowUrl(item)} target="_blank" rel="noreferrer">
-                      Source ↗
-                    </a>
+      <div className="board-wrap">
+        <div className="board">
+          {days.map((day, index) => {
+            const dayItems = items.filter((item) => dayKey(item.date) === dayKey(day));
+            return (
+              <section
+                className={index === 0 ? "day-column today" : "day-column"}
+                key={`${direction}-parcel-${dayKey(day)}`}
+              >
+                <header>
+                  <span>
+                    {day.toLocaleDateString("en-US", { weekday: "short" }).toUpperCase()}
+                  </span>
+                  <strong>{day.getDate()}</strong>
+                  <small>
+                    {day.toLocaleDateString("en-US", { month: "short" }).toUpperCase()}
+                  </small>
+                  <b>{dayItems.length}</b>
+                </header>
+                <div className="day-items">
+                  {dayItems.map((item) => (
+                    <ParcelCard
+                      key={`parcel-${item.id}`}
+                      direction={direction}
+                      item={item}
+                      savingId={savingId}
+                      onStatus={onStatus}
+                      tracking={tracking}
+                    />
+                  ))}
+                  {!loading && dayItems.length === 0 && (
+                    <div className="empty-day">
+                      <span>—</span>
+                      No {direction} parcels
+                    </div>
                   )}
+                  {loading && <div className="loading-card" />}
                 </div>
-                {item.editable ? (
-                  <label className="status-field parcel-status-field">
-                    <span>Status</span>
-                    <select
-                      aria-label={`Update ${item.title} status`}
-                      disabled={savingId === item.id}
-                      value={
-                        (direction === "inbound" ? INBOUND_STATUS_OPTIONS : STATUS_OPTIONS).includes(item.status)
-                          ? item.status
-                          : "Scheduled"
-                      }
-                      onChange={(event) => onStatus(item, event.target.value)}
-                    >
-                      {(direction === "inbound" ? INBOUND_STATUS_OPTIONS : STATUS_OPTIONS).map((option) => (
-                        <option key={option}>{option}</option>
-                      ))}
-                    </select>
-                  </label>
-                ) : null}
-              </div>
-            </details>
-          );
-        })}
-        {!loading && sortedItems.length === 0 && (
-          <div className="parcel-empty">
-            No {direction} small-parcel shipments in the active 14-day window.
-          </div>
-        )}
-        {loading && <div className="loading-card" />}
+              </section>
+            );
+          })}
+        </div>
       </div>
     </section>
   );
@@ -2310,6 +2562,148 @@ function ScheduleBoard({
   );
 }
 
+type CountEntry = [string, number];
+
+function scheduleCarrierName(item: ScheduleItem): string {
+  const name = clean(item.carrier) || (item.isSmallParcel ? clean(item.shippingMethod) : "");
+  // "Trucking" is a freight mode stylekorean sometimes falls back to as a carrier value,
+  // not an actual named carrier — exclude it so it can't displace a real carrier in the ranking.
+  return /^trucking$/i.test(name) ? "" : name;
+}
+
+const CARRIER_CATEGORIES = ["Air", "Ocean", "Domestic Transportation", "Small Parcels"] as const;
+type CarrierCategory = (typeof CARRIER_CATEGORIES)[number];
+
+// Same bucketing as scheduleFreightMode, renamed for display and restricted to the four
+// named categories the Top Carriers card reports on (unclassified "Other" freight is only
+// surfaced in the Freight Mix card, not here).
+function scheduleCarrierCategory(item: ScheduleItem): CarrierCategory | null {
+  if (item.isSmallParcel) return "Small Parcels";
+  if (item.mode === "Air") return "Air";
+  if (item.mode === "Ocean") return "Ocean";
+  if (/^trucking$/i.test(item.shippingMethod ?? "")) return "Domestic Transportation";
+  return null;
+}
+
+type CategoryCarrierStats = {
+  category: CarrierCategory;
+  mtdCount: number;
+  ytdCount: number;
+  topCarriers: CountEntry[];
+};
+
+// All rows count here, including finished/completed ones — these are shipment-volume totals,
+// not the "active" alerts the rest of the Control Tower row reports, matching how the KPI
+// panel's own topCarriers/MTD/YTD figures are computed (see lib/sales-kpis.ts).
+function categoryCarrierStats(source: ScheduleItem[], today: Date): CategoryCarrierStats[] {
+  const yearStart = new Date(today.getFullYear(), 0, 1);
+  return CARRIER_CATEGORIES.map((category) => {
+    const ytdItems = source.filter((item) => {
+      if (scheduleCarrierCategory(item) !== category) return false;
+      const time = item.date.getTime();
+      return time >= yearStart.getTime() && time <= today.getTime();
+    });
+    const mtdCount = ytdItems.filter(
+      (item) => item.date.getFullYear() === today.getFullYear() && item.date.getMonth() === today.getMonth(),
+    ).length;
+    const carrierCounts = new Map<string, number>();
+    ytdItems.forEach((item) => {
+      const name = scheduleCarrierName(item);
+      if (!name) return;
+      carrierCounts.set(name, (carrierCounts.get(name) ?? 0) + 1);
+    });
+    const topCarriers = [...carrierCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+    return { category, mtdCount, ytdCount: ytdItems.length, topCarriers };
+  });
+}
+
+function scheduleFreightMode(item: ScheduleItem): string {
+  if (item.isSmallParcel) return "Parcel";
+  if (item.mode === "Air") return "Air";
+  if (item.mode === "Ocean") return "Ocean";
+  if (/^trucking$/i.test(item.shippingMethod ?? "")) return "Trucking";
+  return "Other";
+}
+
+const FREIGHT_MODE_COLORS: Record<string, string> = {
+  Air: "var(--ct-air)",
+  Ocean: "var(--ct-ocean)",
+  Trucking: "var(--ct-trucking)",
+  Parcel: "var(--ct-parcel)",
+  Other: "var(--ct-other)",
+};
+
+function freightModeCounts(source: ScheduleItem[]): CountEntry[] {
+  const counts = new Map<string, number>();
+  for (const item of source) {
+    const mode = scheduleFreightMode(item);
+    counts.set(mode, (counts.get(mode) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+}
+
+function ControlTowerCarriers({ categories }: { categories: CategoryCarrierStats[] }) {
+  return (
+    <article className="ct-panel ct-panel-carriers">
+      <div className="ct-panel-head">
+        <span className="ct-eyebrow">By shipment count · MTD / YTD</span>
+        <h2>Top Carriers</h2>
+      </div>
+      <div className="ct-carrier-categories">
+        {categories.map(({ category, mtdCount, ytdCount, topCarriers }) => (
+          <div className="ct-carrier-category" key={category}>
+            <div className="ct-carrier-category-head">
+              <span className="ct-carrier-category-name">{category}</span>
+              <span className="ct-carrier-category-counts">
+                <b>{mtdCount}</b> MTD · <b>{ytdCount}</b> YTD
+              </span>
+            </div>
+            <ol className="ct-carrier-category-list">
+              {topCarriers.map(([name, count]) => (
+                <li key={name}>
+                  <span className="ct-carrier-category-carrier">{name}</span>
+                  <span className="ct-carrier-category-carrier-count">{count}</span>
+                </li>
+              ))}
+              {!topCarriers.length && <li className="ct-empty">No named carriers</li>}
+            </ol>
+          </div>
+        ))}
+      </div>
+    </article>
+  );
+}
+
+function ControlTowerFreightMix({ modes }: { modes: CountEntry[] }) {
+  const total = modes.reduce((sum, [, count]) => sum + count, 0) || 1;
+  return (
+    <article className="ct-panel">
+      <div className="ct-panel-head">
+        <span className="ct-eyebrow">Active shipments by mode</span>
+        <h2>Freight Mix</h2>
+      </div>
+      <div className="ct-split-bar">
+        {modes.map(([name, count]) => (
+          <div
+            key={name}
+            className="ct-split-seg"
+            style={{ width: `${(count / total) * 100}%`, background: FREIGHT_MODE_COLORS[name] ?? "var(--ct-other)" }}
+          />
+        ))}
+      </div>
+      <div className="ct-split-legend">
+        {modes.map(([name, count]) => (
+          <span key={name}>
+            <i style={{ background: FREIGHT_MODE_COLORS[name] ?? "var(--ct-other)" }} />
+            {name} {Math.round((count / total) * 100)}%
+          </span>
+        ))}
+      </div>
+      {!modes.length && <p className="ct-empty">No classified freight in the active schedule.</p>}
+    </article>
+  );
+}
+
 export default function Home() {
   const [items, setItems] = useState<ScheduleItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -2318,14 +2712,16 @@ export default function Home() {
   const [nextRefreshAt, setNextRefreshAt] = useState<Date | null>(null);
   const [query, setQuery] = useState("");
   const [includeFinished, setIncludeFinished] = useState(false);
+  const [kpiView, setKpiView] = useState<"summary" | "details">("summary");
   const [savingId, setSavingId] = useState("");
   const [notice, setNotice] = useState("");
+  const [noticeFading, setNoticeFading] = useState(false);
   const [kpis, setKpis] = useState<KpiSnapshot>(EMPTY_KPIS);
   const [inboundInventory, setInboundInventory] = useState<InventoryItem[]>([]);
   const [warehouseStock, setWarehouseStock] = useState<InventoryItem[]>([]);
   const [selectedInventory, setSelectedInventory] = useState<InventoryItem | null>(null);
-  const [fulfillmentTkJobs, setFulfillmentTkJobs] = useState<FulfillmentTkJob[]>([]);
-  const [fulfillmentTkError, setFulfillmentTkError] = useState("");
+  const [connection, setConnection] = useState<ConnectionState | null>(null);
+  const [gmailIngestion, setGmailIngestion] = useState<GmailIngestionEvent[] | null>(null);
   const loadInFlight = useRef(false);
   const lastRefreshAt = useRef(0);
 
@@ -2338,71 +2734,60 @@ export default function Home() {
     });
   }, []);
 
+  useEffect(() => {
+    if (!notice) {
+      setNoticeFading(false);
+      return;
+    }
+    setNoticeFading(false);
+    const fadeTimer = window.setTimeout(() => setNoticeFading(true), 2400);
+    const clearTimer = window.setTimeout(() => setNotice(""), 3000);
+    return () => {
+      window.clearTimeout(fadeTimer);
+      window.clearTimeout(clearTimer);
+    };
+  }, [notice]);
+
   const load = useCallback(async () => {
     if (loadInFlight.current) return;
     loadInFlight.current = true;
     setLoading(true);
     setError("");
     try {
-      const [
+      const {
         imports,
         outbound,
+        outboundMeta,
         nationalOutbound,
         salesOutbound,
-        fulfillmentTk,
         liveKpis,
         inventoryDashboardTable,
         skwInboundTable,
         skwStockTable,
-      ] = await Promise.all([
-        fetchCsvRows(SHEET_ID, 1497250700),
-        fetchCsvRows(SHEET_ID, 20260708),
-        fetchTable(NATIONAL_SHEET_ID, 99300389, "A1:U3500", 1),
-        fetchTable(SALES_SHEET_ID, 0, "A2:AF4200", 1),
-        fetchFulfillmentTkJobs(),
-        fetchLiveKpis(),
-        fetchOptionalSheet("INVENTORY", "A1:O6500"),
-        fetchOptionalSheet("SKW_Inbound", "A1:R2500"),
-        fetchOptionalSheet("SKW_Stock", "A1:J2500"),
-      ]);
-      setFulfillmentTkJobs(fulfillmentTk.jobs);
-      setFulfillmentTkError(fulfillmentTk.error);
-      const importItems = pendingImportItems(imports);
-      const activeImportItems = importItems.filter((item) =>
-        item.date.getTime() >= IMPORT_STALE_CUTOFF &&
-        !finishedImports.has(item.status.toLowerCase()),
-      );
+        gmailIngestion: nextGmailIngestion,
+        connection: nextConnection,
+      } = await fetchOperationalSnapshot();
+      // Each source row remains its own operational move except same-customer,
+      // same-date trucking rows, which consolidateTruckingItems merges into one card.
       setItems(consolidateTruckingItems([
-        ...importItems,
+        ...pendingImportItems(imports),
         ...inboundParcelItems(imports),
-        ...outboundItems(outbound),
+        ...outboundItems(outbound, outboundMeta),
         ...nationalOutboundItems(nationalOutbound),
         ...salesOutboundItems(salesOutbound),
-        ...fulfillmentTkItems(fulfillmentTk.jobs),
       ]));
       setKpis(liveKpis);
       const dashboardInventory = dashboardInventoryItems(inventoryDashboardTable);
-      const activeImportCodes = new Set(
-        activeImportItems
-          .flatMap((item) => [item.shipmentNo, item.title])
-          .flatMap((value) => inventoryShipmentReferences(value ?? ""))
-          .map(normalizedShipmentCode)
-          .filter(Boolean),
-      );
-      // Reduce each source row to active shipment references before deduplication. This prevents
-      // received/history codes such as old HJ/ES rounds from surviving on a mixed allocation row.
-      const currentInboundInventory = [
+      setInboundInventory(uniqueInventoryItems([
         ...dashboardInventory.inbound,
         ...skwInboundItems(skwInboundTable),
-      ].flatMap((inventoryItem) => {
-        const projected = inventoryForActiveImports(inventoryItem, activeImportCodes);
-        return projected ? [projected] : [];
-      });
-      setInboundInventory(uniqueInventoryItems(currentInboundInventory, true));
+      ], true));
       setWarehouseStock(uniqueInventoryItems([
         ...dashboardInventory.inStock,
         ...skwStockItems(skwStockTable),
       ], false));
+      setGmailIngestion(nextGmailIngestion);
+      setConnection(nextConnection);
       const refreshedAt = new Date();
       lastRefreshAt.current = refreshedAt.getTime();
       setUpdatedAt(refreshedAt);
@@ -2427,7 +2812,6 @@ export default function Home() {
       }
     };
     const timer = window.setInterval(() => {
-      if (document.visibilityState !== "visible") return;
       load();
       setNextRefreshAt(new Date(Date.now() + AUTO_REFRESH_MS));
     }, AUTO_REFRESH_MS);
@@ -2492,9 +2876,12 @@ export default function Home() {
     const needle = query.trim().toLowerCase();
     return items.flatMap((item) => {
       if (item.direction !== "inbound" || item.isSmallParcel) return [];
-      // Warehouse receiving appointments come from IMPORTS column Q (Delivery Expected).
-      // Column O ETA stays authoritative only for the separate Import Schedule table.
-      const scheduled = firstDatedValue(item.deliveryExpected ?? "");
+      // Use the warehouse receiving appointment when one exists. Before an
+      // appointment is assigned, keep the shipment visible on its ETA instead
+      // of dropping the live IMPORTS row from the Inbound Schedule entirely.
+      const scheduled = firstDatedValue(
+        inboundScheduleDateSource(item.deliveryExpected, item.eta),
+      );
       if (!scheduled) return [];
       const stamp = new Date(
         scheduled.date.getFullYear(),
@@ -2539,6 +2926,21 @@ export default function Home() {
     [visibleItems],
   );
 
+  // Data Grids tabs (Nationals / WMS) — same 14-day/search/completed filtering
+  // as every other schedule view, just sliced by sourceSheet instead of
+  // direction. sourceSheet values are set once in nationalOutboundItems_/
+  // salesOutboundItems_ at load time (see the ...nationalOutboundItems(...)
+  // spread building `items`).
+  const nationalsGridItems = useMemo(
+    () => visibleItems.filter((item) => item.sourceSheet === "NATIONAL ORDER PROGRESS"),
+    [visibleItems],
+  );
+
+  const wmsGridItems = useMemo(
+    () => visibleItems.filter((item) => item.sourceSheet === "Stylekorean"),
+    [visibleItems],
+  );
+
   const importScheduleItems = useMemo(
     () => {
       const needle = query.trim().toLowerCase();
@@ -2547,7 +2949,7 @@ export default function Home() {
         const selectedShipment = scheduleMatchesInventoryShipment(item, selectedInventory);
         const isStaleImport = item.date.getTime() < IMPORT_STALE_CUTOFF;
         const isFinishedOrStale = finishedImports.has(item.status.toLowerCase()) || isStaleImport;
-        if (isFinishedOrStale && !includeFinished) return false;
+        if (isFinishedOrStale && !includeFinished && !selectedShipment) return false;
         if (selectedShipment) return true;
         if (!needle) return true;
         return [
@@ -2568,7 +2970,7 @@ export default function Home() {
 
   const counts = useMemo(() => {
     const today = dayKey(days[0]);
-    const inbound = inboundScheduleVisibleItems.length + inboundParcelVisibleItems.length;
+    const inbound = visibleItems.filter((item) => item.direction === "inbound").length;
     const outbound = outboundVisibleItems.length + outboundParcelVisibleItems.length;
     const dueToday = visibleItems.filter((item) => dayKey(item.date) === today).length;
     const exceptions = visibleItems.filter((item) =>
@@ -2577,17 +2979,53 @@ export default function Home() {
     return { inbound, outbound, dueToday, exceptions };
   }, [days, outboundParcelVisibleItems, outboundVisibleItems, visibleItems]);
 
-  const fulfillmentTkSummary = useMemo(() => {
-    const today = dayKey(days[0]);
-    let dueToday = 0;
-    let amount = 0;
-    fulfillmentTkJobs.forEach((job) => {
-      const date = parseFulfillmentDate(job.shipDate);
-      if (date && dayKey(date) === today) dueToday += 1;
-      amount += parseMoney(clean(job.amount));
-    });
-    return { count: fulfillmentTkJobs.length, dueToday, amount };
-  }, [days, fulfillmentTkJobs]);
+  // Reuse visibleItems's day-window/search bounds so these rollups can't be dominated by
+  // shipments that aren't shown anywhere on the active board below, but always drop finished
+  // statuses ourselves — visibleItems keeps them when "Show completed" is toggled on.
+  const activeItems = useMemo(
+    () => visibleItems.filter((item) => !finished.has(item.status.toLowerCase())),
+    [visibleItems],
+  );
+
+  const carrierCategoryStats = useMemo(() => categoryCarrierStats(items, startOfToday()), [items]);
+  const activeFreightModeCounts = useMemo(() => freightModeCounts(activeItems), [activeItems]);
+
+  const mapMilestones = useMemo<MilestoneShipment[]>(
+    () =>
+      activeItems
+        .filter((item) => item.direction === "inbound" && !item.isSmallParcel && (item.mode === "Air" || item.mode === "Ocean"))
+        .map((item) => ({
+          id: item.id,
+          title: item.shipmentNo || item.title,
+          mode: item.mode,
+          pod: item.pod,
+          eta: item.eta,
+          status: item.status,
+          vessel: item.vessel,
+        })),
+    [activeItems],
+  );
+
+  const mapTrackable = useMemo<TrackableShipment[]>(
+    () =>
+      activeItems.flatMap((item) => {
+        if (!item.isSmallParcel || !item.trackingNumber) return [];
+        const carrier = trackableCarrier(item.carrier || item.shippingMethod);
+        if (!carrier) return [];
+        return [{
+          id: item.id,
+          title: item.title,
+          carrier,
+          trackingNumber: item.trackingNumber,
+          direction: item.direction,
+          status: item.status,
+        }];
+      }),
+    [activeItems],
+  );
+
+  const { tracking: parcelTracking, configured: parcelTrackingConfigured, loading: parcelTrackingLoading } =
+    useParcelTracking(mapTrackable);
 
   const handleStatus = async (item: ScheduleItem, status: string) => {
     setSavingId(item.id);
@@ -2598,7 +3036,6 @@ export default function Home() {
         current.map((record) => (record.id === item.id ? { ...record, status } : record)),
       );
       setNotice(`${item.title} updated to ${status}.`);
-      window.setTimeout(() => setNotice(""), 4500);
     } catch (statusError) {
       setNotice(
         statusError instanceof Error
@@ -2632,6 +3069,7 @@ export default function Home() {
             </p>
           </div>
           <div className="manifest-actions">
+            <ThemeToggle />
             <button className="button primary" onClick={load} disabled={loading}>
               {loading ? "SYNCING…" : "↻ REFRESH DATA"}
             </button>
@@ -2645,29 +3083,67 @@ export default function Home() {
               <a className="button secondary" href={SALES_SHEET_URL} target="_blank" rel="noreferrer">
                 SALES
               </a>
-              <a className="button secondary" href={FULFILLMENT_SALES_URL} target="_blank" rel="noreferrer">
-                FULFILLMENT TK
-              </a>
             </div>
           </div>
         </div>
         <div className="sync-strip" role="status" aria-live="polite">
           <span>
-            <b className={error ? "sync-dot error" : loading ? "sync-dot loading" : "sync-dot"} />
+            <b className={error ? "sync-dot error" : loading ? "sync-dot loading" : connection?.mode !== "worker" || connection?.degradedSources ? "sync-dot warning" : "sync-dot"} />
             {error
               ? "Workbook connection needs attention"
               : loading
                 ? "Syncing live records…"
-                : fulfillmentTkError
-                  ? "3 core workbooks connected · TK source needs attention"
-                  : "4 live sources connected"}
+                : connection?.mode === "sheets"
+                  ? "Direct Sheets fallback · Worker reconnecting"
+                  : connection?.mode === "stale"
+                    ? "Last good snapshot · live sources reconnecting"
+                    : connection?.degradedSources
+                      ? `${connection.degradedSources} optional source${connection.degradedSources === 1 ? "" : "s"} unavailable`
+                      : connection?.storage === "d1"
+                        ? "D1 snapshot · Sheets fallback ready"
+                        : "Worker snapshot · 3 live workbooks connected"}
           </span>
           <span className="mono">
-            AUTO SYNC 15 MIN · LAST SYNC {updatedAt ? updatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "America/Los_Angeles" }) : "—"}
+            AUTO SYNC 30 MIN · LAST SYNC {updatedAt ? updatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "America/Los_Angeles" }) : "—"}
             {" · "}NEXT CHECK {nextRefreshAt ? nextRefreshAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "America/Los_Angeles" }) : "—"}
+            {connection?.version ? ` · ${connection.version}` : ""}
           </span>
         </div>
       </header>
+
+      <div className="badge-row">
+        <div className={error ? "sys-badge logi degraded" : "sys-badge logi"}>
+          <span className="sys-dot" aria-hidden="true" />
+          <div>
+            <div className="sys-badge-name">Logistics Control Tower</div>
+            <div className="sys-badge-host">stylekorean.dpdns.org</div>
+          </div>
+          <span className="sys-badge-status">{error ? "Degraded" : loading ? "Syncing" : "Operational"}</span>
+        </div>
+        <a
+          className="sys-badge wh placeholder"
+          href="https://skwarehouse.dpdns.org"
+          target="_blank"
+          rel="noreferrer"
+        >
+          <span className="sys-dot" aria-hidden="true" />
+          <div>
+            <div className="sys-badge-name">Warehouse Control Tower</div>
+            <div className="sys-badge-host">skwarehouse.dpdns.org</div>
+          </div>
+          <span className="sys-badge-status placeholder-status">External system · no live data here</span>
+        </a>
+      </div>
+
+      {!error && connection && connection.mode !== "worker" && (
+        <div className="alert warning" role="status">
+          <strong>{connection.mode === "stale" ? "Continuity mode." : "Fallback mode."}</strong>{" "}
+          {connection.mode === "stale"
+            ? "The last verified snapshot is still available while live workbook sources recover."
+            : "The dashboard is reading Google Sheets directly; status writes still require the Worker."}
+          {connection.detail ? ` ${connection.detail}` : ""}
+        </div>
+      )}
 
       {error && (
         <div className="alert" role="alert">
@@ -2690,28 +3166,12 @@ export default function Home() {
         <article>
           <span>DUE TODAY</span>
           <strong>{counts.dueToday}</strong>
-          <small>combined moves</small>
+          <small>tracked moves</small>
         </article>
         <article className={counts.exceptions ? "metric-alert" : ""}>
           <span>EXCEPTIONS</span>
           <strong>{counts.exceptions}</strong>
           <small>pending / hold / delayed</small>
-        </article>
-        <article className={`metric-fulfillment ${fulfillmentTkError ? "metric-source-error" : ""}`}>
-          <span>FULFILLMENT · TK</span>
-          <strong>{fulfillmentTkError ? "!" : fulfillmentTkSummary.count}</strong>
-          <small>
-            {fulfillmentTkError
-              ? "source unavailable · open dashboard"
-              : `${fulfillmentTkSummary.dueToday} due today · ${moneyWithCents(fulfillmentTkSummary.amount)}`}
-          </small>
-          <a
-            className="metric-card-link"
-            href={FULFILLMENT_SALES_URL}
-            target="_blank"
-            rel="noreferrer"
-            aria-label="Open SK Fulfillment Sales dashboard"
-          />
         </article>
       </section>
 
@@ -2721,38 +3181,47 @@ export default function Home() {
             <p className="eyebrow">2026 ACTUALS · INVOICE FIRST / RATE FALLBACK</p>
             <h2 id="kpi-heading">KPI Control Tower</h2>
           </div>
-          <span>MTD / YTD</span>
+          <div className="period-toggle" role="group" aria-label="KPI view">
+            <button type="button" className={kpiView === "summary" ? "active" : ""} onClick={() => setKpiView("summary")}>
+              Summary
+            </button>
+            <button type="button" className={kpiView === "details" ? "active" : ""} onClick={() => setKpiView("details")}>
+              Details
+            </button>
+          </div>
         </div>
         <div className="kpi-grid">
           <article className="kpi-card">
             <span>SHIPPING COSTS</span>
-            <div><small>MTD</small><strong>{money(kpis.shippingMtd)}</strong></div>
-            <div><small>YTD</small><strong>{money(kpis.shippingYtd)}</strong></div>
+            <KpiPeriodValues mtd={kpis.shippingMtd} ytd={kpis.shippingYtd} />
           </article>
           <article className="kpi-card">
             <span>TRANSFER SHIPPING</span>
-            <div><small>MTD</small><strong>{money(kpis.transfersMtd)}</strong></div>
-            <div><small>YTD</small><strong>{money(kpis.transfersYtd)}</strong></div>
+            <KpiPeriodValues mtd={kpis.transfersMtd} ytd={kpis.transfersYtd} />
           </article>
           <article className="kpi-card">
             <span>TRUCKING TRANSFERS TO NJ</span>
-            <div><small>MTD</small><strong>{money(kpis.njTransferMtd)}</strong></div>
-            <div><small>YTD</small><strong>{money(kpis.njTransferYtd)}</strong></div>
+            <KpiPeriodValues mtd={kpis.njTransferMtd} ytd={kpis.njTransferYtd} />
           </article>
           <article className="kpi-card">
             <span>SALES · NATIONALS</span>
-            <div><small>MTD</small><strong>{moneyWithCents(kpis.nationalsSalesMtd)}</strong></div>
-            <div><small>YTD</small><strong>{moneyWithCents(kpis.nationalsSalesYtd)}</strong></div>
+            <KpiPeriodValues mtd={kpis.nationalsSalesMtd} ytd={kpis.nationalsSalesYtd} format={moneyWithCents} />
           </article>
           <article className="kpi-card">
             <span>SALES · WMS WHOLESALE</span>
-            <div><small>MTD</small><strong>{moneyWithCents(kpis.wmsSalesMtd)}</strong></div>
-            <div><small>YTD</small><strong>{moneyWithCents(kpis.wmsSalesYtd)}</strong></div>
+            <KpiPeriodValues mtd={kpis.wmsSalesMtd} ytd={kpis.wmsSalesYtd} format={moneyWithCents} />
           </article>
-          <article className="kpi-card kpi-carrier">
-            <span>TOP 3 CARRIERS · YTD</span>
+          <article className="kpi-card kpi-placeholder-card">
+            <span>NET MARGIN</span>
+            <div className="kpi-placeholder">
+              <strong>—</strong>
+              <small>No cost/margin data source yet</small>
+            </div>
+          </article>
+          {kpiView === "details" && <article className="kpi-card kpi-carrier">
+            <span>TOP 3 CARRIERS · YTD (always YTD)</span>
             <div className="carrier-table-head" aria-hidden="true">
-              <small>Carrier</small><small>Earnings</small><small>Shipments</small>
+              <small>Carrier</small><small>Freight Spend</small><small>Shipments</small>
             </div>
             <ol className="carrier-ranking">
               {kpis.topCarriers.map((carrier) => (
@@ -2764,41 +3233,57 @@ export default function Home() {
               ))}
               {kpis.topCarriers.length === 0 && <li className="carrier-empty">Carrier data unavailable</li>}
             </ol>
-          </article>
-          <article className="kpi-card kpi-split">
-            <span>TRUCKLOAD MIX · YTD</span>
+          </article>}
+          {kpiView === "details" && <article className="kpi-card kpi-split">
+            <span>TRUCKLOAD MIX · YTD (always YTD)</span>
             <div><small>LTL</small><strong>{kpis.ltlPercent}%</strong></div>
             <div><small>FTL</small><strong>{kpis.ftlPercent}%</strong></div>
-          </article>
-          <article className="kpi-card kpi-average">
+          </article>}
+          {kpiView === "details" && <article className="kpi-card kpi-average">
             <span>AVG TRUCKING COST · MTD / YTD</span>
             <div className="average-head" aria-hidden="true"><small>Lane</small><small>MTD</small><small>YTD</small></div>
-            <div><small>LOCAL ≤50 MI</small><strong>{money(kpis.avgLocalMtd)}</strong><strong>{money(kpis.avgLocal)}</strong></div>
+            <div><small>LOCAL / REGIONAL HEURISTIC</small><strong>{money(kpis.avgLocalMtd)}</strong><strong>{money(kpis.avgLocal)}</strong></div>
             <div><small>CALIFORNIA</small><strong>{money(kpis.avgCaliforniaMtd)}</strong><strong>{money(kpis.avgCalifornia)}</strong></div>
             <div><small>OUT OF STATE</small><strong>{money(kpis.avgOutOfStateMtd)}</strong><strong>{money(kpis.avgOutOfState)}</strong></div>
-          </article>
+          </article>}
         </div>
-        <p className="kpi-method">
-          All rows, including hidden/completed entries. Shipping costs use freight Invoice first,
-          then Rate when Invoice is blank—never shipment Invoice Amount. Nationals sales use
-          Order Date (column G) and Amount (column E), expand K values, and exclude cancelled
-          orders. WMS wholesale sales use Date (column A) and numeric INVOICE AMOUNT (column G);
-          text entries such as “FREE SAMPLE,” “FOC,” “Sample,” and operational notes are excluded.
-          MTD is the current month through today; YTD begins January 1, 2026. Trucking averages
-          exclude transfers and unclassified destinations; local is within 50 miles of Buena Park.
-          The NJ transfer card includes only TRANSFERS rows whose TO field is NJ or New Jersey.
-          Carrier earnings use the same freight Invoice-first, Rate-fallback cost, and shipment share
-          is each carrier’s moves divided by all YTD moves with a named carrier.{" "}
-          <a href={NATIONAL_SHEET_URL} target="_blank" rel="noreferrer">
-            Open Nationals source
-          </a>
-          {" · "}
-          <a href={SALES_SHEET_URL} target="_blank" rel="noreferrer">
-            Open WMS source
-          </a>
-          .
-        </p>
+        {kpiView === "details" && <details className="kpi-method" open>
+          <summary>Methodology notes</summary>
+          <p>
+            All rows, including hidden/completed entries. Shipping costs use freight Invoice first,
+            then Rate when Invoice is blank—never shipment Invoice Amount. Nationals sales use
+            Order Date (column G) and Amount (column E), expand K values, and exclude cancelled
+            orders. WMS wholesale sales use Date (column A) and numeric INVOICE AMOUNT (column G);
+            text entries such as “FREE SAMPLE,” “FOC,” “Sample,” and operational notes are excluded.
+            MTD is the current month through today; YTD begins January 1, 2026. Trucking averages
+            exclude transfers and unclassified destinations; local / regional uses a destination city/ZIP heuristic for the Southern California operating area and is not a measured mileage radius.
+            The NJ transfer card includes only TRANSFERS rows whose TO field is NJ or New Jersey.
+            Carrier freight spend uses the same freight Invoice-first, Rate-fallback cost, and shipment share
+            is each carrier’s moves divided by all YTD moves with a named carrier.{" "}
+            <a href={NATIONAL_SHEET_URL} target="_blank" rel="noreferrer">
+              Open Nationals source
+            </a>
+            {" · "}
+            <a href={SALES_SHEET_URL} target="_blank" rel="noreferrer">
+              Open WMS source
+            </a>
+            .
+          </p>
+        </details>}
       </section>
+
+      <section className="ct-row" aria-label="Active carrier and freight mode rollups">
+        <ControlTowerCarriers categories={carrierCategoryStats} />
+        <ControlTowerFreightMix modes={activeFreightModeCounts} />
+      </section>
+
+      <LiveMapPanel
+        milestones={mapMilestones}
+        trackable={mapTrackable}
+        tracking={parcelTracking}
+        configured={parcelTrackingConfigured}
+        trackingLoading={parcelTrackingLoading}
+      />
 
       <section className="control-panel" aria-label="Schedule filters">
         <label className="search">
@@ -2868,20 +3353,12 @@ export default function Home() {
           eyebrow="MATCHING PRODUCTS · CURRENT WAREHOUSE ON HAND"
           items={warehouseStock}
           loading={loading}
-          onSelect={(item) => setSelectedInventory((current) => current?.id === item.id ? null : item)}
-          selectable
           selectedItem={selectedInventory}
           showLocation
         />
       </div>
 
-      <LowStockPanel
-        items={warehouseStock}
-        inboundItems={inboundInventory}
-        loading={loading}
-        selectedItem={selectedInventory}
-        onSelect={(item) => setSelectedInventory((current) => current?.id === item.id ? null : item)}
-      />
+      <LowStockPanel items={warehouseStock} inboundItems={inboundInventory} loading={loading} />
 
       <div className="schedule-stack" aria-label="Separate inbound and outbound schedules">
         <ScheduleBoard
@@ -2894,10 +3371,12 @@ export default function Home() {
         />
         <SmallParcelSchedule
           direction="inbound"
+          days={days}
           items={inboundParcelVisibleItems}
           loading={loading}
           savingId={savingId}
           onStatus={handleStatus}
+          tracking={parcelTracking}
         />
         <ScheduleBoard
           direction="outbound"
@@ -2907,21 +3386,48 @@ export default function Home() {
           savingId={savingId}
           onStatus={handleStatus}
         />
+        <FulfillmentTkOrders />
         <SmallParcelSchedule
           direction="outbound"
+          days={days}
           items={outboundParcelVisibleItems}
           loading={loading}
           savingId={savingId}
           onStatus={handleStatus}
+          tracking={parcelTracking}
         />
       </div>
 
+      <DataGrids
+        imports={importScheduleItems}
+        outbound={outboundVisibleItems}
+        nationals={nationalsGridItems}
+        wms={wmsGridItems}
+        inventory={[...inboundInventory, ...warehouseStock]}
+        loading={loading}
+        includeFinished={includeFinished}
+        onToggleFinished={setIncludeFinished}
+      />
+
+      {/* .ingestion-archive-row keeps this row ordered above the footer on the
+          flex-reordered /light, /light-full, and /fulfillment-style variants. */}
+      <div className="ingestion-archive-row mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2" aria-label="Email ingestion and document archive">
+        <GmailIngestionCard events={gmailIngestion} loading={loading} />
+        <DriveArchiveCard />
+      </div>
+
+      <IngestionRoadmapCard events={gmailIngestion} />
+
+      <StatusLegend />
+
+      <ShipmentEventTrackerCard />
+
       <footer>
         <p><strong>SK</strong> STYLEKOREAN LOGISTICS · COMPANY OPERATIONS</p>
-        <p className="mono">AUTO-REFRESH 15 MIN · STATUS EDITS SYNC TO SOURCE ROWS</p>
+        <p className="mono">AUTO-REFRESH 30 MIN · STATUS EDITS SYNC TO SOURCE ROWS</p>
       </footer>
 
-      {notice && <div className="toast" role="status">{notice}</div>}
+      {notice && <div className={`toast${noticeFading ? " fade-out" : ""}`} role="status">{notice}</div>}
     </main>
   );
 }

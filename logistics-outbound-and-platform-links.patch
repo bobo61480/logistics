@@ -1,0 +1,163 @@
+diff -ruN -x node_modules -x .next -x out -x .git -x next-env.d.ts -x tsconfig.tsbuildinfo logistics_pristine/logistics-main/app/page.tsx logistics_repo/logistics-main/app/page.tsx
+--- logistics_pristine/logistics-main/app/page.tsx	2026-08-15 03:38:20.000000000 +0000
++++ logistics_repo/logistics-main/app/page.tsx	2026-08-18 00:07:33.104146578 +0000
+@@ -1015,7 +1015,7 @@
+ 
+ const OUTBOUND_SCHEDULE_META: OutboundSourceMeta = {
+   sheetName: "Outbound Shipping Schedule",
+-  headerRow: 3,
++  headerRow: 1,
+   rowCount: 0,
+   fallback: false,
+ };
+diff -ruN -x node_modules -x .next -x out -x .git -x next-env.d.ts -x tsconfig.tsbuildinfo logistics_pristine/logistics-main/app/style-switcher.tsx logistics_repo/logistics-main/app/style-switcher.tsx
+--- logistics_pristine/logistics-main/app/style-switcher.tsx	2026-08-15 03:38:20.000000000 +0000
++++ logistics_repo/logistics-main/app/style-switcher.tsx	2026-08-18 00:08:59.657274367 +0000
+@@ -1,35 +1,19 @@
+-"use client";
+-
+-import { usePathname } from "next/navigation";
+ import styles from "./style-variants.module.css";
+ 
+-const options = [
+-  { href: "/", label: "Original" },
+-  { href: "/light-skin", label: "Light Skin" },
+-  { href: "/light", label: "Light Control Tower" },
+-  { href: "/light-full", label: "Light Full" },
+-  { href: "/fulfillment-style", label: "Fulfillment" },
++const platforms = [
++  { href: "https://skwarehouse.dpdns.org", label: "SKWarehouse" },
++  { href: "https://skwbp.dpdns.org", label: "SKControl" },
+ ] as const;
+ 
+ export function StyleSwitcher() {
+-  const pathname = usePathname();
+-
+   return (
+-    <nav className={styles.variantNav} aria-label="Dashboard appearance">
+-      <span className={styles.variantNavLabel}>APPEARANCE</span>
+-      {options.map((option) => {
+-        const active = pathname === option.href;
+-        return (
+-          <a
+-            aria-current={active ? "page" : undefined}
+-            href={option.href}
+-            key={option.href}
+-            className={active ? styles.variantActive : undefined}
+-          >
+-            {option.label}
+-          </a>
+-        );
+-      })}
++    <nav className={styles.variantNav} aria-label="StyleKorean platforms">
++      <span className={styles.variantNavLabel}>PLATFORMS</span>
++      {platforms.map((platform) => (
++        <a href={platform.href} key={platform.href} target="_blank" rel="noreferrer">
++          {platform.label}
++        </a>
++      ))}
+     </nav>
+   );
+ }
+diff -ruN -x node_modules -x .next -x out -x .git -x next-env.d.ts -x tsconfig.tsbuildinfo logistics_pristine/logistics-main/tests/control-tower-light-variants.test.ts logistics_repo/logistics-main/tests/control-tower-light-variants.test.ts
+--- logistics_pristine/logistics-main/tests/control-tower-light-variants.test.ts	2026-08-15 03:38:20.000000000 +0000
++++ logistics_repo/logistics-main/tests/control-tower-light-variants.test.ts	2026-08-18 00:09:19.464209464 +0000
+@@ -4,13 +4,10 @@
+ const read = (path: string) => readFileSync(path, "utf8");
+ 
+ describe("Control Tower light variants", () => {
+-  it("exposes every comparison route in the shared appearance switcher", () => {
++  it("exposes the SKWarehouse and SKControl platform links in the shared header nav", () => {
+     const source = read("app/style-switcher.tsx");
+-    expect(source).toContain('{ href: "/", label: "Original" }');
+-    expect(source).toContain('{ href: "/light-skin", label: "Light Skin" }');
+-    expect(source).toContain('{ href: "/light", label: "Light Control Tower" }');
+-    expect(source).toContain('{ href: "/light-full", label: "Light Full" }');
+-    expect(source).toContain('{ href: "/fulfillment-style", label: "Fulfillment" }');
++    expect(source).toContain('{ href: "https://skwarehouse.dpdns.org", label: "SKWarehouse" }');
++    expect(source).toContain('{ href: "https://skwbp.dpdns.org", label: "SKControl" }');
+   });
+ 
+   it("keeps each light route presentation-only around the same Home implementation", () => {
+diff -ruN -x node_modules -x .next -x out -x .git -x next-env.d.ts -x tsconfig.tsbuildinfo logistics_pristine/logistics-main/tests/outbound-source.test.ts logistics_repo/logistics-main/tests/outbound-source.test.ts
+--- logistics_pristine/logistics-main/tests/outbound-source.test.ts	2026-08-15 03:38:20.000000000 +0000
++++ logistics_repo/logistics-main/tests/outbound-source.test.ts	2026-08-18 00:07:47.496455417 +0000
+@@ -17,6 +17,23 @@
+     });
+   });
+ 
++  it("uses schedule rows immediately after the sheet's single header row (regression: bug reported 2 rows too many were skipped, permanently falling back to WH Trucking Request)", () => {
++    // Outbound Shipping Schedule (gid 20260708) has exactly one header row —
++    // see e2e/dashboard.spec.ts's outboundCsv() fixture. A row of real data
++    // sitting immediately after that single header row must be picked up.
++    const schedule = [["CUSTOMER", "INVOICE NO.", "", "SHIP DATE"], ["ULTA BEAUTY", "IN12345", "", "8/13/2026"]];
++    const trucking = [...blankRows(2), ["Fallback", "INV-2", "", "8/14/2026"]];
++    const selected = selectOutboundSource(schedule, trucking);
++
++    expect(selected.rows).toBe(schedule);
++    expect(selected.meta).toMatchObject({
++      sheetName: "Outbound Shipping Schedule",
++      headerRow: 1,
++      rowCount: 1,
++      fallback: false,
++    });
++  });
++
+   it("falls back to uncombined trucking rows when the generated schedule is empty", () => {
+     const schedule = blankRows(4);
+     const trucking = [...blankRows(2), ["Customer A", "INV-1", "", "8/13/2026"], ["Customer A", "INV-2", "", "8/13/2026"]];
+diff -ruN -x node_modules -x .next -x out -x .git -x next-env.d.ts -x tsconfig.tsbuildinfo logistics_pristine/logistics-main/tests/style-variants.test.ts logistics_repo/logistics-main/tests/style-variants.test.ts
+--- logistics_pristine/logistics-main/tests/style-variants.test.ts	2026-08-15 03:38:20.000000000 +0000
++++ logistics_repo/logistics-main/tests/style-variants.test.ts	2026-08-18 00:09:26.833121693 +0000
+@@ -19,18 +19,16 @@
+     expect(source).not.toContain("function VariantNav");
+   });
+ 
+-  test("root layout exposes the same five-way style switcher on every route", () => {
++  test("root layout exposes the SKWarehouse/SKControl platform links on every route, not the old Appearance switcher", () => {
+     const layout = read("app/layout.tsx");
+     const switcher = read("app/style-switcher.tsx");
+     expect(layout).toContain('import { StyleSwitcher } from "./style-switcher"');
+     expect(layout).toContain("<StyleSwitcher />");
+-    expect(switcher).toContain('{ href: "/", label: "Original" }');
+-    expect(switcher).toContain('{ href: "/light-skin", label: "Light Skin" }');
+-    expect(switcher).toContain('{ href: "/light", label: "Light Control Tower" }');
+-    expect(switcher).toContain('{ href: "/light-full", label: "Light Full" }');
+-    expect(switcher).toContain('{ href: "/fulfillment-style", label: "Fulfillment" }');
+-    expect(switcher).toContain("usePathname");
+-    expect(switcher).toContain("aria-current={active ? \"page\" : undefined}");
++    expect(switcher).toContain('{ href: "https://skwarehouse.dpdns.org", label: "SKWarehouse" }');
++    expect(switcher).toContain('{ href: "https://skwbp.dpdns.org", label: "SKControl" }');
++    expect(switcher).toContain('target="_blank"');
++    expect(switcher).not.toContain("APPEARANCE");
++    expect(switcher).not.toContain("usePathname");
+   });
+ 
+   test("variant CSS places TK after the outbound trucking board", () => {
+diff -ruN -x node_modules -x .next -x out -x .git -x next-env.d.ts -x tsconfig.tsbuildinfo logistics_pristine/logistics-main/worker/sources.ts logistics_repo/logistics-main/worker/sources.ts
+--- logistics_pristine/logistics-main/worker/sources.ts	2026-08-15 03:38:20.000000000 +0000
++++ logistics_repo/logistics-main/worker/sources.ts	2026-08-18 00:07:26.722045446 +0000
+@@ -138,12 +138,12 @@
+   scheduleRows: string[][] | null,
+   truckingRows: string[][] | null,
+ ): { rows: string[][] | null; meta: OutboundSourceMeta } {
+-  const scheduleRowCount = populatedOutboundRows(scheduleRows, 3);
++  const scheduleRowCount = populatedOutboundRows(scheduleRows, 1);
+   const truckingRowCount = populatedOutboundRows(truckingRows, 2);
+   if (scheduleRowCount > 0) {
+     return {
+       rows: scheduleRows,
+-      meta: { sheetName: "Outbound Shipping Schedule", headerRow: 3, rowCount: scheduleRowCount, fallback: false },
++      meta: { sheetName: "Outbound Shipping Schedule", headerRow: 1, rowCount: scheduleRowCount, fallback: false },
+     };
+   }
+   if (truckingRowCount > 0) {
+@@ -162,7 +162,7 @@
+     rows: scheduleRows ?? truckingRows,
+     meta: {
+       sheetName: scheduleRows ? "Outbound Shipping Schedule" : "WH Trucking Request",
+-      headerRow: scheduleRows ? 3 : 2,
++      headerRow: scheduleRows ? 1 : 2,
+       rowCount: 0,
+       fallback: Boolean(truckingRows),
+       reason: "No populated outbound shipment rows are available",

@@ -1,38 +1,55 @@
 /**
- * Triggers.gs — one-click provisioning of every time-driven job,
- * plus the GitHub Pages redeploy hook.
+ * Triggers.gs — single owner for every production time-driven job.
  *
- * Run setupAllTriggers() once (and again after changing schedules).
- *
- * Script Properties (File > Project properties > Script properties):
- *   GITHUB_TOKEN  — fine-grained PAT, repo bobo61480/logistics,
- *                   permission: Contents: Read & write (for repository_dispatch)
- *   GITHUB_REPO   — optional override, default "bobo61480/logistics"
+ * Run setupAllTriggers() once after deployment (and again after changing
+ * schedules). It removes both legacy aliases and current handlers before
+ * provisioning exactly one trigger for each desired job.
  */
 
 /* eslint-disable no-unused-vars */
 
-var GMAIL_PIPELINE_TRIGGER_SYNC_VERSION = "2026-08-10-gmail-v2";
-
-// Deployment marker: ensures the import-boundary/hourly-parcel Apps Script
-// changes are pushed to the live /exec deployment after CI change detection
-// was corrected on 2026-08-10.
-var APPS_SCRIPT_DEPLOY_SYNC_VERSION = "2026-08-10-import-parcels-v1";
+var GMAIL_PIPELINE_TRIGGER_SYNC_VERSION = "2026-08-24-central-v2-xpo";
+var APPS_SCRIPT_DEPLOY_SYNC_VERSION = "2026-08-12-stabilization-v1";
 
 var TRIGGER_PLAN = [
-  { handler: "processLogisticsEmailsV2", minutes: 15 },          // Gmail ingestion
-  { handler: "processApprovedPending", minutes: 30 },          // commit human-approved rows
-  { handler: "scanAndImportWmsTruckingOrders", minutes: 15 },  // existing WMS trucking scanner (Code.gs)
-  { handler: "trackSmallParcelsStatusUpdates", hours: 1 },     // official carrier/email tracking + IMPORTS write-back
-  { handler: "syncInventoryModule", hours: 1 },                // inventory + KPI rebuild
-  { handler: "enrichImportsFromContainerLog", daily: 6 },      // 6 AM daily
-  { handler: "requestSiteRedeploy", daily: 7 }                 // 7 AM daily safety redeploy
+  { handler: "processLogisticsEmailsV2", minutes: 15 },
+  { handler: "processXpoTrackingEmailsV2", minutes: 15 },
+  { handler: "processApprovedPending", minutes: 30 },
+  { handler: "scanAndImportWmsTruckingOrdersV2", minutes: 15 },
+  { handler: "trackSmallParcelsStatusUpdates", hours: 1 },
+  { handler: "syncInventoryModule", hours: 1 },
+  { handler: "enrichImportsFromContainerLog", daily: 6 },
+  { handler: "reconcileCustomerBackfill", daily: 5 }
+];
+
+// customerLookupOnEdit is retained here ONLY as a cleanup target: an earlier
+// revision of PR #92 registered it as an installable trigger, but
+// deploy-apps-script.yml never runs setupAllTriggers(), so that trigger
+// would have silently disabled the customer-lookup automation after every
+// deploy until a human manually re-ran setup. Reverted — CustomerLookup.gs's
+// onEdit(e) is a bare, zero-config simple trigger again (see that file's
+// header comment for how it now avoids the authorization-requiring calls a
+// simple trigger can't make). This entry just ensures setupAllTriggers()
+// deletes any stray installable trigger left over from that revision.
+var TRIGGER_CLEANUP_HANDLERS = [
+  "processLogisticsEmails",
+  "processLogisticsEmailsV2",
+  "processXpoTrackingEmailsV2",
+  "scanAndImportWmsTruckingOrders",
+  "scanAndImportWmsTruckingOrdersV2",
+  "trackSmallParcelsStatusUpdates",
+  "syncInventoryModule",
+  "enrichImportsFromContainerLog",
+  "reconcileCustomerBackfill",
+  "customerLookupOnEdit",
+  "requestSiteRedeploy"
 ];
 
 function setupAllTriggers() {
-  var handlers = TRIGGER_PLAN.map(function (t) { return t.handler; });
   ScriptApp.getProjectTriggers().forEach(function (trigger) {
-    if (handlers.indexOf(trigger.getHandlerFunction()) !== -1) ScriptApp.deleteTrigger(trigger);
+    if (TRIGGER_CLEANUP_HANDLERS.indexOf(trigger.getHandlerFunction()) !== -1) {
+      ScriptApp.deleteTrigger(trigger);
+    }
   });
 
   TRIGGER_PLAN.forEach(function (t) {
@@ -42,33 +59,16 @@ function setupAllTriggers() {
     else builder.everyDays(1).atHour(t.daily).create();
   });
 
-  Logger.log("Provisioned " + TRIGGER_PLAN.length + " triggers.");
+  Logger.log("Provisioned " + TRIGGER_PLAN.length + " canonical triggers.");
   return TRIGGER_PLAN;
 }
 
 /**
- * Fires a repository_dispatch event so GitHub Actions redeploys the site.
- * The frontend reads sheet data live at runtime, so this is only needed to
- * refresh statically-baked content and to keep Pages caches warm.
+ * Legacy safety shim only. This handler is intentionally absent from
+ * TRIGGER_PLAN, but retaining the function prevents a stale installed trigger
+ * from failing before setupAllTriggers() has a chance to delete it.
  */
 function requestSiteRedeploy() {
-  var props = PropertiesService.getScriptProperties();
-  var token = props.getProperty("GITHUB_TOKEN");
-  if (!token) { Logger.log("GITHUB_TOKEN script property not set — skipping redeploy."); return; }
-  var repo = props.getProperty("GITHUB_REPO") || "bobo61480/logistics";
-
-  var response = UrlFetchApp.fetch("https://api.github.com/repos/" + repo + "/dispatches", {
-    method: "post",
-    contentType: "application/json",
-    headers: {
-      Authorization: "Bearer " + token,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28"
-    },
-    payload: JSON.stringify({ event_type: "sheet-data-changed", client_payload: { at: new Date().toISOString() } }),
-    muteHttpExceptions: true
-  });
-  var code = response.getResponseCode();
-  if (code >= 300) throw new Error("repository_dispatch failed: HTTP " + code + " " + response.getContentText().slice(0, 200));
-  Logger.log("Redeploy requested (HTTP " + code + ").");
+  Logger.log("requestSiteRedeploy is obsolete; live operational data no longer requires a code redeploy.");
+  return { skipped: "obsolete" };
 }

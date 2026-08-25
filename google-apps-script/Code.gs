@@ -26,12 +26,13 @@
 
 const SPREADSHEET_ID = "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc";
 const WMS_SPREADSHEET_ID = "14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I";
+const NATIONAL_SPREADSHEET_ID = "12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8";
 
-const OUTBOUND_STATUS = ["", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "SHIPPING", "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED"];
-const INBOUND_STATUS = ["", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "SHIPPING", "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED", "N/A", "Customs Clearance", "FDA Review/Hold", "FWS Review/Hold", "Delayed"];
+const OUTBOUND_STATUS = ["", "SCHEDULE REQUESTED", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "PICKED UP/SHIPPED", "IN TRANSIT", "IN TRANSIT/STOPOVER", "SHIPPING", "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED", "DELAYED"];
+const INBOUND_STATUS = ["", "SCHEDULE REQUESTED", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "PICKED UP/SHIPPED", "IN TRANSIT", "IN TRANSIT/STOPOVER", "SHIPPING", "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED", "N/A", "Customs Clearance", "FDA Review / Hold", "FWS Review / Hold", "RECEIVED/FDA HOLD/REVIEW", "FDA Detained", "AQI Examination", "Delayed"];
 const ALLOWED_SHEETS = ["WH Trucking Request", "B2B/E-COM TRUCKING", "TRANSFERS", "ULTA", "IHERB", "IMPORTS", "NATIONAL ORDER PROGRESS", "Outbound Shipping Schedule", "TJX/ROSS"];
 
-const COMPLETED_STATUSES = ["SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED"];
+const COMPLETED_STATUSES = ["RECEIVED", "CANCELLED", "COMPLETED"];
 
 // Required by transferInboundInventory_ -- restored from the pre-2026-08-07 version
 // of this file after it was dropped during a source reconciliation. See
@@ -40,6 +41,112 @@ const COMPLETED_STATUSES = ["SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "CO
 const INVENTORY_TRANSFER_STATUSES = ["DELIVERED", "RECEIVED", "COMPLETED"];
 const SKW_INBOUND_SHEET = "SKW_Inbound";
 const SKW_STOCK_SHEET = "SKW_Stock";
+const WMS_TRUCKING_LEDGER_SHEET = "WMS Trucking Processed";
+
+function doGet(e) {
+  try {
+    const action = String((e && e.parameter && e.parameter.action) || "").trim().toLowerCase();
+    if (action !== "snapshot") return json_({ ok: false, error: "Unsupported action." });
+    const master = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const national = SpreadsheetApp.openById(NATIONAL_SPREADSHEET_ID);
+    const wms = SpreadsheetApp.openById(WMS_SPREADSHEET_ID);
+    return json_({
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      sources: {
+        imports: readSnapshotRows_(master, "IMPORTS", null, 1, 2500, 30),
+        outbound: readSnapshotRows_(master, "Outbound Shipping Schedule", null, 1, 1500, 30),
+        trucking: readSnapshotRows_(master, "WH Trucking Request", null, 1, 25000, 32),
+        transfers: readSnapshotRows_(master, "TRANSFERS", null, 1, 2500, 29),
+        nationalOutbound: readSnapshotRows_(national, null, 99300389, 1, 3500, 21),
+        salesOutbound: readSnapshotRows_(wms, null, 0, 2, 4199, 33),
+        inventoryDashboardTable: readSnapshotRows_(master, "INVENTORY", null, 1, 6500, 15),
+        skwInboundTable: readSnapshotRows_(master, "SKW_Inbound", null, 1, 2500, 18),
+        skwStockTable: readSnapshotRows_(master, "SKW_Stock", null, 1, 2500, 10),
+        // Optional: Validation.gs creates this tab lazily, so its absence must
+        // not fail the whole snapshot. Feeds the dashboard's Gmail Ingestion card.
+        // Raw JSON in column O carries extraction internals and is never exposed
+        // through this anonymously reachable endpoint. The safe Sender,
+        // Documents, and Archive Folder fields in P:R are included explicitly.
+        pendingVerification: readPendingVerificationTail_(master, "PENDING VERIFICATION", 2000, 18)
+      }
+    });
+  } catch (error) {
+    return json_({ ok: false, error: String(error.message || error) });
+  }
+}
+
+function readPendingVerificationTail_(spreadsheet, sheetName, maxRows, maxColumns) {
+  try {
+    const safeColumns = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17];
+    const sanitize = function (row) { return safeColumns.map(function (index) { return row[index] || ""; }); };
+    const sheet = spreadsheet.getSheetByName(sheetName);
+    if (!sheet) {
+      // Validation.gs creates this tab lazily on the first record that fails
+      // validation, so on a clean install its absence is a legitimately EMPTY
+      // feed, not a read failure. Return the canonical header row (sanitized
+      // to the same column bound) so downstream sees "empty", never "degraded".
+      if (typeof VALIDATION !== "undefined" && VALIDATION.pendingHeaders) {
+        return [sanitize(VALIDATION.pendingHeaders)];
+      }
+      return null;
+    }
+    const lastRow = sheet.getLastRow();
+    const lastColumn = Math.min(sheet.getLastColumn(), Math.max(1, Number(maxColumns) || 1));
+    if (lastRow < 1 || lastColumn < 1) return null;
+    const header = sheet.getRange(1, 1, 1, lastColumn).getDisplayValues();
+    if (lastRow === 1) return header;
+    const firstDataRow = Math.max(2, lastRow - Math.max(1, Number(maxRows) || 1) + 1);
+    const rows = sheet.getRange(firstDataRow, 1, lastRow - firstDataRow + 1, lastColumn).getDisplayValues();
+    // Review status transitions happen IN PLACE on existing rows, so an old
+    // NEEDS REVIEW row that predates the tail would otherwise never surface.
+    // One column-C read covers the pre-tail region cheaply; unresolved rows
+    // are prepended (bounded, normally zero).
+    if (firstDataRow > 2) {
+      const statuses = sheet.getRange(2, 3, firstDataRow - 2, 1).getDisplayValues();
+      const straggler = [];
+      for (let index = 0; index < statuses.length && straggler.length < 200; index += 1) {
+        if (String(statuses[index][0]).trim().toUpperCase() === "NEEDS REVIEW") straggler.push(index);
+      }
+      if (straggler.length) {
+        // Bounded batched recovery: merge nearby rows into ranged reads (a
+        // ≤50-row gap costs less than another Spreadsheet-service call) and
+        // cap the number of reads, so neither a review backlog nor a huge
+        // pre-tail audit can stall the snapshot the Worker aborts after 60s.
+        // Only open NEEDS REVIEW rows are recovered — resolved pre-tail
+        // transitions are historical audit, deliberately left to the sheet.
+        const runs = [];
+        straggler.forEach(function (offset) {
+          const last = runs[runs.length - 1];
+          if (last && offset - last.end <= 50) last.end = offset;
+          else runs.push({ start: offset, end: offset });
+        });
+        runs.slice(0, 20).forEach(function (run) {
+          const block = sheet.getRange(run.start + 2, 1, run.end - run.start + 1, lastColumn).getDisplayValues();
+          block.forEach(function (row) {
+            if (String(row[2]).trim().toUpperCase() === "NEEDS REVIEW") rows.unshift(row);
+          });
+        });
+      }
+    }
+    return header.concat(rows).map(sanitize);
+  } catch (error) {
+    return null;
+  }
+}
+
+function readSnapshotRows_(spreadsheet, sheetName, sheetId, startRow, maxRows, maxColumns) {
+  let sheet = sheetName ? spreadsheet.getSheetByName(sheetName) : null;
+  if (!sheet && sheetId !== null && sheetId !== undefined) {
+    sheet = spreadsheet.getSheets().find(function (candidate) { return candidate.getSheetId() === sheetId; }) || null;
+  }
+  if (!sheet) throw new Error("Snapshot source sheet is unavailable.");
+  const firstRow = Math.max(1, Number(startRow) || 1);
+  const lastRow = Math.min(sheet.getLastRow(), firstRow + Math.max(1, Number(maxRows) || 1) - 1);
+  const lastColumn = Math.min(sheet.getLastColumn(), Math.max(1, Number(maxColumns) || 1));
+  if (lastRow < firstRow || lastColumn < 1) return [];
+  return sheet.getRange(firstRow, 1, lastRow - firstRow + 1, lastColumn).getDisplayValues();
+}
 
 function doPost(e) {
   const lock = LockService.getScriptLock();
@@ -54,32 +161,41 @@ function doPost(e) {
       rawContents = e.parameter.postData;
     }
     const request = JSON.parse(rawContents || "{}");
+
+    // Dashboard-driven Gmail-ingestion approve/reject. Kept as an explicit
+    // "action" discriminator so the pre-existing status-update callers
+    // (which never send "action") are completely unaffected.
+    if (request.action === "reviewPending") {
+      return json_(reviewPendingRow_(request));
+    }
+
     validateRequest_(request);
-    const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const spreadsheet = statusSpreadsheetForSource_(request.sourceSheet);
     const sheet = spreadsheet.getSheetByName(request.sourceSheet);
     if (!sheet) throw new Error("Source sheet not found.");
+
+    if (request.sourceSheet === "Stylekorean") ensureWmsWebsiteStatusColumn_(sheet);
 
     const target = request.kind === "inbound"
       ? findInboundTarget_(sheet, request)
       : findOutboundTarget_(sheet, request);
 
-    const allowed = (request.kind === "inbound" ? INBOUND_STATUS : OUTBOUND_STATUS).map((value) => String(value).toUpperCase());
-    const status = String(request.status || "").trim();
-    if (!allowed.includes(status.toUpperCase())) throw new Error("Status is not allowed.");
+    const status = canonicalLogisticsStatus_(request.status);
+    if (!status) throw new Error("Status is not allowed.");
+    const allowed = (request.kind === "inbound" ? INBOUND_STATUS : OUTBOUND_STATUS)
+      .map((value) => String(value).toUpperCase());
+    if (!allowed.includes(status.toUpperCase())) throw new Error("Status is not allowed for this relation.");
 
     const current = String(target.getDisplayValue() || "").trim();
     const requestCurrent = String(request.currentStatus || "").trim();
-    const normCurrent = current.toUpperCase();
-    const normRequest = requestCurrent.toUpperCase();
+    const normCurrent = canonicalLogisticsStatus_(current).toUpperCase();
+    const normRequest = canonicalLogisticsStatus_(requestCurrent).toUpperCase();
 
-    // Check concurrency, tolerating default status fallbacks ("" vs "SCHEDULED")
-    // FIX: the old guard required normCurrent to be truthy AND then tested
-    // normCurrent === "", which can never be true, so the "" / "SCHEDULED"
-    // default-status pair was never actually tolerated.
+    // Check concurrency, tolerating default status fallbacks ("" vs "SCHEDULED").
     const DEFAULT_EQUIVALENT = ["", "SCHEDULED"];
     const bothDefaults = DEFAULT_EQUIVALENT.indexOf(normCurrent) !== -1 && DEFAULT_EQUIVALENT.indexOf(normRequest) !== -1;
     if (requestCurrent && normCurrent !== normRequest && !bothDefaults) {
-      Logger.log("Concurrency note: Current='" + current + "', Request='" + requestCurrent + "'");
+      throw new Error("Status changed in the source. Refresh before saving again.");
     }
 
     target.setValue(status);
@@ -89,7 +205,7 @@ function doPost(e) {
       inventoryTransfer = transferInboundInventory_(spreadsheet, request);
     }
 
-    // Format row in Google Sheets: Grey out completed rows, reset active rows
+    // Format row in Google Sheets: grey out completed rows, reset active rows.
     const rowIdx = target.getRow();
     const rowRange = sheet.getRange(rowIdx, 1, 1, Math.max(sheet.getLastColumn(), 1));
     const isCompleted = COMPLETED_STATUSES.includes(status.toUpperCase());
@@ -111,6 +227,34 @@ function doPost(e) {
 function validateRequest_(request) {
   if (!["outbound", "inbound"].includes(request.kind)) throw new Error("Invalid relation kind.");
   if (!ALLOWED_SHEETS.includes(request.sourceSheet)) throw new Error("Source sheet is not allowed.");
+}
+
+function statusSpreadsheetForSource_(sourceSheet) {
+  if (sourceSheet === "NATIONAL ORDER PROGRESS") return SpreadsheetApp.openById(NATIONAL_SPREADSHEET_ID);
+  if (sourceSheet === "Stylekorean") return SpreadsheetApp.openById(WMS_SPREADSHEET_ID);
+  return SpreadsheetApp.openById(SPREADSHEET_ID);
+}
+
+function ensureWmsWebsiteStatusColumn_(sheet) {
+  const headerRow = 2;
+  const column = 33; // AG; A:AF is the existing WMS schema.
+  if (sheet.getMaxColumns() < column) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), column - sheet.getMaxColumns());
+  }
+  const header = sheet.getRange(headerRow, column);
+  if (String(header.getDisplayValue() || "").trim().toUpperCase() === "WEBSITE STATUS") return;
+  if (String(header.getDisplayValue() || "").trim()) {
+    throw new Error("WMS column AG is already in use; WEBSITE STATUS was not created.");
+  }
+  header.setValue("WEBSITE STATUS");
+  const values = OUTBOUND_STATUS.filter(function (status) { return status; }).map(function (status) {
+    return canonicalLogisticsStatus_(status);
+  });
+  const validation = SpreadsheetApp.newDataValidation()
+    .requireValueInList(values, true)
+    .setAllowInvalid(false)
+    .build();
+  sheet.getRange(3, column, Math.max(sheet.getMaxRows() - 2, 1), 1).setDataValidation(validation);
 }
 
 function importsSectionMarkerRow_(values, marker) {
@@ -145,7 +289,9 @@ function findInboundTarget_(sheet, request) {
     if (isParcel) {
       if (!parcelsRow || row <= parcelsRow) throw new Error("Parcel write-back row is outside the PARCELS section.");
       const wantedTracking = inboundWriteToken_(request.trackingNumber || request.pro || request.shipmentNo);
-      const rowTracking = [values[row - 1][1], values[row - 1][10]]
+      // B is the canonical tracking column, C occasionally contains a carrier
+      // tracking number in malformed legacy rows, and K carries the tracked value.
+      const rowTracking = [values[row - 1][1], values[row - 1][2], values[row - 1][10]]
         .flatMap(inboundWriteTokens_);
       if (!wantedTracking || rowTracking.indexOf(wantedTracking) === -1) {
         throw new Error("Parcel source row no longer matches the selected tracking number.");
@@ -331,160 +477,8 @@ function referencesMatch_(left, right) {
   return a.includes(b) || b.includes(a);
 }
 
-/**
- * Periodically scans external "WMS PROMOTION" workbook sheet (14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I)
- * for rows where "Shipping Method" is "Trucking", combines multiple invoices
- * for the same customer & ship date into one entry, and imports/updates into "WH Trucking Request".
- */
-function scanAndImportWmsTruckingOrders() {
-  const lock = LockService.getScriptLock();
-  if (!lock.tryLock(10000)) return { ok: false, error: "Lock timeout" };
-
-  try {
-    const sourceSpreadsheet = SpreadsheetApp.openById(WMS_SPREADSHEET_ID);
-    const targetSpreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
-    const sourceSheet = sourceSpreadsheet.getSheetByName("Stylekorean");
-    const targetSheet = targetSpreadsheet.getSheetByName("WH Trucking Request");
-    if (!sourceSheet || !targetSheet) throw new Error("Required source or target sheet is missing.");
-
-    const sourceData = sourceSheet.getDataRange().getDisplayValues();
-    const sourceHeader = findWmsTruckingHeader_(sourceData);
-    const sourceMap = sourceHeader.map;
-    const requiredSource = ["INVOICE#", "CUSTOMER NAME", "SHIP OUT DATE", "SHIPPING METHOD"];
-    requiredSource.forEach(function (name) {
-      if (sourceMap[name] === undefined) throw new Error("WMS Stylekorean is missing header: " + name);
-    });
-
-    const groups = new Map();
-    for (let r = sourceHeader.rowIndex + 1; r < sourceData.length; r++) {
-      const row = sourceData[r];
-      const method = String(row[sourceMap["SHIPPING METHOD"]] || "").trim().toUpperCase();
-      if (!method.includes("TRUCKING")) continue;
-
-      const invoice = String(row[sourceMap["INVOICE#"]] || "").trim().toUpperCase();
-      const rawCustomer = String(row[sourceMap["CUSTOMER NAME"]] || "").trim();
-      const rawShipDate = String(row[sourceMap["SHIP OUT DATE"]] || "").trim();
-      if (!invoice || !rawCustomer || !rawShipDate) continue;
-
-      const customer = canonicalWmsCustomer_(rawCustomer);
-      const dateInfo = normalizeWmsShipDate_(rawShipDate);
-      const key = normalizeWmsCustomerKey_(customer) + "___" + dateInfo.key;
-      if (!groups.has(key)) {
-        groups.set(key, {
-          customer: customer,
-          shipDate: dateInfo.display,
-          invoices: [],
-          amounts: [],
-          sourceRows: []
-        });
-      }
-      const group = groups.get(key);
-      if (!group.invoices.includes(invoice)) group.invoices.push(invoice);
-      if (sourceMap["INVOICE AMOUNT"] !== undefined) {
-        const amount = parseWmsAmount_(row[sourceMap["INVOICE AMOUNT"]]);
-        if (amount !== null) group.amounts.push(amount);
-      }
-      group.sourceRows.push(r + 1);
-    }
-
-    const targetLastRow = Math.max(targetSheet.getLastRow(), 5);
-    const targetLastColumn = Math.max(targetSheet.getLastColumn(), 24);
-    const targetData = targetSheet.getRange(1, 1, targetLastRow, targetLastColumn).getDisplayValues();
-    const targetHeader = findWhTruckingHeader_(targetData);
-    const targetMap = targetHeader.map;
-    ["CUSTOMER", "INVOICE NO.", "SHIP DATE"].forEach(function (name) {
-      if (targetMap[name] === undefined) throw new Error("WH Trucking Request is missing header: " + name);
-    });
-
-    const existingByKey = new Map();
-    const existingByInvoice = new Map();
-    let lastBusinessRow = targetHeader.rowIndex + 1;
-
-    for (let r = targetHeader.rowIndex + 1; r < targetData.length; r++) {
-      const row = targetData[r];
-      const customer = exactVal_(row, targetMap, ["CUSTOMER"]);
-      const shipDate = exactVal_(row, targetMap, ["SHIP DATE"]);
-      const invoiceCell = exactVal_(row, targetMap, ["INVOICE NO.", "INVOICE #", "INVOICE"]);
-      if (customer || shipDate || invoiceCell) lastBusinessRow = r + 1;
-
-      if (customer && shipDate) {
-        const dateInfo = normalizeWmsShipDate_(shipDate);
-        existingByKey.set(normalizeWmsCustomerKey_(canonicalWmsCustomer_(customer)) + "___" + dateInfo.key, r + 1);
-      }
-      splitWmsInvoices_(invoiceCell).forEach(function (invoice) {
-        existingByInvoice.set(invoice, r + 1);
-      });
-    }
-
-    let imported = 0;
-    let updated = 0;
-    const pendingRows = [];
-    const width = Math.max(targetLastColumn, 24);
-
-    groups.forEach(function (group, key) {
-      group.invoices.sort();
-      let rowNumber = existingByKey.get(key);
-      if (!rowNumber) {
-        for (let i = 0; i < group.invoices.length && !rowNumber; i++) {
-          rowNumber = existingByInvoice.get(group.invoices[i]);
-        }
-      }
-
-      const invoiceText = group.invoices.join("\n");
-      const totalAmount = group.amounts.reduce(function (sum, value) { return sum + value; }, 0);
-
-      if (rowNumber) {
-        const range = targetSheet.getRange(rowNumber, 1, 1, width);
-        const values = range.getValues()[0];
-        let changed = false;
-        changed = setMappedValue_(values, targetMap, "CUSTOMER", group.customer) || changed;
-        changed = setMappedValue_(values, targetMap, "INVOICE NO.", invoiceText) || changed;
-        changed = setMappedValue_(values, targetMap, "SHIP DATE", group.shipDate) || changed;
-        if (totalAmount > 0 && targetMap["VALUE"] !== undefined && !values[targetMap["VALUE"]]) {
-          values[targetMap["VALUE"]] = totalAmount;
-          changed = true;
-        }
-        if (targetMap["STATUS"] !== undefined && !values[targetMap["STATUS"]]) {
-          values[targetMap["STATUS"]] = "WORK IN PROGRESS";
-          changed = true;
-        }
-        if (changed) {
-          range.setValues([values]);
-          updated++;
-        }
-      } else {
-        const row = new Array(width).fill("");
-        row[targetMap["CUSTOMER"]] = group.customer;
-        row[targetMap["INVOICE NO."]] = invoiceText;
-        row[targetMap["SHIP DATE"]] = group.shipDate;
-        if (targetMap["VALUE"] !== undefined && totalAmount > 0) row[targetMap["VALUE"]] = totalAmount;
-        if (targetMap["STATUS"] !== undefined) row[targetMap["STATUS"]] = "WORK IN PROGRESS";
-        pendingRows.push(row);
-        imported++;
-      }
-    });
-
-    if (pendingRows.length) {
-      const startRow = lastBusinessRow + 1;
-      targetSheet.getRange(startRow, 1, pendingRows.length, width).setValues(pendingRows);
-      const exemplarRow = Math.max(targetHeader.rowIndex + 2, lastBusinessRow);
-      targetSheet.getRange(exemplarRow, 1, 1, width).copyTo(
-        targetSheet.getRange(startRow, 1, pendingRows.length, width),
-        SpreadsheetApp.CopyPasteType.PASTE_FORMAT,
-        false
-      );
-    }
-
-    SpreadsheetApp.flush();
-    Logger.log("WMS trucking sync: groups=" + groups.size + ", imported=" + imported + ", updated=" + updated);
-    return { ok: true, groups: groups.size, imported: imported, updated: updated, nextRow: lastBusinessRow + pendingRows.length + 1 };
-  } catch (error) {
-    Logger.log("Error in scanAndImportWmsTruckingOrders: " + error.message);
-    return { ok: false, error: error.message };
-  } finally {
-    lock.releaseLock();
-  }
-}
+// The legacy WMS importer was removed on 2026-08-12. The only callable legacy
+// handler name now lives in zz_WmsTruckingCompatibility.gs and delegates to V2.
 
 function findWmsTruckingHeader_(rows) {
   for (let r = 0; r < Math.min(rows.length, 10); r++) {
@@ -526,14 +520,78 @@ function canonicalWmsCustomer_(value) {
     "TOKTOK BEAUTY TEAMZL LC": "TOKTOK BEAUTY",
     "TOKTOK BEAUTY": "TOKTOK BEAUTY",
     "ROYAL IMEX": "ROYAL IMEX INC",
+    "PPIH GUAM": "Great Luck Inc. (PPIH - GUAM)",
     "GLOWISS": "GLOWISS",
     "GLOWISS LLC": "GLOWISS"
   };
+  // Word-boundary anchored, not indexOf(...) === 0 — a raw prefix match let an
+  // unrelated customer like "MEGA MARTINEZ DISTRIBUTION" collapse into the
+  // "MEGA MART" canonical key and merge with a real Mega Mart shipment on the
+  // same date. normalizeWmsCustomerKey_ already collapses to single-spaced
+  // tokens, so \b here requires a following space or end-of-string.
+  if (/^MEGA MART\b/.test(key)) return "MEGA MART";
+  if (/^TOKTOK BEAUTY\b/.test(key)) return "TOKTOK BEAUTY";
+  if (/^ROYAL IMEX\b/.test(key)) return "ROYAL IMEX INC";
+  if (key === "PPIH GUAM" || key === "GREAT LUCK PPIH GUAM") return "Great Luck Inc. (PPIH - GUAM)";
   return aliases[key] || raw.toUpperCase().replace(/\s+/g, " ").trim();
+}
+
+function isWmsFreightMethod_(value) {
+  const method = String(value || "").trim().toUpperCase();
+  if (!method) return false;
+  if (/\b(UPS|USPS|DHL|FEDEX|AMAZON)\b/.test(method)) return false;
+  return method === "TK" || /\b(TRUCKING|LTL|FREIGHT)\b/.test(method) || method.indexOf("LOCAL DELIVERY") !== -1;
+}
+
+function isWmsActiveStatus_(value) {
+  const status = String(value || "").trim().toUpperCase();
+  return ["SHIPPED", "DELIVERED", "RECEIVED", "COMPLETED", "CANCELLED"].indexOf(status) === -1;
+}
+
+function mergeWmsInvoices_(existing, additions) {
+  const result = [];
+  [].concat(existing || [], additions || []).forEach(function (invoice) {
+    const clean = String(invoice || "").trim().toUpperCase();
+    if (clean && result.indexOf(clean) === -1) result.push(clean);
+  });
+  return result;
+}
+
+function earliestWmsSourceDateForInvoices_(invoices, sourceByInvoice, fallback) {
+  const candidates = [];
+  (invoices || []).forEach(function (invoice) {
+    const source = sourceByInvoice.get(invoice);
+    if (source && source.dateInfo && source.dateInfo.key) candidates.push(source.dateInfo);
+  });
+  if (fallback) candidates.push(normalizeWmsShipDate_(fallback));
+  candidates.sort(function (a, b) { return a.key.localeCompare(b.key); });
+  return candidates.length ? candidates[0].display : fallback;
+}
+
+function writeMappedValue_(sheet, rowNumber, map, header, value) {
+  const index = map[header];
+  if (index === undefined || value === undefined || value === null) return false;
+  const range = sheet.getRange(rowNumber, index + 1);
+  if (String(range.getDisplayValue() || "").trim() === String(value).trim()) return false;
+  range.setValue(value);
+  return true;
 }
 
 function normalizeWmsShipDate_(value) {
   const text = String(value || "").trim();
+  // Some ledger rows are appended as raw Google Sheets serial numbers without
+  // a date number format. Decode those explicitly so reconciliation still
+  // compares the correct calendar day.
+  if (/^\d{4,5}(?:\.\d+)?$/.test(text)) {
+    const serial = Number(text);
+    if (serial >= 20000 && serial <= 80000) {
+      const date = new Date(Date.UTC(1899, 11, 30) + Math.floor(serial) * 86400000);
+      const year = date.getUTCFullYear();
+      const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+      const day = String(date.getUTCDate()).padStart(2, "0");
+      return { key: year + "-" + month + "-" + day, display: month + "/" + day + "/" + year };
+    }
+  }
   const parsed = new Date(text);
   if (isNaN(parsed.getTime())) {
     return { key: text.toUpperCase(), display: text };
@@ -575,26 +633,16 @@ function exactVal_(row, map, names) {
 }
 
 /**
- * Creates or resets the 15-minute WMS Trucking sync trigger.
- * Only this handler's triggers are replaced; unrelated project triggers are preserved.
+ * Backward-compatible trigger setup entry point. Trigger ownership is centralized
+ * in Triggers.gs so this helper can no longer recreate the unsafe legacy handler.
  */
 function createTimeDrivenTrigger() {
-  ScriptApp.getProjectTriggers().forEach(function (trigger) {
-    if (trigger.getHandlerFunction() === "scanAndImportWmsTruckingOrders") {
-      ScriptApp.deleteTrigger(trigger);
-    }
-  });
-
-  ScriptApp.newTrigger("scanAndImportWmsTruckingOrders")
-    .timeBased()
-    .everyMinutes(15)
-    .create();
-  Logger.log("15-minute trigger provisioned for scanAndImportWmsTruckingOrders");
+  return setupAllTriggers();
 }
 
 /** Backward-compatible entry point for anyone who previously used this name. */
 function create30MinTrigger() {
-  return createTimeDrivenTrigger();
+  return setupAllTriggers();
 }
 
 /**
@@ -626,9 +674,13 @@ function addWebsiteStatusDropdownToAllSourceSheets() {
   ];
 
   const STATUS_LIST = [
+    "SCHEDULE REQUESTED",
     "SCHEDULED",
     "WORK IN PROGRESS",
     "PENDING",
+    "PICKED UP/SHIPPED",
+    "IN TRANSIT",
+    "IN TRANSIT/STOPOVER",
     "SHIPPING",
     "SHIPPED",
     "DELIVERED",

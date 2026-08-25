@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { ProductionHealth } from "./production-health";
+import { StyleSwitcher } from "./style-switcher";
+import { THEME_BOOT_SCRIPT } from "./theme";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -29,9 +32,17 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
+      <head>
+        {/* Applies a stored dark-theme preference before first paint so the
+            page doesn't flash light-then-dark on load. Static export has no
+            server to read this from, so it must run client-side, this early. */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
+        <StyleSwitcher />
+        <ProductionHealth />
         {children}
       </body>
     </html>
