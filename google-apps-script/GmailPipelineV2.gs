@@ -242,6 +242,18 @@ function processLogisticsMessageV2_(message) {
     permalink: "https://mail.google.com/mail/u/0/#all/" + message.getId()
   };
   var context = extractEmailContextV2_(subject, body);
+  // Resolved once per message, before any per-record work exists, so both
+  // the Drive archiving below (which runs before records are finalized)
+  // and every record (via mergeRecordContextV2_'s carry-forward list) see
+  // the same customer/DC identity. Only for context.kind === "outbound" —
+  // an inbound container email has no customer concept, and an ambiguous
+  // ("") context could otherwise resolve a customer yet still archive
+  // under the "Inbound" bucket below, an odd combination not worth the
+  // extra resolver calls to avoid on every borderline email.
+  if (context.kind === "outbound") {
+    var resolvedTarget = resolveOutboundTargetV2_({}, meta, context);
+    if (resolvedTarget) context.customer = resolvedTarget.customer;
+  }
   var attachments = message.getAttachments({ includeInlineImages: false, includeAttachments: true }) || [];
   var records = [];
   var supportedSeen = false;
@@ -265,8 +277,9 @@ function processLogisticsMessageV2_(message) {
   }));
 
   var documentFolderUrl = "";
-  if (documentAttachments.length && context.kind !== "outbound") {
-    documentFolderUrl = archiveInboundEmailAttachmentsV2_(documentAttachments, records, context, meta);
+  if (documentAttachments.length) {
+    var archiveDirection = context.kind === "outbound" ? "outbound" : "inbound";
+    documentFolderUrl = archiveEmailAttachmentsV2_(documentAttachments, records, archiveDirection, context.customer, context, meta);
     records.forEach(function (record) { record._driveFolder = documentFolderUrl; });
   }
 
@@ -290,7 +303,7 @@ function processLogisticsMessageV2_(message) {
       if (!normalizedStatus) throw new Error("Unsupported logistics status: " + record.status);
       record.status = normalizedStatus;
     }
-    var upsert = kind === "outbound" ? upsertOutboundEmailV2_(record, false) : upsertInboundEmailV2_(record, false);
+    var upsert = kind === "outbound" ? upsertOutboundEmailAcrossSheetsV2_(record, false, OUTBOUND_INSERT_SHEETS_V2) : upsertInboundEmailV2_(record, false);
     if (upsert.matched) {
       result[upsert.action] = (result[upsert.action] || 0) + 1;
       logGmailIngestionCommit_(kind, upsert.action, upsert.row, record, meta, documentFolderUrl);
@@ -303,7 +316,7 @@ function processLogisticsMessageV2_(message) {
       result.pending++;
       return;
     }
-    var inserted = kind === "outbound" ? upsertOutboundEmailV2_(record, true) : upsertInboundEmailV2_(record, true);
+    var inserted = kind === "outbound" ? upsertOutboundEmailAcrossSheetsV2_(record, true, OUTBOUND_INSERT_SHEETS_V2) : upsertInboundEmailV2_(record, true);
     if (inserted.action === "inserted") {
       result.inserted++;
       logGmailIngestionCommit_(kind, "inserted", inserted.row, record, meta, documentFolderUrl);
@@ -489,7 +502,7 @@ function guessKindFromRecordV2_(record) {
 function mergeRecordContextV2_(record, context, meta) {
   var out = {};
   Object.keys(record || {}).forEach(function (key) { out[key] = record[key]; });
-  ["kind", "shipmentNo", "invoice", "mbl", "hbl", "filing", "container", "vessel", "etd", "eta", "shipDate", "pro", "status", "carrier"].forEach(function (key) {
+  ["kind", "shipmentNo", "invoice", "mbl", "hbl", "filing", "container", "vessel", "etd", "eta", "shipDate", "pro", "status", "carrier", "customer"].forEach(function (key) {
     if (!out[key] && context[key]) out[key] = context[key];
   });
   if (!out.note) out.note = context.note || "";
@@ -723,9 +736,26 @@ function pdfTextRecordV2_(text, context, sourceName) {
   return record;
 }
 
-function archiveInboundEmailAttachmentsV2_(attachments, records, context, meta) {
+/**
+ * Archives attachments under Root -> Inbound|Outbound -> <bucket> ->
+ * <shipment-id>, replacing the old flat "one folder per shipment under a
+ * single root" scheme. Existing flat folders are never migrated — every
+ * sheet link references a folder by Drive file ID, not path, so an old
+ * folder left in place (or physically relocated later) stays resolvable;
+ * only newly-created folders use the nested path going forward.
+ *
+ * Inbound (IMPORTS) keeps its existing ID-based folder-reuse lookup
+ * (findExistingInboundDocsFolderV2_, unchanged) since that sheet already
+ * stores a rich-text Drive link per row. Outbound has no such link column
+ * today (IHERB/TJX-ROSS's real headers have no NOTE column at all to hold
+ * one) — its reuse instead comes for free from childFolderV2_'s existing
+ * get-or-create-by-name semantics: the same shipment identifier producing
+ * the same leaf folder name across repeated runs.
+ */
+function archiveEmailAttachmentsV2_(attachments, records, direction, customerName, context, meta) {
   try {
-    var folder = findExistingInboundDocsFolderV2_(records) || getOrCreateInboundDocsFolderV2_(records, context, meta);
+    var existing = direction === "inbound" ? findExistingInboundDocsFolderV2_(records) : null;
+    var folder = existing || getOrCreateShipmentDocsFolderV2_(direction, customerName, records, context, meta);
     attachments.forEach(function (attachment) { createAttachmentIfMissingV2_(folder, attachment); });
     return folder.getUrl();
   } catch (err) {
@@ -753,15 +783,36 @@ function findExistingInboundDocsFolderV2_(records) {
   try { return DriveApp.getFolderById(id); } catch (err) { return null; }
 }
 
-function getOrCreateInboundDocsFolderV2_(records, context, meta) {
+/**
+ * Root -> Inbound|Outbound -> <bucket> -> <shipment-id>, three chained
+ * get-or-create calls against the one existing primitive (childFolderV2_).
+ * Bucket is the resolved customer name / DC identity for outbound
+ * (WH Trucking Request/ULTA/TJX-ROSS), the literal "IHERB" for IHERB
+ * (single implicit customer, not the UNSORTED fallback), and "UNSORTED"
+ * for inbound IMPORTS records, which have no customer field in their real
+ * schema at all (a consolidated ocean/air container commonly carries SKUs
+ * for multiple different customers).
+ */
+function getOrCreateShipmentDocsFolderV2_(direction, customerName, records, context, meta) {
   var root = DriveApp.getFolderById(GMAIL_PIPELINE.importShipmentsFolderId);
+  var directionFolder = childFolderV2_(root, direction === "outbound" ? "Outbound" : "Inbound");
+  var bucketName = sanitizeDriveFolderNameV2_(customerName) || "UNSORTED";
+  var bucketFolder = childFolderV2_(directionFolder, bucketName);
+  return childFolderV2_(bucketFolder, shipmentDocsLeafNameV2_(records, context, meta));
+}
+
+function shipmentDocsLeafNameV2_(records, context, meta) {
   var names = uniqueTextV2_((records || []).map(function (record) {
-    return record.shipmentNo || record.hbl || record.container || record.mbl || "";
+    return record.shipmentNo || record.hbl || record.container || record.mbl || record.pro || record.invoice || "";
   }).filter(Boolean));
-  var base = names.length === 1 ? names[0] : (context.shipmentNo || context.hbl || context.container || context.mbl || meta.subject);
-  base = String(base || "EMAIL IMPORT " + Utilities.formatDate(meta.date, "America/Los_Angeles", "yyyyMMdd"))
-    .replace(/[\\/:*?\"<>|]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
-  return childFolderV2_(root, base);
+  var base = names.length === 1
+    ? names[0]
+    : (context.shipmentNo || context.hbl || context.container || context.mbl || context.pro || context.invoice || meta.subject);
+  return sanitizeDriveFolderNameV2_(base || "EMAIL IMPORT " + Utilities.formatDate(meta.date, "America/Los_Angeles", "yyyyMMdd"));
+}
+
+function sanitizeDriveFolderNameV2_(value) {
+  return String(value || "").replace(/[\\/:*?\"<>|]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
 }
 
 function createAttachmentIfMissingV2_(folder, attachment) {
@@ -894,58 +945,19 @@ function setInboundDocsLinkV2_(sheet, rowNumber, label, folderUrl) {
   return true;
 }
 
+/**
+ * Thin wrapper preserving this function's exact existing reach (WH Trucking
+ * Request only) for its existing callers (GmailXpoV2.gs's fallback match,
+ * Validation.gs's manual-approval path prior to this PR — now updated to
+ * call the multi-sheet version directly). The real matching/insert logic
+ * lives in OutboundSheetInsertV2.gs's upsertOutboundEmailAcrossSheetsV2_,
+ * rewritten to look columns up by header name rather than the hardcoded
+ * indices this function used to hardcode directly — verified byte-
+ * equivalent against WH Trucking Request's live header (CUSTOMER=A,
+ * INVOICE NO.=B, SHIP DATE=D, CARRIER=Q, PRO#=S, NOTE=T, STATUS=U).
+ */
 function upsertOutboundEmailV2_(record, allowInsert) {
-  var ss = SpreadsheetApp.openById(GMAIL_PIPELINE.masterId);
-  var sheet = ss.getSheetByName("WH Trucking Request");
-  if (!sheet) throw new Error("WH Trucking Request sheet not found.");
-  var data = sheet.getDataRange().getDisplayValues();
-  var candidates = [];
-  for (var r = 2; r < data.length; r++) {
-    var score = 0;
-    if (sameEmailIdV2_(data[r][18], record.pro)) score += 120;
-    if (multilineHasV2_(data[r][1], record.invoice)) score += 80;
-    if (score) candidates.push({ row: r + 1, score: score });
-  }
-  candidates.sort(function (a, b) { return b.score - a.score; });
-  if (candidates.length && (!candidates[1] || candidates[0].score > candidates[1].score)) {
-    var rowNumber = candidates[0].row;
-    var old = data[rowNumber - 1];
-    var changed = false;
-    var changes = [];
-    function set(col, value, overwrite, label) {
-      if (!value) return;
-      var prior = String(old[col - 1] || "").trim();
-      if (prior === String(value).trim()) return;
-      if (prior && !overwrite) return;
-      sheet.getRange(rowNumber, col).setValue(value);
-      if (label) changes.push(label + " " + (prior || "—") + " → " + String(value).trim());
-      old[col - 1] = value; changed = true;
-    }
-    if (record.invoice) set(2, mergeMultilineV2_(old[1], record.invoice), true, "Invoice");
-    set(17, record.carrier, false, "Carrier");
-    set(19, record.pro, false, "PRO #");
-    if (record.shipDate) set(4, record.shipDate, true, "Ship Date");
-    if (record.status) {
-      var normalizedOutbound = canonicalLogisticsStatus_(record.status);
-      if (!normalizedOutbound) throw new Error("Unsupported logistics status: " + record.status);
-      var currentOutbound = String(old[20] || "").trim();
-      if (canAutoTransitionLogisticsStatus_(currentOutbound, normalizedOutbound)) set(21, normalizedOutbound, true, "Status");
-    }
-    var note = emailNoteV2_(record);
-    if (note && String(old[19] || "").indexOf(note) === -1) set(20, String(old[19] || "") ? String(old[19]) + "\n" + note : note, true, "Note");
-    if (changed) formatEmailStatusRowV2_(sheet, rowNumber, String(old[20] || record.status || ""));
-    return { matched: true, action: changed ? "updated" : "noop", row: rowNumber, changes: changes };
-  }
-  if (!allowInsert) return { matched: false, action: "noop" };
-  if (!record.customer || !record.shipDate || !(record.invoice || record.pro)) return { matched: false, action: "noop" };
-  var row = new Array(21).fill("");
-  row[0] = record.customer; row[1] = record.invoice || ""; row[3] = record.shipDate;
-  row[16] = record.carrier || ""; row[18] = record.pro || ""; row[19] = emailNoteV2_(record);
-  var outboundInsertStatus = record.status ? canonicalLogisticsStatus_(record.status) : "Work in Progress";
-  if (record.status && !outboundInsertStatus) throw new Error("Unsupported logistics status: " + record.status);
-  row[20] = outboundInsertStatus || "Work in Progress";
-  sheet.appendRow(row);
-  return { matched: true, action: "inserted", row: sheet.getLastRow() };
+  return upsertOutboundEmailAcrossSheetsV2_(record, allowInsert, ["WH Trucking Request"]);
 }
 
 function sameEmailIdV2_(a, b) {

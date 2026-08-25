@@ -279,21 +279,33 @@ describe("Apps Script production integrity", () => {
     expect(triggers).toContain('"customerLookupOnEdit"');
   });
 
-  it("ships the broadened Gmail search and both new customer/store resolvers enabled, but not yet wired into live ingestion", () => {
-    const pipeline = read("google-apps-script/GmailPipelineV2.gs");
+  it("ships the broadened Gmail search and both new customer/store resolvers enabled", () => {
     const customerResolver = read("google-apps-script/GmailCustomerResolverV2.gs");
     const storeResolver = read("google-apps-script/GmailStoreResolverV2.gs");
-    expect(pipeline).toContain("var GMAIL_V2_BROADENED_SEARCH_ENABLED_V2 = true;");
+    expect(read("google-apps-script/GmailPipelineV2.gs")).toContain("var GMAIL_V2_BROADENED_SEARCH_ENABLED_V2 = true;");
     expect(customerResolver).toContain("var GMAIL_CUSTOMER_RESOLVER_ENABLED_V2 = true;");
     expect(storeResolver).toContain("var GMAIL_STORE_RESOLVER_ENABLED_V2 = true;");
-    // Both resolvers are reviewed/tested standalone first — wiring them into
-    // processLogisticsMessageV2_ lands in a follow-up PR together with the
-    // insert-row helper and its own dry-run gate, since a resolved
-    // record.customer would otherwise be able to reach
-    // upsertOutboundEmailV2_'s existing (already-live, ungated) insert
-    // branch immediately.
-    expect(pipeline).not.toContain("resolveCustomerFromEmailV2_(");
-    expect(pipeline).not.toContain("resolveUltaDcFromEmailV2_(");
-    expect(pipeline).not.toContain("resolveTjxDcFromEmailV2_(");
+  });
+
+  it("wires the customer/store resolvers into live ingestion behind a dry-run insert gate", () => {
+    const pipeline = read("google-apps-script/GmailPipelineV2.gs");
+    const insert = read("google-apps-script/OutboundSheetInsertV2.gs");
+    const validation = read("google-apps-script/Validation.gs");
+    expect(pipeline).toContain("resolveOutboundTargetV2_({}, meta, context)");
+    expect(pipeline).toContain("upsertOutboundEmailAcrossSheetsV2_(record, false, OUTBOUND_INSERT_SHEETS_V2)");
+    expect(pipeline).toContain("upsertOutboundEmailAcrossSheetsV2_(record, true, OUTBOUND_INSERT_SHEETS_V2)");
+    // A resolved customer/DC identity can only ever reach a live sheet
+    // write while this stays true — flip only after reviewing several
+    // dry-run cycles of "OUTBOUND INSERT DRY RUN" log entries, same
+    // discipline as WMS_TRUCKING_DRY_RUN/CUSTOMER_BACKFILL_DRY_RUN.
+    expect(insert).toContain("var OUTBOUND_INSERT_DRY_RUN_V2 = true;");
+    expect(insert).toContain('OUTBOUND_INSERT_SHEETS_V2 = ["WH Trucking Request", "IHERB", "ULTA", "TJX/ROSS"];');
+    // TRANSFERS is deliberately excluded — its real header has no
+    // customer/shipper concept at all (an internal BP<->NJ transfer log).
+    expect(insert).not.toContain('"TRANSFERS"');
+    // The single-sheet shim keeps GmailXpoV2.gs's fallback and any other
+    // pre-existing caller scoped to WH Trucking Request only.
+    expect(pipeline).toContain('upsertOutboundEmailAcrossSheetsV2_(record, allowInsert, ["WH Trucking Request"]);');
+    expect(validation).toContain("upsertOutboundEmailAcrossSheetsV2_(record, true, OUTBOUND_INSERT_SHEETS_V2)");
   });
 });

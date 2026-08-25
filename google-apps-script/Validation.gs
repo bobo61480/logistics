@@ -184,7 +184,12 @@ function commitApprovedPendingRow_(sheet, rowIndex1based, data, col) {
   var when = data[col["Ship Date / ETA"]];
   var kind = String(data[col["Kind"]] || "outbound").toLowerCase();
   if (kind === "inbound") { record.eta = when || record.eta; upsertInboundEmailV2_(record, true); }
-  else { record.shipDate = when || record.shipDate; upsertOutboundEmailV2_(record, true); }
+  // Multi-sheet, not the single-sheet upsertOutboundEmailV2_ shim: a human
+  // reviewer approving a PENDING VERIFICATION row may have typed an IHERB/
+  // ULTA/TJX-ROSS identity into the Customer cell (a bare DC# number, an
+  // "ULTA (CITY)" label, or literally "IHERB"), and that should route to
+  // the matching sheet the same way automatic ingestion now does.
+  else { record.shipDate = when || record.shipDate; upsertOutboundEmailAcrossSheetsV2_(record, true, OUTBOUND_INSERT_SHEETS_V2); }
   sheet.getRange(rowIndex1based, col["Status"] + 1).setValue("COMMITTED");
   sheet.getRange(rowIndex1based, 1, 1, VALIDATION.pendingHeaders.length).setBackground(VALIDATION.colors.committed);
 }
