@@ -92,6 +92,23 @@ describe("resolveUltaDcFromEmailV2_", () => {
     const result = helpers.resolveUltaDcFromEmailV2_("Pickup: Fresno, CA\nDeliver to: Dallas, TX");
     expect(result).toEqual({ customer: "ULTA (DALLAS)", method: "ulta-dc-city", confidence: "medium" });
   });
+
+  // Regression for a Codex round-4 finding: when pickup and destination
+  // clauses share a single line, the previous line-level bucketing put the
+  // WHOLE line (including the origin city) into the destination bucket
+  // because "deliver to" matched first. Fresno must not leak into the
+  // destination bucket just because it shares a line with "deliver to".
+  it("does not leak an origin city into the destination bucket when both labels share one line", () => {
+    const helpers = loadStoreResolverHelpers(ultaRows, []);
+    const result = helpers.resolveUltaDcFromEmailV2_("Pickup: Fresno, CA; Deliver to: Phoenix, AZ");
+    expect(result).toBeNull();
+  });
+
+  it("still resolves a same-line destination city when the origin city is different", () => {
+    const helpers = loadStoreResolverHelpers(ultaRows, []);
+    const result = helpers.resolveUltaDcFromEmailV2_("Pickup: Phoenix, AZ; Deliver to: Dallas, TX");
+    expect(result).toEqual({ customer: "ULTA (DALLAS)", method: "ulta-dc-city", confidence: "medium" });
+  });
 });
 
 describe("resolveTjxDcFromEmailV2_", () => {

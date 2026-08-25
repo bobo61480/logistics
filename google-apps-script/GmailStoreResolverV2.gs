@@ -52,14 +52,41 @@ var ULTA_DESTINATION_LABEL_PATTERN_V2 = /\b(SHIP(PING)?[\s-]*TO|DELIVER(Y)?[\s-]
 var ULTA_ORIGIN_LABEL_PATTERN_V2 = /\b(PICK[\s-]*UP|PICKUP|ORIGIN|SHIP(PING)?[\s-]*FROM|FROM[\s-]*ADDRESS)\b/;
 
 /**
- * Buckets each line of the text under "destination" or "origin" based on a
- * label appearing on that line (SHIP TO / DELIVER TO / CONSIGNEE /
- * DESTINATION vs. PICKUP / ORIGIN / SHIP FROM), carrying a label forward
- * onto the following line too — shipment emails often write a label on its
- * own line with the address below it. A line matching neither label, with
- * no label carried forward, is dropped from both buckets: guessing which
- * block an unlabeled line belongs to would reintroduce the exact ambiguity
- * this exists to remove.
+ * Splits a single line into label-owned segments — one per label
+ * occurrence, running from that label to the start of the next label (or
+ * end of line). Handles a line naming BOTH an origin and a destination
+ * (e.g. "Pickup: Fresno; deliver to: Phoenix"): treating a mixed line as
+ * belonging entirely to whichever label matches first put the origin city
+ * in the destination bucket too, defeating the whole point of separating
+ * them (Codex review round 4 on PR #102). Returns [] when the line has no
+ * label at all.
+ */
+function gmailStoreLineLabelSegmentsV2_(line) {
+  var matches = [];
+  var destRe = new RegExp(ULTA_DESTINATION_LABEL_PATTERN_V2.source, "g");
+  var originRe = new RegExp(ULTA_ORIGIN_LABEL_PATTERN_V2.source, "g");
+  var m;
+  while ((m = destRe.exec(line))) matches.push({ index: m.index, bucket: "dest" });
+  while ((m = originRe.exec(line))) matches.push({ index: m.index, bucket: "origin" });
+  if (!matches.length) return [];
+  matches.sort(function (a, b) { return a.index - b.index; });
+  var segments = [];
+  for (var i = 0; i < matches.length; i++) {
+    var start = matches[i].index;
+    var end = i + 1 < matches.length ? matches[i + 1].index : line.length;
+    segments.push({ bucket: matches[i].bucket, text: line.slice(start, end) });
+  }
+  return segments;
+}
+
+/**
+ * Buckets the text under "destination" or "origin" based on labels (SHIP TO
+ * / DELIVER TO / CONSIGNEE / DESTINATION vs. PICKUP / ORIGIN / SHIP FROM),
+ * carrying the last label on a line forward onto the following unlabeled
+ * line too — shipment emails often write a label on its own line with the
+ * address below it. An unlabeled line with no label carried forward is
+ * dropped from both buckets: guessing which block it belongs to would
+ * reintroduce the exact ambiguity this exists to remove.
  */
 function gmailStoreLabeledLinesV2_(haystack) {
   var lines = String(haystack || "").split(/[\r\n]+/);
@@ -67,8 +94,14 @@ function gmailStoreLabeledLinesV2_(haystack) {
   var origin = [];
   var carry = null;
   lines.forEach(function (line) {
-    if (ULTA_DESTINATION_LABEL_PATTERN_V2.test(line)) { destination.push(line); carry = "dest"; return; }
-    if (ULTA_ORIGIN_LABEL_PATTERN_V2.test(line)) { origin.push(line); carry = "origin"; return; }
+    var segments = gmailStoreLineLabelSegmentsV2_(line);
+    if (segments.length) {
+      segments.forEach(function (segment) {
+        (segment.bucket === "dest" ? destination : origin).push(segment.text);
+      });
+      carry = segments[segments.length - 1].bucket;
+      return;
+    }
     if (carry === "dest") { destination.push(line); return; }
     if (carry === "origin") { origin.push(line); return; }
     carry = null;

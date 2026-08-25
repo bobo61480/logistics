@@ -146,7 +146,6 @@ function matchCustomerByTextV2_(haystack, records) {
   var exactMatches = records.filter(function (record) {
     return customerNameAppearsExactlyV2_(text, record.name);
   });
-  if (exactMatches.length === 1) return { record: exactMatches[0], method: "text-exact", confidence: "high" };
   // 2+ literal full names mentioned is real conflicting evidence, not mere
   // absence of a signal — must block the whole resolution, including a
   // confident sender match (Codex review, round 2 on PR #102).
@@ -164,6 +163,22 @@ function matchCustomerByTextV2_(haystack, records) {
   var matchedKeys = Object.keys(byCanonicalKey).filter(function (key) {
     return customerKeyAppearsWithoutTrailingLocationV2_(text, key);
   });
+
+  if (exactMatches.length === 1) {
+    var exactRecord = exactMatches[0];
+    // A canonical/brand-tier hit for a DIFFERENT customer than the exact
+    // match is real conflicting evidence too, not something the exact
+    // tier's early return should get to silently ignore — e.g. text naming
+    // both "A&B LLC" (exact) and "Royal Imex" (brand-only) mentions two
+    // customers, and the resolver must not just pick the exact one (Codex
+    // review round 4 on PR #102).
+    var conflictsWithAnotherBrand = matchedKeys.some(function (key) {
+      return byCanonicalKey[key].indexOf(exactRecord) === -1;
+    });
+    if (conflictsWithAnotherBrand) return TEXT_MATCH_AMBIGUOUS_V2;
+    return { record: exactRecord, method: "text-exact", confidence: "high" };
+  }
+
   if (matchedKeys.length === 0) return null;
   if (matchedKeys.length > 1) return TEXT_MATCH_AMBIGUOUS_V2;
   var candidates = byCanonicalKey[matchedKeys[0]];
