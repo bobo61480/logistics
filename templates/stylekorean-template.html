@@ -1,4 +1,5 @@
 <title>StyleKorean Logistics Hub</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700;800&family=Saira+Condensed:wght@600;700;800&display=swap">
 
 <!-- ============================================================
@@ -29,7 +30,7 @@
      TABS CONSUMED:
      • IMPORTS (gid 1497250700)
      • Outbound Shipping Schedule (gid 20260708)
-     • TRUCKING (gid 1418033635)
+     • WH Trucking Request (gid 1418033635)
      • NATIONAL ORDER PROGRESS (gid 99300389)
      • WMS Sales (gid 0)
      • SKW_Inbound / SKW_Stock (inventory)
@@ -1084,6 +1085,13 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
   color: var(--ink-soft);
   font: 600 10px "IBM Plex Mono", monospace;
 }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .parcel-tracking { color: var(--paper); }
+  :root:not([data-theme="light"]) .parcel-footer { color: var(--muted); }
+}
+:root[data-theme="dark"] .parcel-tracking { color: var(--paper); }
+:root[data-theme="dark"] .parcel-footer { color: var(--muted); }
 .parcel-footer a {
   min-height: 28px; padding: 7px 9px;
   border: 1px solid #b9d8dc; border-radius: 8px;
@@ -1205,13 +1213,15 @@ const STYLEKOREAN_CONFIG = {
       tabs: {
         imports:          { name: "IMPORTS",                   gid: 1497250700 },
         outbound:         { name: "Outbound Shipping Schedule", gid: 20260708 },
-        trucking:         { name: "TRUCKING",                  gid: 1418033635 },
-        whTrucking:       { name: "WH Trucking Request",       gid: null },
+        trucking:         { name: "TRUCKING",                  gid: null },
+        whTrucking:       { name: "WH Trucking Request",       gid: 1418033635 },
         b2bEcom:          { name: "B2B/E-COM TRUCKING",        gid: null },
-        transfers:        { name: "TRANSFERS",                 gid: null },
+        transfers:        { name: "TRANSFERS",                 gid: 1834454901 },
         ulta:             { name: "ULTA",                      gid: null },
         iherb:            { name: "IHERB",                     gid: null },
         tjxRoss:          { name: "TJX/ROSS",                  gid: null },
+        skwInbound:       { name: "SKW_Inbound",               gid: null },
+        skwStock:         { name: "SKW_Stock",                  gid: null },
       }
     },
     nationals: {
@@ -1227,14 +1237,16 @@ const STYLEKOREAN_CONFIG = {
       name: "WMS/Sales",
       url: "https://docs.google.com/spreadsheets/d/14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I/edit",
       tabs: {
-        wmsSales:    { name: "WMS Sales",    gid: 0 },
-        skwInbound:  { name: "SKW_Inbound",  gid: null },
-        skwStock:    { name: "SKW_Stock",     gid: null }
+        wmsSales:    { name: "WMS Sales",    gid: 0 }
       }
     }
   },
 
   // ──── API Endpoints ────
+  // NOTE: These are same-origin endpoints served by the Cloudflare Worker.
+  // When porting to a new domain, set up a reverse proxy or CORS-enabled
+  // backend that forwards requests to the Worker — the snapshot/status
+  // handlers do not serve cross-origin responses.
   endpoints: {
     snapshot:    "/api/logistics/snapshot",
     status:      "/api/logistics/status",
@@ -1252,12 +1264,15 @@ const STYLEKOREAN_CONFIG = {
 
   // ──── Status values ────
   statuses: {
-    outbound: ["", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "SHIPPING",
-               "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED"],
-    inbound:  ["", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "SHIPPING",
-               "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED",
-               "N/A", "Customs Clearance", "FDA Review/Hold", "FWS Review/Hold", "Delayed"],
-    finished: ["shipped", "delivered", "received", "cancelled", "completed"]
+    outbound: ["", "Scheduled", "Schedule Requested", "Work in Progress", "Pending",
+               "Picked Up/Shipped", "In Transit", "In Transit/Stopover", "Shipping",
+               "Shipped", "Delivered", "Received", "Cancelled", "Completed"],
+    inbound:  ["", "Scheduled", "Schedule Requested", "Work in Progress", "Pending",
+               "Picked Up/Shipped", "In Transit", "In Transit/Stopover", "Shipping",
+               "Shipped", "Delivered", "Received", "Cancelled", "Completed",
+               "N/A", "Customs Clearance", "FDA Review / Hold", "FWS Review / Hold",
+               "FDA Detained", "AQI Examination", "Delayed"],
+    finished: ["Received", "Cancelled", "Completed"]
   },
 
   // ──── Source / Department classification ────
@@ -1490,8 +1505,8 @@ function toggleTheme() {
 // Restore theme on load
 try {
   var stored = localStorage.getItem('sk-theme');
-  if (stored === 'dark') {
-    document.documentElement.setAttribute('data-theme', 'dark');
+  if (stored === 'dark' || stored === 'light') {
+    document.documentElement.setAttribute('data-theme', stored);
   }
 } catch(e) {}
 
@@ -1527,10 +1542,101 @@ function renderDashboard(data) {
       if (strongs[1]) strongs[1].textContent = formatMoney(kpiValues[i][1]);
     }
   });
+
+  // Update import schedules table
+  var tbody = document.querySelector('.import-table tbody');
+  if (tbody && data.imports && data.imports.length) {
+    tbody.innerHTML = '';
+    data.imports.forEach(function(row) {
+      var tr = document.createElement('tr');
+      tr.setAttribute('data-status', (row.status || '').toLowerCase());
+      tr.innerHTML =
+        '<td><a href="#">' + (row.shipmentId || '') + '</a></td>' +
+        '<td>' + (row.container || '&mdash;') + '</td>' +
+        '<td>' + (row.vessel || '') + '</td>' +
+        '<td><span class="mode-pill ' + (row.mode || '').toLowerCase() + '">' + (row.mode || '').toUpperCase() + '</span></td>' +
+        '<td>' + (row.eta || '') + '</td>' +
+        '<td><span class="status-pill ' + statusClass(row.status) + '">' + (row.status || '').toUpperCase() + '</span></td>' +
+        '<td>' + (row.invoices || []).join(', ') + '</td>';
+      tbody.appendChild(tr);
+    });
+  }
+
+  // Update parcel cards
+  var parcelGrid = document.querySelector('.parcel-cards');
+  if (parcelGrid && data.parcels && data.parcels.length) {
+    parcelGrid.innerHTML = '';
+    data.parcels.forEach(function(p) {
+      var card = document.createElement('div');
+      card.className = 'parcel-card';
+      card.innerHTML =
+        '<div class="parcel-summary">' +
+          '<strong>' + (p.carrier || '') + '</strong>' +
+          '<span class="parcel-invoice">' + (p.invoice || '') + '</span>' +
+        '</div>' +
+        '<div class="parcel-detail">' +
+          '<span class="parcel-tracking">' + (p.status || '') + '</span>' +
+          '<span class="parcel-tracking-number">' + (p.tracking || '') + '</span>' +
+          '<div class="parcel-footer"><span>' + (p.shipDate || '') + '</span></div>' +
+        '</div>';
+      parcelGrid.appendChild(card);
+    });
+  }
 }
 
-// Auto-render on load
-document.addEventListener('DOMContentLoaded', function() { renderDashboard(); });
+// ================================================================
+// SEARCH & FILTER — Wires up the search input and show-finished toggle
+// ================================================================
+function initFilters() {
+  var searchInput = document.querySelector('.search input');
+  var finishedToggle = document.querySelector('.finished-toggle input');
+  var finished = STYLEKOREAN_CONFIG.statuses.finished.map(function(s) { return s.toLowerCase(); });
+
+  function applyFilters() {
+    var query = (searchInput ? searchInput.value : '').toLowerCase();
+    var showFinished = finishedToggle ? finishedToggle.checked : false;
+
+    // Filter import table rows
+    var rows = document.querySelectorAll('.import-table tbody tr');
+    rows.forEach(function(row) {
+      var text = row.textContent.toLowerCase();
+      var status = (row.getAttribute('data-status') || '').toLowerCase();
+      var isFinished = finished.indexOf(status) !== -1;
+      var matchesQuery = !query || text.indexOf(query) !== -1;
+      var matchesFinished = showFinished || !isFinished;
+      row.style.display = (matchesQuery && matchesFinished) ? '' : 'none';
+    });
+
+    // Filter schedule board cards
+    var cards = document.querySelectorAll('.schedule-card');
+    cards.forEach(function(card) {
+      var text = card.textContent.toLowerCase();
+      var pill = card.querySelector('.status-pill');
+      var status = pill ? pill.textContent.toLowerCase().trim() : '';
+      var isFinished = finished.indexOf(status) !== -1;
+      var matchesQuery = !query || text.indexOf(query) !== -1;
+      var matchesFinished = showFinished || !isFinished;
+      card.style.display = (matchesQuery && matchesFinished) ? '' : 'none';
+    });
+
+    // Filter parcel cards
+    var parcels = document.querySelectorAll('.parcel-card');
+    parcels.forEach(function(card) {
+      var text = card.textContent.toLowerCase();
+      var matchesQuery = !query || text.indexOf(query) !== -1;
+      card.style.display = matchesQuery ? '' : 'none';
+    });
+  }
+
+  if (searchInput) searchInput.addEventListener('input', applyFilters);
+  if (finishedToggle) finishedToggle.addEventListener('change', applyFilters);
+}
+
+// Auto-render and init filters on load
+document.addEventListener('DOMContentLoaded', function() {
+  renderDashboard();
+  initFilters();
+});
 </script>
 
 <!-- ============================================================
@@ -1794,7 +1900,7 @@ document.addEventListener('DOMContentLoaded', function() { renderDashboard(); })
           </tr>
         </thead>
         <tbody>
-          <tr>
+          <tr data-status="scheduled">
             <td><a href="#">OSL-12</a></td>
             <td>SMCU 7284901</td>
             <td>SM BUSAN</td>
@@ -1803,7 +1909,7 @@ document.addEventListener('DOMContentLoaded', function() { renderDashboard(); })
             <td><span class="status-pill neutral">SCHEDULED</span></td>
             <td>IN00462018, IN00462019</td>
           </tr>
-          <tr>
+          <tr data-status="customs clearance">
             <td><a href="#">OSL-13</a></td>
             <td>MAEU 3917205</td>
             <td>MAERSK ELBA</td>
@@ -1812,7 +1918,7 @@ document.addEventListener('DOMContentLoaded', function() { renderDashboard(); })
             <td><span class="status-pill hold">CUSTOMS CLEARANCE</span></td>
             <td>IN00463011</td>
           </tr>
-          <tr>
+          <tr data-status="pending">
             <td><a href="#">AIR-08</a></td>
             <td>&mdash;</td>
             <td>KE 017</td>
@@ -1821,7 +1927,7 @@ document.addEventListener('DOMContentLoaded', function() { renderDashboard(); })
             <td><span class="status-pill warn">PENDING</span></td>
             <td>IN00464502</td>
           </tr>
-          <tr>
+          <tr data-status="scheduled">
             <td><a href="#">OSL-14</a></td>
             <td>HDMU 6104823</td>
             <td>HMM PROMISE</td>
@@ -1830,7 +1936,7 @@ document.addEventListener('DOMContentLoaded', function() { renderDashboard(); })
             <td><span class="status-pill neutral">SCHEDULED</span></td>
             <td>IN00465030, IN00465031</td>
           </tr>
-          <tr>
+          <tr data-status="delivered">
             <td><a href="#">AIR-09</a></td>
             <td>&mdash;</td>
             <td>OZ 201</td>
@@ -1863,7 +1969,7 @@ document.addEventListener('DOMContentLoaded', function() { renderDashboard(); })
           <div class="day-column today">
             <header>
               <span>AUG</span>
-              <small>Monday</small>
+              <small>Tuesday</small>
               <strong>25</strong>
               <b>2</b>
             </header>
@@ -1889,7 +1995,7 @@ document.addEventListener('DOMContentLoaded', function() { renderDashboard(); })
             </div>
           </div>
           <div class="day-column">
-            <header><span>AUG</span><small>Tuesday</small><strong>26</strong><b>1</b></header>
+            <header><span>AUG</span><small>Wednesday</small><strong>26</strong><b>1</b></header>
             <div class="day-items">
               <div class="schedule-card">
                 <div class="card-summary">
@@ -1902,9 +2008,9 @@ document.addEventListener('DOMContentLoaded', function() { renderDashboard(); })
               </div>
             </div>
           </div>
-          <div class="day-column"><header><span>AUG</span><small>Wednesday</small><strong>27</strong><b>0</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>AUG</span><small>Thursday</small><strong>27</strong><b>0</b></header><div class="day-items"></div></div>
           <div class="day-column">
-            <header><span>AUG</span><small>Thursday</small><strong>28</strong><b>1</b></header>
+            <header><span>AUG</span><small>Friday</small><strong>28</strong><b>1</b></header>
             <div class="day-items">
               <div class="schedule-card">
                 <div class="card-summary">
@@ -1917,11 +2023,11 @@ document.addEventListener('DOMContentLoaded', function() { renderDashboard(); })
               </div>
             </div>
           </div>
-          <div class="day-column"><header><span>AUG</span><small>Friday</small><strong>29</strong><b>0</b></header><div class="day-items"></div></div>
-          <div class="day-column"><header><span>AUG</span><small>Saturday</small><strong>30</strong><b>0</b></header><div class="day-items"></div></div>
-          <div class="day-column"><header><span>AUG</span><small>Sunday</small><strong>31</strong><b>0</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>AUG</span><small>Saturday</small><strong>29</strong><b>0</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>AUG</span><small>Sunday</small><strong>30</strong><b>0</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>AUG</span><small>Monday</small><strong>31</strong><b>0</b></header><div class="day-items"></div></div>
           <div class="day-column">
-            <header><span>SEP</span><small>Monday</small><strong>01</strong><b>1</b></header>
+            <header><span>SEP</span><small>Tuesday</small><strong>01</strong><b>1</b></header>
             <div class="day-items">
               <div class="schedule-card">
                 <div class="card-summary">
@@ -1934,12 +2040,12 @@ document.addEventListener('DOMContentLoaded', function() { renderDashboard(); })
               </div>
             </div>
           </div>
-          <div class="day-column"><header><span>SEP</span><small>Tuesday</small><strong>02</strong><b>0</b></header><div class="day-items"></div></div>
-          <div class="day-column"><header><span>SEP</span><small>Wednesday</small><strong>03</strong><b>0</b></header><div class="day-items"></div></div>
-          <div class="day-column"><header><span>SEP</span><small>Thursday</small><strong>04</strong><b>0</b></header><div class="day-items"></div></div>
-          <div class="day-column"><header><span>SEP</span><small>Friday</small><strong>05</strong><b>0</b></header><div class="day-items"></div></div>
-          <div class="day-column"><header><span>SEP</span><small>Saturday</small><strong>06</strong><b>0</b></header><div class="day-items"></div></div>
-          <div class="day-column"><header><span>SEP</span><small>Sunday</small><strong>07</strong><b>0</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>SEP</span><small>Wednesday</small><strong>02</strong><b>0</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>SEP</span><small>Thursday</small><strong>03</strong><b>0</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>SEP</span><small>Friday</small><strong>04</strong><b>0</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>SEP</span><small>Saturday</small><strong>05</strong><b>0</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>SEP</span><small>Sunday</small><strong>06</strong><b>0</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>SEP</span><small>Monday</small><strong>07</strong><b>0</b></header><div class="day-items"></div></div>
         </div>
       </div>
     </section>
@@ -1960,7 +2066,7 @@ document.addEventListener('DOMContentLoaded', function() { renderDashboard(); })
       <div class="board-wrap">
         <div class="board">
           <div class="day-column today">
-            <header><span>AUG</span><small>Monday</small><strong>25</strong><b>5</b></header>
+            <header><span>AUG</span><small>Tuesday</small><strong>25</strong><b>5</b></header>
             <div class="day-items">
               <div class="schedule-card outbound">
                 <div class="card-summary">
@@ -1992,7 +2098,7 @@ document.addEventListener('DOMContentLoaded', function() { renderDashboard(); })
             </div>
           </div>
           <div class="day-column">
-            <header><span>AUG</span><small>Tuesday</small><strong>26</strong><b>3</b></header>
+            <header><span>AUG</span><small>Wednesday</small><strong>26</strong><b>3</b></header>
             <div class="day-items">
               <div class="schedule-card outbound">
                 <div class="card-summary">
@@ -2014,18 +2120,18 @@ document.addEventListener('DOMContentLoaded', function() { renderDashboard(); })
               </div>
             </div>
           </div>
-          <div class="day-column"><header><span>AUG</span><small>Wednesday</small><strong>27</strong><b>2</b></header><div class="day-items"><div class="schedule-card outbound"><div class="card-summary"><div class="summary-primary"><small>B2B-112 &middot; UPS</small><strong>E-Commerce Batch</strong></div><span class="status-pill neutral">SCHEDULED</span></div></div></div></div>
-          <div class="day-column"><header><span>AUG</span><small>Thursday</small><strong>28</strong><b>2</b></header><div class="day-items"></div></div>
-          <div class="day-column"><header><span>AUG</span><small>Friday</small><strong>29</strong><b>1</b></header><div class="day-items"></div></div>
-          <div class="day-column"><header><span>AUG</span><small>Saturday</small><strong>30</strong><b>0</b></header><div class="day-items"></div></div>
-          <div class="day-column"><header><span>AUG</span><small>Sunday</small><strong>31</strong><b>0</b></header><div class="day-items"></div></div>
-          <div class="day-column"><header><span>SEP</span><small>Monday</small><strong>01</strong><b>4</b></header><div class="day-items"></div></div>
-          <div class="day-column"><header><span>SEP</span><small>Tuesday</small><strong>02</strong><b>3</b></header><div class="day-items"></div></div>
-          <div class="day-column"><header><span>SEP</span><small>Wednesday</small><strong>03</strong><b>2</b></header><div class="day-items"></div></div>
-          <div class="day-column"><header><span>SEP</span><small>Thursday</small><strong>04</strong><b>1</b></header><div class="day-items"></div></div>
-          <div class="day-column"><header><span>SEP</span><small>Friday</small><strong>05</strong><b>2</b></header><div class="day-items"></div></div>
-          <div class="day-column"><header><span>SEP</span><small>Saturday</small><strong>06</strong><b>0</b></header><div class="day-items"></div></div>
-          <div class="day-column"><header><span>SEP</span><small>Sunday</small><strong>07</strong><b>0</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>AUG</span><small>Thursday</small><strong>27</strong><b>2</b></header><div class="day-items"><div class="schedule-card outbound"><div class="card-summary"><div class="summary-primary"><small>B2B-112 &middot; UPS</small><strong>E-Commerce Batch</strong></div><span class="status-pill neutral">SCHEDULED</span></div></div></div></div>
+          <div class="day-column"><header><span>AUG</span><small>Friday</small><strong>28</strong><b>2</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>AUG</span><small>Saturday</small><strong>29</strong><b>1</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>AUG</span><small>Sunday</small><strong>30</strong><b>0</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>AUG</span><small>Monday</small><strong>31</strong><b>0</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>SEP</span><small>Tuesday</small><strong>01</strong><b>4</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>SEP</span><small>Wednesday</small><strong>02</strong><b>3</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>SEP</span><small>Thursday</small><strong>03</strong><b>2</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>SEP</span><small>Friday</small><strong>04</strong><b>1</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>SEP</span><small>Saturday</small><strong>05</strong><b>2</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>SEP</span><small>Sunday</small><strong>06</strong><b>0</b></header><div class="day-items"></div></div>
+          <div class="day-column"><header><span>SEP</span><small>Monday</small><strong>07</strong><b>0</b></header><div class="day-items"></div></div>
         </div>
       </div>
     </section>
