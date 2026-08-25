@@ -21,7 +21,7 @@ describe("Gmail Shipping-Doc Ingestion production explanation", () => {
 
   it("explains that Shipment Notices reports the same pipeline without making a duplicate request", () => {
     expect(card).toMatch(/Shipment Notices[\s\S]*same Worker snapshot/);
-    expect(card).toContain("without launching a second ingestion pipeline");
+    expect(card).toMatch(/without launching a\s+second ingestion pipeline/);
   });
 
   it("mounts alongside, not instead of, the real GmailIngestionCard", () => {
