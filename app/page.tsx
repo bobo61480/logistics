@@ -312,6 +312,15 @@ function moneyWithCents(value: number) {
   }).format(value);
 }
 
+function KpiPeriodValues({ mtd, ytd, format = money }: { mtd: number; ytd: number; format?: (value: number) => string }) {
+  return (
+    <>
+      <div><small>MTD</small><strong>{format(mtd)}</strong></div>
+      <div><small>YTD</small><strong>{format(ytd)}</strong></div>
+    </>
+  );
+}
+
 function dayKey(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(
     date.getDate(),
@@ -2703,7 +2712,7 @@ export default function Home() {
   const [nextRefreshAt, setNextRefreshAt] = useState<Date | null>(null);
   const [query, setQuery] = useState("");
   const [includeFinished, setIncludeFinished] = useState(false);
-  const [period, setPeriod] = useState<"mtd" | "ytd">("mtd");
+  const [kpiView, setKpiView] = useState<"summary" | "details">("summary");
   const [savingId, setSavingId] = useState("");
   const [notice, setNotice] = useState("");
   const [noticeFading, setNoticeFading] = useState(false);
@@ -3172,35 +3181,35 @@ export default function Home() {
             <p className="eyebrow">2026 ACTUALS · INVOICE FIRST / RATE FALLBACK</p>
             <h2 id="kpi-heading">KPI Control Tower</h2>
           </div>
-          <div className="period-toggle" role="group" aria-label="KPI period">
-            <button type="button" className={period === "mtd" ? "active" : ""} onClick={() => setPeriod("mtd")}>
-              MTD
+          <div className="period-toggle" role="group" aria-label="KPI view">
+            <button type="button" className={kpiView === "summary" ? "active" : ""} onClick={() => setKpiView("summary")}>
+              Summary
             </button>
-            <button type="button" className={period === "ytd" ? "active" : ""} onClick={() => setPeriod("ytd")}>
-              YTD
+            <button type="button" className={kpiView === "details" ? "active" : ""} onClick={() => setKpiView("details")}>
+              Details
             </button>
           </div>
         </div>
         <div className="kpi-grid">
           <article className="kpi-card">
             <span>SHIPPING COSTS</span>
-            <div><small>{period.toUpperCase()}</small><strong>{money(period === "mtd" ? kpis.shippingMtd : kpis.shippingYtd)}</strong></div>
+            <KpiPeriodValues mtd={kpis.shippingMtd} ytd={kpis.shippingYtd} />
           </article>
           <article className="kpi-card">
             <span>TRANSFER SHIPPING</span>
-            <div><small>{period.toUpperCase()}</small><strong>{money(period === "mtd" ? kpis.transfersMtd : kpis.transfersYtd)}</strong></div>
+            <KpiPeriodValues mtd={kpis.transfersMtd} ytd={kpis.transfersYtd} />
           </article>
           <article className="kpi-card">
             <span>TRUCKING TRANSFERS TO NJ</span>
-            <div><small>{period.toUpperCase()}</small><strong>{money(period === "mtd" ? kpis.njTransferMtd : kpis.njTransferYtd)}</strong></div>
+            <KpiPeriodValues mtd={kpis.njTransferMtd} ytd={kpis.njTransferYtd} />
           </article>
           <article className="kpi-card">
             <span>SALES · NATIONALS</span>
-            <div><small>{period.toUpperCase()}</small><strong>{moneyWithCents(period === "mtd" ? kpis.nationalsSalesMtd : kpis.nationalsSalesYtd)}</strong></div>
+            <KpiPeriodValues mtd={kpis.nationalsSalesMtd} ytd={kpis.nationalsSalesYtd} format={moneyWithCents} />
           </article>
           <article className="kpi-card">
             <span>SALES · WMS WHOLESALE</span>
-            <div><small>{period.toUpperCase()}</small><strong>{moneyWithCents(period === "mtd" ? kpis.wmsSalesMtd : kpis.wmsSalesYtd)}</strong></div>
+            <KpiPeriodValues mtd={kpis.wmsSalesMtd} ytd={kpis.wmsSalesYtd} format={moneyWithCents} />
           </article>
           <article className="kpi-card kpi-placeholder-card">
             <span>NET MARGIN</span>
@@ -3209,7 +3218,7 @@ export default function Home() {
               <small>No cost/margin data source yet</small>
             </div>
           </article>
-          <article className="kpi-card kpi-carrier">
+          {kpiView === "details" && <article className="kpi-card kpi-carrier">
             <span>TOP 3 CARRIERS · YTD (always YTD)</span>
             <div className="carrier-table-head" aria-hidden="true">
               <small>Carrier</small><small>Freight Spend</small><small>Shipments</small>
@@ -3224,21 +3233,21 @@ export default function Home() {
               ))}
               {kpis.topCarriers.length === 0 && <li className="carrier-empty">Carrier data unavailable</li>}
             </ol>
-          </article>
-          <article className="kpi-card kpi-split">
+          </article>}
+          {kpiView === "details" && <article className="kpi-card kpi-split">
             <span>TRUCKLOAD MIX · YTD (always YTD)</span>
             <div><small>LTL</small><strong>{kpis.ltlPercent}%</strong></div>
             <div><small>FTL</small><strong>{kpis.ftlPercent}%</strong></div>
-          </article>
-          <article className="kpi-card kpi-average">
+          </article>}
+          {kpiView === "details" && <article className="kpi-card kpi-average">
             <span>AVG TRUCKING COST · MTD / YTD</span>
             <div className="average-head" aria-hidden="true"><small>Lane</small><small>MTD</small><small>YTD</small></div>
             <div><small>LOCAL / REGIONAL HEURISTIC</small><strong>{money(kpis.avgLocalMtd)}</strong><strong>{money(kpis.avgLocal)}</strong></div>
             <div><small>CALIFORNIA</small><strong>{money(kpis.avgCaliforniaMtd)}</strong><strong>{money(kpis.avgCalifornia)}</strong></div>
             <div><small>OUT OF STATE</small><strong>{money(kpis.avgOutOfStateMtd)}</strong><strong>{money(kpis.avgOutOfState)}</strong></div>
-          </article>
+          </article>}
         </div>
-        <details className="kpi-method">
+        {kpiView === "details" && <details className="kpi-method" open>
           <summary>Methodology notes</summary>
           <p>
             All rows, including hidden/completed entries. Shipping costs use freight Invoice first,
@@ -3260,7 +3269,7 @@ export default function Home() {
             </a>
             .
           </p>
-        </details>
+        </details>}
       </section>
 
       <section className="ct-row" aria-label="Active carrier and freight mode rollups">

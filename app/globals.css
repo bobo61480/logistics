@@ -462,7 +462,7 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
 .kpi-average > .average-head small:nth-child(n + 2) { text-align: right; }
 .kpi-average strong { font-size: 18px; text-align: right; }
 
-/* ---------- MTD/YTD period toggle (KPI Control Tower) ---------- */
+/* ---------- Summary/Details view toggle (KPI Control Tower) ---------- */
 .period-toggle {
   display: inline-flex;
   background: var(--surface-inset);
