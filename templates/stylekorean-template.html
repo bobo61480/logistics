@@ -1,4 +1,5 @@
 <!doctype html>
+<meta charset="utf-8">
 <title>StyleKorean Logistics Hub</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700;800&family=Saira+Condensed:wght@600;700;800&display=swap">
@@ -936,6 +937,7 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
   :root:not([data-theme="light"]) .panel-heading { border-bottom-color: var(--hairline); }
   :root:not([data-theme="light"]) .panel-heading h2 { color: var(--text); }
   :root:not([data-theme="light"]) .board-total { background: var(--surface-inset); color: var(--text-soft); }
+  :root:not([data-theme="light"]) .board-total strong { color: var(--text); }
   :root:not([data-theme="light"]) .day-column { border-right-color: var(--hairline); background: var(--surface-2); }
   :root:not([data-theme="light"]) .day-column > header { border-bottom-color: var(--hairline); background: var(--surface-inset); }
   :root:not([data-theme="light"]) .day-column.today > header { background: #0a1420; color: var(--text); }
@@ -956,6 +958,7 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
 :root[data-theme="dark"] .panel-heading { border-bottom-color: var(--hairline); }
 :root[data-theme="dark"] .panel-heading h2 { color: var(--text); }
 :root[data-theme="dark"] .board-total { background: var(--surface-inset); color: var(--text-soft); }
+:root[data-theme="dark"] .board-total strong { color: var(--text); }
 :root[data-theme="dark"] .day-column { border-right-color: var(--hairline); background: var(--surface-2); }
 :root[data-theme="dark"] .day-column > header { border-bottom-color: var(--hairline); background: var(--surface-inset); }
 :root[data-theme="dark"] .day-column.today > header { background: #0a1420; color: var(--text); }
@@ -1552,7 +1555,7 @@ function renderDashboard(data) {
 
   // Update import schedules table
   var tbody = document.querySelector('.import-table tbody');
-  if (tbody && data.imports && data.imports.length) {
+  if (tbody && Array.isArray(data.imports)) {
     tbody.innerHTML = '';
     data.imports.forEach(function(row) {
       var tr = document.createElement('tr');
@@ -1572,20 +1575,20 @@ function renderDashboard(data) {
 
   // Update parcel cards
   var parcelGrid = document.querySelector('.parcel-grid');
-  if (parcelGrid && data.parcels && data.parcels.length) {
+  if (parcelGrid && Array.isArray(data.parcels)) {
     parcelGrid.innerHTML = '';
     data.parcels.forEach(function(p) {
       var card = document.createElement('div');
       card.className = 'parcel-card';
       card.innerHTML =
         '<div class="parcel-summary">' +
-          '<strong>' + (p.carrier || '') + '</strong>' +
-          '<span class="parcel-invoice">' + (p.invoice || '') + '</span>' +
+          '<strong>' + escapeHtml(p.carrier || '') + '</strong>' +
+          '<span class="parcel-invoice">' + escapeHtml(p.invoice || '') + '</span>' +
         '</div>' +
         '<div class="parcel-detail">' +
-          '<span class="parcel-tracking">' + (p.status || '') + '</span>' +
-          '<span class="parcel-tracking-number">' + (p.tracking || '') + '</span>' +
-          '<div class="parcel-footer"><span>' + (p.shipDate || '') + '</span></div>' +
+          '<span class="parcel-tracking">' + escapeHtml(p.trackingStatus || p.status || '') + '</span>' +
+          '<span class="parcel-tracking-number">' + escapeHtml(p.tracking || '') + '</span>' +
+          '<div class="parcel-footer"><span>' + escapeHtml(p.shipDate || '') + '</span></div>' +
         '</div>';
       parcelGrid.appendChild(card);
     });
@@ -1664,6 +1667,8 @@ function initRefresh() {
       btn.disabled = true;
       setTimeout(function() {
         renderDashboard();
+        var searchInput = document.querySelector('.search input');
+        if (searchInput) searchInput.dispatchEvent(new Event('input'));
         btn.textContent = '↻ REFRESH DATA';
         btn.disabled = false;
       }, 300);
@@ -1734,7 +1739,7 @@ document.addEventListener('DOMContentLoaded', function() {
       </div>
       <span class="sys-badge-status">Operational</span>
     </div>
-    <a class="sys-badge wh" href="#">
+    <a class="sys-badge wh" href="https://skwarehouse.dpdns.org">
       <span class="sys-dot" aria-hidden="true"></span>
       <div>
         <div class="sys-badge-name">Warehouse Control Tower</div>
