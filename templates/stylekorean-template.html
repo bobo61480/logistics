@@ -1,3 +1,4 @@
+<!doctype html>
 <title>StyleKorean Logistics Hub</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700;800&family=Saira+Condensed:wght@600;700;800&display=swap">
@@ -1272,7 +1273,7 @@ const STYLEKOREAN_CONFIG = {
                "Shipped", "Delivered", "Received", "Cancelled", "Completed",
                "N/A", "Customs Clearance", "FDA Review / Hold", "FWS Review / Hold",
                "FDA Detained", "AQI Examination", "Delayed"],
-    finished: ["Received", "Cancelled", "Completed"]
+    finished: ["Shipped", "Delivered", "Received", "Cancelled", "Completed"]
   },
 
   // ──── Source / Department classification ────
@@ -1482,12 +1483,18 @@ function formatMoney(n) {
 // HELPER: Status pill class mapping
 // ================================================================
 function statusClass(status) {
-  const s = (status || '').toLowerCase();
-  if (['delivered','received','completed','shipped','shipping'].includes(s)) return 'good';
-  if (['pending','work in progress'].includes(s)) return 'warn';
-  if (['customs clearance','fda review/hold','fws review/hold','delayed'].includes(s)) return 'hold';
+  var s = (status || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  if (['delivered','received','completed','shipped','shipping','picked up/shipped'].includes(s)) return 'good';
+  if (['pending','work in progress','schedule requested','in transit','in transit/stopover'].includes(s)) return 'warn';
+  if (['customs clearance','fda review / hold','fda review/hold','fws review / hold','fws review/hold','fda detained','aqi examination','delayed'].includes(s)) return 'hold';
   if (['cancelled'].includes(s)) return 'stop';
   return 'neutral';
+}
+
+function escapeHtml(str) {
+  var div = document.createElement('div');
+  div.appendChild(document.createTextNode(str));
+  return div.innerHTML;
 }
 
 // ================================================================
@@ -1550,20 +1557,21 @@ function renderDashboard(data) {
     data.imports.forEach(function(row) {
       var tr = document.createElement('tr');
       tr.setAttribute('data-status', (row.status || '').toLowerCase());
+      var invoiceStr = Array.isArray(row.invoices) ? row.invoices.join(', ') : (row.invoices || '');
       tr.innerHTML =
-        '<td><a href="#">' + (row.shipmentId || '') + '</a></td>' +
-        '<td>' + (row.container || '&mdash;') + '</td>' +
-        '<td>' + (row.vessel || '') + '</td>' +
-        '<td><span class="mode-pill ' + (row.mode || '').toLowerCase() + '">' + (row.mode || '').toUpperCase() + '</span></td>' +
-        '<td>' + (row.eta || '') + '</td>' +
-        '<td><span class="status-pill ' + statusClass(row.status) + '">' + (row.status || '').toUpperCase() + '</span></td>' +
-        '<td>' + (row.invoices || []).join(', ') + '</td>';
+        '<td><a href="#">' + escapeHtml(row.shipNo || row.shipmentId || '') + '</a></td>' +
+        '<td>' + escapeHtml(row.container || '—') + '</td>' +
+        '<td>' + escapeHtml(row.vessel || '') + '</td>' +
+        '<td><span class="mode-pill ' + escapeHtml((row.mode || '').toLowerCase()) + '">' + escapeHtml((row.mode || '').toUpperCase()) + '</span></td>' +
+        '<td>' + escapeHtml(row.eta || '') + '</td>' +
+        '<td><span class="status-pill ' + statusClass(row.status) + '">' + escapeHtml((row.status || '').toUpperCase()) + '</span></td>' +
+        '<td>' + escapeHtml(invoiceStr) + '</td>';
       tbody.appendChild(tr);
     });
   }
 
   // Update parcel cards
-  var parcelGrid = document.querySelector('.parcel-cards');
+  var parcelGrid = document.querySelector('.parcel-grid');
   if (parcelGrid && data.parcels && data.parcels.length) {
     parcelGrid.innerHTML = '';
     data.parcels.forEach(function(p) {
@@ -1630,12 +1638,45 @@ function initFilters() {
 
   if (searchInput) searchInput.addEventListener('input', applyFilters);
   if (finishedToggle) finishedToggle.addEventListener('change', applyFilters);
+  applyFilters();
 }
 
-// Auto-render and init filters on load
+function initKpiToggle() {
+  var buttons = document.querySelectorAll('.period-toggle button');
+  var detailCards = document.querySelectorAll('.kpi-carrier, .kpi-average');
+  buttons.forEach(function(btn, i) {
+    btn.addEventListener('click', function() {
+      buttons.forEach(function(b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+      var showDetails = i === 1;
+      detailCards.forEach(function(card) {
+        card.style.display = showDetails ? '' : 'none';
+      });
+    });
+  });
+}
+
+function initRefresh() {
+  var btn = document.querySelector('.button.primary');
+  if (btn) {
+    btn.addEventListener('click', function() {
+      btn.textContent = 'REFRESHING…';
+      btn.disabled = true;
+      setTimeout(function() {
+        renderDashboard();
+        btn.textContent = '↻ REFRESH DATA';
+        btn.disabled = false;
+      }, 300);
+    });
+  }
+}
+
+// Auto-render and init on load
 document.addEventListener('DOMContentLoaded', function() {
   renderDashboard();
   initFilters();
+  initKpiToggle();
+  initRefresh();
 });
 </script>
 
@@ -1668,16 +1709,16 @@ document.addEventListener('DOMContentLoaded', function() {
         <button type="button" class="theme-toggle-btn" onclick="toggleTheme()">Theme</button>
         <button class="button primary">&#x21BB; REFRESH DATA</button>
         <div class="source-buttons">
-          <a class="button" href="#">MASTER</a>
-          <a class="button" href="#">NATIONAL</a>
-          <a class="button" href="#">SALES</a>
+          <a class="button" href="https://docs.google.com/spreadsheets/d/1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc/edit" target="_blank" rel="noopener">MASTER</a>
+          <a class="button" href="https://docs.google.com/spreadsheets/d/12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8/edit" target="_blank" rel="noopener">NATIONAL</a>
+          <a class="button" href="https://docs.google.com/spreadsheets/d/14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I/edit" target="_blank" rel="noopener">SALES</a>
         </div>
       </div>
     </div>
     <div class="sync-strip" role="status">
       <span>
         <b class="sync-dot"></b>
-        Worker snapshot &middot; 3 live workbooks connected
+        Template mode &middot; sample data &middot; connect STYLEKOREAN_CONFIG endpoints for live sync
       </span>
       <span class="mono">AUTO SYNC 30 MIN &middot; LAST SYNC 02:15 PM &middot; NEXT CHECK 02:45 PM</span>
     </div>
