@@ -123,7 +123,11 @@ var OUTBOUND_SHEET_SPECS_V2 = {
     invoiceCol: "PO#",
     noteCol: null,
     statusCol: "STATUS",
-    insertFields: { "PO#": "invoice", "BOL": "pro", "TRUCKING": "carrier" },
+    // PU is IHERB's scheduling date and QTY its pallet count (confirmed
+    // against scripts/all-outbound-pallets.mjs's IHERB aggregation) —
+    // omitting them left every inserted row invisible to that existing
+    // aggregation and unschedulable from the row (Codex review on PR #103).
+    insertFields: { "PO#": "invoice", "BOL": "pro", "TRUCKING": "carrier", "PU": "shipDate", "QTY": "qty" },
     // record.shipDate is required here even though it's never written to a
     // sheet cell (see the file-level comment on why): validateRecord_'s
     // outbound branch always requires a ship date regardless of target
@@ -141,6 +145,12 @@ var OUTBOUND_SHEET_SPECS_V2 = {
       { col: "PO#", field: "invoice", weight: 80 }
     ],
     updateFields: [
+      // Blank-fill only, matching every other identifier field here — a
+      // row uniquely matched by PRO# with no PO# on file yet should still
+      // pick one up, or a later PO#-only notice can never find it (Codex
+      // review on PR #103: PO# was scored as a matcher and written on
+      // insert, but never persisted on an update matched via PRO#).
+      { col: "PO#", field: "invoice", label: "PO#", overwrite: false },
       { col: "TRUCKING", field: "carrier", label: "Carrier", overwrite: false },
       { col: "PRO#", field: "pro", label: "PRO #", overwrite: false },
       { col: "SHIP DATE", field: "shipDate", label: "Ship Date", overwrite: true }
@@ -160,6 +170,10 @@ var OUTBOUND_SHEET_SPECS_V2 = {
       { col: "PO#", field: "invoice", weight: 80 }
     ],
     updateFields: [
+      // Same reasoning as ULTA above: PO# is a matcher and an insert
+      // field, so a row matched via BOL alone should still pick up a PO#
+      // it didn't already have on file.
+      { col: "PO#", field: "invoice", label: "PO#", overwrite: false },
       { col: "CARRIER", field: "carrier", label: "Carrier", overwrite: false },
       { col: "BOL", field: "pro", label: "BOL", overwrite: false }
     ],

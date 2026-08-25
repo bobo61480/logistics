@@ -292,6 +292,16 @@ describe("Apps Script production integrity", () => {
     const insert = read("google-apps-script/OutboundSheetInsertV2.gs");
     const validation = read("google-apps-script/Validation.gs");
     expect(pipeline).toContain("resolveOutboundTargetV2_({}, meta, context)");
+    // Round 2 of the same review: gating this on context.kind === "outbound"
+    // specifically (a WH-Trucking/CARGOMATIC-style marker) made the whole
+    // ULTA/IHERB/TJX-ROSS routing capability effectively unreachable, since
+    // a genuine specialized-sheet notice (just a PO/BOL/date) has no reason
+    // to contain those markers and leaves context.kind blank instead.
+    expect(pipeline).toContain('if (context.kind !== "inbound") {');
+    expect(pipeline).not.toContain('if (context.kind === "outbound") {\n    var resolvedTarget');
+    // Archiving direction must also follow a resolved customer/DC identity,
+    // not just context.kind, for the same reason.
+    expect(pipeline).toContain('(context.kind === "outbound" || context.customer) ? "outbound" : "inbound"');
     expect(pipeline).toContain("upsertOutboundEmailAcrossSheetsV2_(record, false, OUTBOUND_INSERT_SHEETS_V2, OUTBOUND_INSERT_DRY_RUN_V2)");
     expect(pipeline).toContain("upsertOutboundEmailAcrossSheetsV2_(record, true, OUTBOUND_INSERT_SHEETS_V2, OUTBOUND_INSERT_DRY_RUN_V2)");
     // A resolved customer/DC identity can only ever reach a live sheet

@@ -329,4 +329,57 @@ describe("upsertOutboundEmailAcrossSheetsV2_", () => {
     expect(result).toEqual({ matched: false, action: "noop" });
     expect(fakeSheets["IHERB"].setValuesCalls).toHaveLength(0);
   });
+
+  it("populates IHERB's PU (scheduling date) and QTY (pallet count) on insert", () => {
+    // Real IHERB header, including the two columns the original insertFields
+    // omitted (Codex review on PR #103): PU is IHERB's scheduling date and
+    // QTY its pallet count per scripts/all-outbound-pallets.mjs's aggregation.
+    const iherbRows = [
+      ["PO#", "BOL", "QTY", "FROM", "TO", "APPT #", "PU", "DELIVERY APPT", "VALUE", "TRUCKING", "RATE", "INVOICE", "STATUS"],
+    ];
+    const { helpers, fakeSheets } = loadInsertHelpers({ IHERB: iherbRows });
+    const result = helpers.upsertOutboundEmailAcrossSheetsV2_(
+      { customer: "IHERB", invoice: "4500999999", shipDate: "08/25/2026", qty: "18" },
+      true,
+      ["IHERB"],
+      false,
+    );
+    expect(result.action).toBe("inserted");
+    const written = fakeSheets["IHERB"].setValuesCalls[0].values[0];
+    expect(written[0]).toBe("4500999999"); // PO#
+    expect(written[2]).toBe("18"); // QTY
+    expect(written[6]).toBe("08/25/2026"); // PU
+  });
+
+  it("persists a PO# learned from an ULTA row matched by PRO# alone", () => {
+    const ultaRows = [
+      ["DC", "Date", "PO#", "Ship To", "TRUCKING", "Height", "Weight", "Total Cartons", "ship date", "PRO#", "RATE", "Invoice", "NOTE", "STATUS"],
+      ["ULTA (FRESNO)", "", "", "", "", "", "", "", "", "PRO999", "", "", "", "Work in Progress"],
+    ];
+    const { helpers, fakeSheets } = loadInsertHelpers({ ULTA: ultaRows });
+    const result = helpers.upsertOutboundEmailAcrossSheetsV2_(
+      { customer: "ULTA (FRESNO)", pro: "PRO999", invoice: "180146682" },
+      true,
+      ["ULTA"],
+      false,
+    );
+    expect(result).toMatchObject({ matched: true, action: "updated" });
+    expect(fakeSheets["ULTA"].setCalls.some((c) => c.value === "180146682")).toBe(true);
+  });
+
+  it("persists a PO# learned from a TJX/ROSS row matched by BOL alone", () => {
+    const tjxRows = [
+      ["Order Received", "Order Name", "DC#", "PO#", "SHIPMENT #", "BOL", "CARRIER", "STATUS", "WEBSITE STATUS"],
+      ["", "Ross 92k", "1234", "", "", "CS02307203", "", "shipped", ""],
+    ];
+    const { helpers, fakeSheets } = loadInsertHelpers({ "TJX/ROSS": tjxRows });
+    const result = helpers.upsertOutboundEmailAcrossSheetsV2_(
+      { customer: "1234", pro: "CS02307203", invoice: "11573404" },
+      true,
+      ["TJX/ROSS"],
+      false,
+    );
+    expect(result).toMatchObject({ matched: true, action: "updated" });
+    expect(fakeSheets["TJX/ROSS"].setCalls.some((c) => c.value === "11573404")).toBe(true);
+  });
 });

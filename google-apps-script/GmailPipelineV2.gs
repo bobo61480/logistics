@@ -333,12 +333,17 @@ function processLogisticsMessageV2_(message, isBroadenedOnly) {
   // Resolved once per message, before any per-record work exists, so both
   // the Drive archiving below (which runs before records are finalized)
   // and every record (via mergeRecordContextV2_'s carry-forward list) see
-  // the same customer/DC identity. Only for context.kind === "outbound" —
-  // an inbound container email has no customer concept, and an ambiguous
-  // ("") context could otherwise resolve a customer yet still archive
-  // under the "Inbound" bucket below, an odd combination not worth the
-  // extra resolver calls to avoid on every borderline email.
-  if (context.kind === "outbound") {
+  // the same customer/DC identity. Any context.kind other than "inbound"
+  // (not narrowed to exactly "outbound") — extractEmailContextV2_'s
+  // outbound detection looks specifically for WH-Trucking/CARGOMATIC-style
+  // markers (STY/PRO#/PICKUP/RATE RQ), which a genuine ULTA/IHERB/TJX-ROSS
+  // notice (just a PO/BOL/date) has no reason to contain, so context.kind
+  // stays "" for exactly the emails this resolver chain most needs to
+  // reach. Narrowing this to "outbound" only (an earlier revision, to
+  // avoid a purely cosmetic archiving-bucket edge case below) made the
+  // whole specialized-sheet routing capability effectively unreachable for
+  // realistic non-WH-Trucking emails (Codex review on PR #103).
+  if (context.kind !== "inbound") {
     var resolvedTarget = resolveOutboundTargetV2_({}, meta, context);
     if (resolvedTarget) context.customer = resolvedTarget.customer;
   }
@@ -378,7 +383,12 @@ function processLogisticsMessageV2_(message, isBroadenedOnly) {
   // extracted something (even if it later fails full validation) still
   // gets its documents archived so a human reviewing it can see them.
   if (documentAttachments.length && records.length) {
-    var archiveDirection = context.kind === "outbound" ? "outbound" : "inbound";
+    // A resolved customer/DC identity means an outbound-style sheet even
+    // when context.kind itself stayed "" (the whole point of the broader
+    // gate above) — otherwise a genuinely ULTA/IHERB/TJX-ROSS-bound email
+    // would archive under "Inbound" purely because it never tripped the
+    // WH-Trucking-specific outbound markers.
+    var archiveDirection = (context.kind === "outbound" || context.customer) ? "outbound" : "inbound";
     documentFolderUrl = archiveEmailAttachmentsV2_(documentAttachments, records, archiveDirection, context.customer, context, meta);
     records.forEach(function (record) { record._driveFolder = documentFolderUrl; });
   }
