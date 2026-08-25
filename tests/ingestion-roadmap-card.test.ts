@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const card = readFileSync("app/ingestion-roadmap-card.tsx", "utf8");
+const noticesCard = readFileSync("app/gmail-ingestion-card.tsx", "utf8");
 const page = readFileSync("app/page.tsx", "utf8");
 
 describe("Gmail Shipping-Doc Ingestion production explanation", () => {
@@ -27,5 +28,13 @@ describe("Gmail Shipping-Doc Ingestion production explanation", () => {
   it("mounts alongside, not instead of, the real GmailIngestionCard", () => {
     expect(page).toContain("<GmailIngestionCard");
     expect(page).toContain("<IngestionRoadmapCard />");
+  });
+
+  it("keeps Shipment Notices limited to sender, shipment, and main point", () => {
+    expect(noticesCard).toContain("Sender");
+    expect(noticesCard).toContain("Shipment");
+    expect(noticesCard).toContain("Main point");
+    expect(noticesCard).not.toContain("No unique identifier");
+    expect(noticesCard).not.toContain("event.issues");
   });
 });

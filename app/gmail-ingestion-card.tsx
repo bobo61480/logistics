@@ -1,7 +1,5 @@
 "use client";
 
-import { useState } from "react";
-
 type IngestionStatus = "committed" | "needsReview" | "approved" | "rejected";
 
 export interface GmailIngestionEvent {
@@ -19,28 +17,12 @@ export interface GmailIngestionEvent {
   sourceEmailUrl: string;
   driveFileUrl: string;
   timestamp: string;
+  sender?: string;
   // Present only while status === "needsReview" and the row has a usable
   // identifier. Sent back verbatim on approve/reject; the backend refuses to
   // act on it if the identifier no longer resolves to exactly one open row.
   reviewKey?: string;
 }
-
-const STATUS_STYLE: Record<IngestionStatus, string> = {
-  committed: "bg-blue-50 text-blue-700 ring-blue-200",
-  needsReview: "bg-amber-50 text-amber-700 ring-amber-200",
-  approved: "bg-green-50 text-green-700 ring-green-200",
-  rejected: "bg-red-50 text-red-700 ring-red-200",
-};
-
-const STATUS_LABEL: Record<IngestionStatus, string> = {
-  // Neutral wording: COMMITTED rows in PENDING VERIFICATION include manually
-  // approved commits (processApprovedPending flips APPROVED → COMMITTED), so
-  // "Auto-committed" would misstate who authorized the write.
-  committed: "Committed",
-  needsReview: "Needs review",
-  approved: "Approved",
-  rejected: "Rejected",
-};
 
 /**
  * Renders the `sources.gmailIngestion` feed from the dashboard's own
@@ -53,27 +35,11 @@ const STATUS_LABEL: Record<IngestionStatus, string> = {
 export function GmailIngestionCard({
   events,
   loading = false,
-  onReview,
-  reviewingKey = "",
-  sheetUrl,
 }: {
   events: GmailIngestionEvent[] | null;
   loading?: boolean;
-  /** Omit to render the feed read-only (no Approve/Reject buttons). */
-  onReview?: (event: GmailIngestionEvent, decision: "approve" | "reject") => void;
-  /** reviewKey of the row currently mid-request, so only that row disables. */
-  reviewingKey?: string;
-  /** Master workbook URL — links the ambiguous-match shortcut to the PENDING VERIFICATION tab. */
-  sheetUrl?: string;
 }) {
-  const [filter, setFilter] = useState<"all" | IngestionStatus>("all");
-
   const unavailable = !loading && events === null;
-  const filtered = (events ?? []).filter((e) => filter === "all" || e.status === filter);
-  const counts = (events ?? []).reduce<Record<string, number>>((acc, e) => {
-    acc[e.status] = (acc[e.status] ?? 0) + 1;
-    return acc;
-  }, {});
 
   return (
     <section className="hct-card rounded-xl border border-neutral-200 bg-white shadow-sm">
@@ -83,22 +49,6 @@ export function GmailIngestionCard({
           <p className="text-xs text-neutral-500">
             New shipment notices and changes extracted from incoming email, plus anything routed for review.
           </p>
-        </div>
-        <div className="flex gap-1 text-xs">
-          {(["all", "needsReview", "committed", "approved", "rejected"] as const).map((key) => (
-            <button
-              key={key}
-              onClick={() => setFilter(key)}
-              className={`rounded-full px-2.5 py-1 ring-1 transition ${
-                filter === key
-                  ? "bg-neutral-900 text-white ring-neutral-900"
-                  : "bg-neutral-50 text-neutral-600 ring-neutral-200 hover:bg-neutral-100"
-              }`}
-            >
-              {key === "all" ? "All" : STATUS_LABEL[key]}
-              {key !== "all" && counts[key] ? ` (${counts[key]})` : ""}
-            </button>
-          ))}
         </div>
       </header>
 
@@ -114,107 +64,24 @@ export function GmailIngestionCard({
           </p>
         )}
         {loading && events === null && <p className="px-5 py-4 text-sm text-neutral-500">Loading…</p>}
-        {!unavailable && events !== null && filtered.length === 0 && (
-          <p className="px-5 py-6 text-sm text-neutral-500">Nothing in this category right now.</p>
+        {!unavailable && events !== null && events.length === 0 && (
+          <p className="px-5 py-6 text-sm text-neutral-500">No shipment notices right now.</p>
         )}
         <ul className="divide-y divide-neutral-100">
-          {filtered.map((event, i) => {
-            const noticeKind = event.note.startsWith("Received:")
-              ? "received"
-              : event.note.startsWith("Changed:")
-                ? "changed"
-                : null;
-            return (
+          {(events ?? []).map((event, i) => (
             <li key={i} className="px-5 py-3 text-sm">
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2">
-                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ring-1 ${STATUS_STYLE[event.status]}`}>
-                    {STATUS_LABEL[event.status]}
-                  </span>
-                  {event.kind && (
-                    <span className="text-xs uppercase tracking-wide text-neutral-400">{event.kind}</span>
-                  )}
-                  <span className="font-medium text-neutral-900">
-                    {event.shipmentId || event.customer || "Unidentified shipment"}
-                  </span>
-                </div>
-                {event.timestamp && <span className="text-xs text-neutral-400">{event.timestamp}</span>}
-              </div>
-
-              {noticeKind && (
-                <p
-                  className={`mt-1 text-sm font-medium ${
-                    noticeKind === "received" ? "text-blue-700" : "text-amber-700"
-                  }`}
-                >
-                  {event.note}
-                </p>
-              )}
-
-              <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-neutral-500">
-                {event.customer && <span>Customer: {event.customer}</span>}
-                {event.blOrPro && <span>BL/PRO: {event.blOrPro}</span>}
-                {event.container && <span>Container: {event.container}</span>}
-                {event.shipDateOrEta && <span>ETA/Ship date: {event.shipDateOrEta}</span>}
-                {event.carrierOrVessel && <span>Carrier/Vessel: {event.carrierOrVessel}</span>}
-              </div>
-
-              {event.issues && <p className="mt-1 text-xs text-amber-700">{event.issues}</p>}
-              {!noticeKind && event.note && <p className="mt-1 text-xs text-neutral-400">{event.note}</p>}
-
-              <div className="mt-1 flex gap-3 text-xs">
-                {event.sourceEmailUrl && (
-                  <a href={event.sourceEmailUrl} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">
-                    Source email
-                  </a>
-                )}
-                {event.driveFileUrl && (
-                  <a href={event.driveFileUrl} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">
-                    Archived file
-                  </a>
-                )}
-              </div>
-
-              {onReview && event.status === "needsReview" && (
-                <div className="mt-2 flex items-center gap-2">
-                  {event.reviewKey ? (
-                    <>
-                      <button
-                        type="button"
-                        disabled={reviewingKey === event.reviewKey}
-                        onClick={() => onReview(event, "approve")}
-                        className="rounded-md bg-green-600 px-2.5 py-1 text-xs font-medium text-white transition hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {reviewingKey === event.reviewKey ? "Working…" : "Approve"}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={reviewingKey === event.reviewKey}
-                        onClick={() => onReview(event, "reject")}
-                        className="rounded-md bg-white px-2.5 py-1 text-xs font-medium text-red-700 ring-1 ring-red-200 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        Reject
-                      </button>
-                    </>
-                  ) : sheetUrl ? (
-                    <a
-                      href={sheetUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-xs font-medium text-amber-700 hover:underline"
-                    >
-                      No unique identifier — resolve directly in the PENDING VERIFICATION sheet ↗
-                    </a>
-                  ) : (
-                    <span className="text-xs text-neutral-400">
-                      No unique identifier — resolve directly in the PENDING VERIFICATION sheet.
-                    </span>
-                  )}
-                </div>
-              )}
+              <dl className="grid gap-1.5 sm:grid-cols-[8rem_1fr]">
+                <dt className="text-xs font-semibold uppercase tracking-wide text-neutral-400">Sender</dt>
+                <dd className="text-neutral-800">{event.sender || "Sender unavailable"}</dd>
+                <dt className="text-xs font-semibold uppercase tracking-wide text-neutral-400">Shipment</dt>
+                <dd className="font-medium text-neutral-900">
+                  {event.shipmentId || event.customer || "Shipment reference unavailable"}
+                </dd>
+                <dt className="text-xs font-semibold uppercase tracking-wide text-neutral-400">Main point</dt>
+                <dd className="text-neutral-700">{event.note || "Shipment notice received"}</dd>
+              </dl>
             </li>
-            );
-          })}
+          ))}
         </ul>
       </div>
     </section>

@@ -118,7 +118,7 @@ function addPendingRow_(entry) {
     r.note || "",
     (entry.meta && entry.meta.permalink) || r._sourceEmail || "",
     entry.driveUrl || r._driveFile || "",
-    JSON.stringify(r).slice(0, 5000)
+    JSON.stringify(Object.assign({}, r, { _sender: (entry.meta && entry.meta.from) || "" })).slice(0, 5000)
   ]);
   sheet.getRange(sheet.getLastRow(), 1, 1, VALIDATION.pendingHeaders.length)
     .setBackground(VALIDATION.colors.needsReview);
@@ -157,7 +157,7 @@ function addCommittedAuditRow_(entry) {
     entry.note || "",
     (entry.meta && entry.meta.permalink) || r._sourceEmail || "",
     entry.driveUrl || r._driveFolder || "",
-    JSON.stringify(r).slice(0, 5000)
+    JSON.stringify(Object.assign({}, r, { _sender: (entry.meta && entry.meta.from) || "" })).slice(0, 5000)
   ]);
   sheet.getRange(sheet.getLastRow(), 1, 1, VALIDATION.pendingHeaders.length)
     .setBackground(VALIDATION.colors.committed);

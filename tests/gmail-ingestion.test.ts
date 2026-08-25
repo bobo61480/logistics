@@ -118,6 +118,16 @@ describe("deriveGmailIngestion", () => {
     });
   });
 
+  it("exposes the sender captured in the pending row raw record", () => {
+    const row = ["2026-08-17", "inbound", "COMMITTED", "", "", "IN003", "", "", "", "", "", "Changed: status", "", "", JSON.stringify({ _sender: "Karen Yun <karen@broker.example>" })];
+    const events = deriveGmailIngestion({
+      importsRows: null,
+      outboundRows: null,
+      pendingVerificationTable: gvizTable(PENDING_HEADER, [row]),
+    });
+    expect(events[0].sender).toBe("Karen Yun <karen@broker.example>");
+  });
+
   it("lists pending events before committed ones and degrades gracefully with no pending table", () => {
     const importsRows = [
       ["NOTE", "INVOICE"],

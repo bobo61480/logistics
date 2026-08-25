@@ -440,6 +440,7 @@ export interface GmailIngestionEvent {
   // the UI disables review actions on those rather than risk acting on the
   // wrong shipment.
   reviewKey?: string;
+  sender?: string;
 }
 
 const AUTO_TAG = /\[auto:\s*(https:\/\/mail\.google\.com\/[^\]\s]+)\]/i;
@@ -543,6 +544,13 @@ function pendingEventsFromTable(table: GvizTable | null): GmailIngestionEvent[] 
       sourceEmailUrl: cell(row, idx("Source Email")),
       driveFileUrl: cell(row, idx("Drive File")),
       timestamp: cell(row, idx("Timestamp")),
+      sender: (() => {
+        try {
+          return String(JSON.parse(cell(row, idx("Raw JSON")) || "{}")._sender || "");
+        } catch {
+          return "";
+        }
+      })(),
       reviewKey,
     };
   });
