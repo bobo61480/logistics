@@ -133,6 +133,47 @@ function filterWmsInvoicesForGroup_(invoices, groupKey, sourceByInvoice) {
   });
 }
 
+function collapseRedundantWhQuantityRowsV2_(sheet) {
+  var data = sheet.getDataRange().getDisplayValues();
+  var header = findWhTruckingHeader_(data);
+  var map = header.map;
+  var groups = new Map();
+
+  for (var r = header.rowIndex + 1; r < data.length; r++) {
+    var row = data[r];
+    var customer = normalizeWmsCustomerKey_(exactVal_(row, map, ["CUSTOMER"]));
+    var shipDate = String(exactVal_(row, map, ["SHIP DATE"]) || "").trim();
+    var quantity = String(exactVal_(row, map, ["LENGTH (IN)"]) || "").trim().toUpperCase().replace(/\s+/g, " ");
+    if (!customer || !shipDate || !/\b(PLT|PLTS|PALLET|PALLETS|CTN|CTNS|CARTON|CARTONS)\b/.test(quantity)) continue;
+    var key = customer + "___" + shipDate + "___" + quantity;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ rowNumber: r + 1, values: row, invoice: exactVal_(row, map, ["INVOICE NO.", "INVOICE #", "INVOICE"]) });
+  }
+
+  var deleteRows = [];
+  groups.forEach(function (rows) {
+    if (rows.length < 2) return;
+    var invoiceRows = rows.filter(function (row) { return String(row.invoice || "").trim(); });
+    if (invoiceRows.length !== 1) return;
+    var keeper = invoiceRows[0];
+    rows.forEach(function (candidate) {
+      if (candidate.rowNumber === keeper.rowNumber || String(candidate.invoice || "").trim()) return;
+      var hasUniqueDetail = candidate.values.some(function (value, column) {
+        if (column === map["INVOICE NO."]) return false;
+        var clean = String(value || "").trim();
+        var keeperValue = String(keeper.values[column] || "").trim();
+        return clean && clean !== keeperValue;
+      });
+      if (!hasUniqueDetail) deleteRows.push(candidate.rowNumber);
+    });
+  });
+
+  deleteRows.sort(function (a, b) { return b - a; }).forEach(function (rowNumber) {
+    sheet.deleteRow(rowNumber);
+  });
+  return deleteRows.length;
+}
+
 function scanAndImportWmsTruckingOrdersV2() {
   if (!WMS_TRUCKING_SYNC_ENABLED) {
     Logger.log("WMS trucking sync is disabled.");
@@ -148,6 +189,7 @@ function scanAndImportWmsTruckingOrdersV2() {
     var sourceSheet = sourceSpreadsheet.getSheetByName("Stylekorean");
     var targetSheet = targetSpreadsheet.getSheetByName("WH Trucking Request");
     if (!sourceSheet || !targetSheet) throw new Error("Required source or target sheet is missing.");
+    var collapsedQuantityRows = collapseRedundantWhQuantityRowsV2_(targetSheet);
 
     var sourceData = sourceSheet.getDataRange().getDisplayValues();
     var sourceHeader = findWmsTruckingHeader_(sourceData);
@@ -380,6 +422,7 @@ function scanAndImportWmsTruckingOrdersV2() {
       ", updated=" + updated +
       ", repaired=" + repaired +
       ", skippedTerminal=" + skippedTerminal +
+      ", collapsedQuantityRows=" + collapsedQuantityRows +
       ", skippedBeforeCutoff=" + skippedBeforeCutoff
     );
 
@@ -391,6 +434,7 @@ function scanAndImportWmsTruckingOrdersV2() {
       updated: updated,
       repaired: repaired,
       skippedTerminal: skippedTerminal,
+      collapsedQuantityRows: collapsedQuantityRows,
       skippedBeforeCutoff: skippedBeforeCutoff,
       nextRow: lastBusinessRow + pendingRows.length + 1
     };
