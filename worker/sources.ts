@@ -180,9 +180,9 @@ export function selectOutboundSource(
 // row 2,000 before the newest-first sort could see it.
 const PENDING_VERIFICATION_QUERY = {
   sheet: "PENDING VERIFICATION",
-  range: "A:N",
+  range: "A:R",
   headers: 1,
-  tq: "select * order by A desc limit 2000",
+  tq: "select A,B,C,D,E,F,G,H,I,J,K,L,M,N,P,Q,R order by A desc limit 2000",
 } as const;
 
 // Review status transitions happen in place, so an old NEEDS REVIEW row can
@@ -190,9 +190,9 @@ const PENDING_VERIFICATION_QUERY = {
 // (Validation.gs writes the status verbatim as "NEEDS REVIEW").
 const PENDING_VERIFICATION_OPEN_QUERY = {
   sheet: "PENDING VERIFICATION",
-  range: "A:N",
+  range: "A:R",
   headers: 1,
-  tq: "select * where C = 'NEEDS REVIEW' order by A desc limit 200",
+  tq: "select A,B,C,D,E,F,G,H,I,J,K,L,M,N,P,Q,R where C = 'NEEDS REVIEW' order by A desc limit 200",
 } as const;
 
 /**
@@ -436,11 +436,12 @@ export interface GmailIngestionEvent {
   // string-exact timestamp match would be fragile. Uniqueness instead comes
   // from requiring an exact match on kind+customer+invoice+blOrPro+container
   // among currently-open rows, and refusing (never guessing) if more than
-  // one open row matches. Rows with no usable identifier get no reviewKey —
-  // the UI disables review actions on those rather than risk acting on the
-  // wrong shipment.
+  // repeated open rows share a key and Validation.gs deterministically uses
+  // the newest matching notice. Rows with no usable identifier get no key.
   reviewKey?: string;
   sender?: string;
+  documentNames?: string[];
+  archiveFolderPath?: string;
 }
 
 const AUTO_TAG = /\[auto:\s*(https:\/\/mail\.google\.com\/[^\]\s]+)\]/i;
@@ -522,6 +523,12 @@ function pendingEventsFromTable(table: GvizTable | null): GmailIngestionEvent[] 
     const invoice = cell(row, idx("Invoice / PI"));
     const blOrPro = cell(row, idx("BL / PRO"));
     const container = cell(row, idx("Container"));
+    let rawRecord: Record<string, unknown> = {};
+    try {
+      rawRecord = JSON.parse(cell(row, idx("Raw JSON")) || "{}");
+    } catch {
+      rawRecord = {};
+    }
     // Mirrors reviewKeyForRow_ in Validation.gs field-for-field (kind,
     // customer, invoice, BL/PRO, container — uppercased, pipe-joined). Only
     // NEEDS REVIEW rows get a key: approve/reject only ever targets an open
@@ -544,13 +551,20 @@ function pendingEventsFromTable(table: GvizTable | null): GmailIngestionEvent[] 
       sourceEmailUrl: cell(row, idx("Source Email")),
       driveFileUrl: cell(row, idx("Drive File")),
       timestamp: cell(row, idx("Timestamp")),
-      sender: (() => {
-        try {
-          return String(JSON.parse(cell(row, idx("Raw JSON")) || "{}")._sender || "");
-        } catch {
-          return "";
+      sender: cell(row, idx("Sender")) || String(rawRecord._sender || ""),
+      documentNames: (() => {
+        const explicit = cell(row, idx("Documents"));
+        if (explicit) {
+          try {
+            const names = JSON.parse(explicit);
+            if (Array.isArray(names)) return names.map((name) => String(name)).filter(Boolean);
+          } catch { /* fall through to legacy raw audit data */ }
         }
+        return Array.isArray(rawRecord._documentNames)
+          ? rawRecord._documentNames.map((name) => String(name)).filter(Boolean)
+          : [];
       })(),
+      archiveFolderPath: cell(row, idx("Archive Folder")) || String(rawRecord._archiveFolderPath || ""),
       reviewKey,
     };
   });

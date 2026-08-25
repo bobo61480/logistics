@@ -13,6 +13,27 @@ describe("Apps Script production integrity", () => {
     expect(validation).not.toContain("refusing to guess");
   });
 
+  it("records received document names and their exact Drive folder path", () => {
+    const pipeline = read("google-apps-script/GmailPipelineV2.gs");
+    const validation = read("google-apps-script/Validation.gs");
+
+    expect(pipeline).toContain("meta.documentNames = documentAttachments.map");
+    expect(pipeline).toContain('shipmentArchiveFolderPathV2_("Import Shipments"');
+    expect(pipeline).toContain('shipmentArchiveFolderPathV2_("Outbound Shipments"');
+    expect(validation).toContain("_documentNames:");
+    expect(validation).toContain("_archiveFolderPath:");
+    expect(validation).toContain('"Sender", "Documents", "Archive Folder"');
+  });
+
+  it("keeps Raw JSON private while publishing safe ingestion metadata", () => {
+    const code = read("google-apps-script/Code.gs");
+    const sources = read("worker/sources.ts");
+
+    expect(code).toContain("const safeColumns = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17]");
+    expect(sources).toContain("select A,B,C,D,E,F,G,H,I,J,K,L,M,N,P,Q,R");
+    expect(sources).not.toContain('tq: "select * order by A desc limit 2000"');
+  });
+
   it("serves an owner-authorized read snapshot for the private production workbooks", () => {
     const code = read("google-apps-script/Code.gs");
     expect(code).toContain("function doGet(e)");

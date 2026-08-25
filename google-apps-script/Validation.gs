@@ -11,7 +11,7 @@
 
 var VALIDATION = {
   pendingSheetName: "PENDING VERIFICATION",
-  pendingHeaders: ["Timestamp", "Kind", "Status", "Issues", "Customer", "Invoice / PI", "BL / PRO", "Container", "Ship Date / ETA", "Qty", "Carrier / Vessel", "Note", "Source Email", "Drive File", "Raw JSON"],
+  pendingHeaders: ["Timestamp", "Kind", "Status", "Issues", "Customer", "Invoice / PI", "BL / PRO", "Container", "Ship Date / ETA", "Qty", "Carrier / Vessel", "Note", "Source Email", "Drive File", "Raw JSON", "Sender", "Documents", "Archive Folder"],
   statusValues: ["NEEDS REVIEW", "APPROVED", "REJECTED", "COMMITTED"],
   colors: { needsReview: "#FFF3CD", approved: "#D9EAD3", rejected: "#F4CCCC", committed: "#E8F0FE" },
   dateWindowPastDays: 45,     // reject dates further back than this
@@ -96,6 +96,10 @@ function ensurePendingSheet_() {
       .build();
     sheet.getRange(2, statusCol, 1000, 1).setDataValidation(rule);
   }
+  if (sheet.getMaxColumns() < VALIDATION.pendingHeaders.length) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), VALIDATION.pendingHeaders.length - sheet.getMaxColumns());
+  }
+  sheet.getRange(1, 1, 1, VALIDATION.pendingHeaders.length).setValues([VALIDATION.pendingHeaders]);
   return sheet;
 }
 
@@ -118,7 +122,14 @@ function addPendingRow_(entry) {
     r.note || "",
     (entry.meta && entry.meta.permalink) || r._sourceEmail || "",
     entry.driveUrl || r._driveFile || "",
-    JSON.stringify(Object.assign({}, r, { _sender: (entry.meta && entry.meta.from) || "" })).slice(0, 5000)
+    JSON.stringify(Object.assign({}, r, {
+      _sender: (entry.meta && entry.meta.from) || "",
+      _documentNames: (entry.meta && entry.meta.documentNames) || [],
+      _archiveFolderPath: (entry.meta && entry.meta.archiveFolderPath) || ""
+    })).slice(0, 5000),
+    (entry.meta && entry.meta.from) || "",
+    JSON.stringify((entry.meta && entry.meta.documentNames) || []),
+    (entry.meta && entry.meta.archiveFolderPath) || ""
   ]);
   sheet.getRange(sheet.getLastRow(), 1, 1, VALIDATION.pendingHeaders.length)
     .setBackground(VALIDATION.colors.needsReview);
@@ -157,7 +168,14 @@ function addCommittedAuditRow_(entry) {
     entry.note || "",
     (entry.meta && entry.meta.permalink) || r._sourceEmail || "",
     entry.driveUrl || r._driveFolder || "",
-    JSON.stringify(Object.assign({}, r, { _sender: (entry.meta && entry.meta.from) || "" })).slice(0, 5000)
+    JSON.stringify(Object.assign({}, r, {
+      _sender: (entry.meta && entry.meta.from) || "",
+      _documentNames: (entry.meta && entry.meta.documentNames) || [],
+      _archiveFolderPath: (entry.meta && entry.meta.archiveFolderPath) || ""
+    })).slice(0, 5000),
+    (entry.meta && entry.meta.from) || "",
+    JSON.stringify((entry.meta && entry.meta.documentNames) || []),
+    (entry.meta && entry.meta.archiveFolderPath) || ""
   ]);
   sheet.getRange(sheet.getLastRow(), 1, 1, VALIDATION.pendingHeaders.length)
     .setBackground(VALIDATION.colors.committed);

@@ -65,11 +65,10 @@ function doGet(e) {
         skwStockTable: readSnapshotRows_(master, "SKW_Stock", null, 1, 2500, 10),
         // Optional: Validation.gs creates this tab lazily, so its absence must
         // not fail the whole snapshot. Feeds the dashboard's Gmail Ingestion card.
-        // Sanitized to columns A..N — column O (Raw JSON) carries raw extraction
-        // text and must not be exposed through this anonymously reachable
-        // endpoint — and read from the tail, because the tab is an append-only
-        // audit trail whose newest rows matter most.
-        pendingVerification: readPendingVerificationTail_(master, "PENDING VERIFICATION", 2000, 14)
+        // Raw JSON in column O carries extraction internals and is never exposed
+        // through this anonymously reachable endpoint. The safe Sender,
+        // Documents, and Archive Folder fields in P:R are included explicitly.
+        pendingVerification: readPendingVerificationTail_(master, "PENDING VERIFICATION", 2000, 18)
       }
     });
   } catch (error) {
@@ -79,6 +78,8 @@ function doGet(e) {
 
 function readPendingVerificationTail_(spreadsheet, sheetName, maxRows, maxColumns) {
   try {
+    const safeColumns = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17];
+    const sanitize = function (row) { return safeColumns.map(function (index) { return row[index] || ""; }); };
     const sheet = spreadsheet.getSheetByName(sheetName);
     if (!sheet) {
       // Validation.gs creates this tab lazily on the first record that fails
@@ -86,7 +87,7 @@ function readPendingVerificationTail_(spreadsheet, sheetName, maxRows, maxColumn
       // feed, not a read failure. Return the canonical header row (sanitized
       // to the same column bound) so downstream sees "empty", never "degraded".
       if (typeof VALIDATION !== "undefined" && VALIDATION.pendingHeaders) {
-        return [VALIDATION.pendingHeaders.slice(0, Math.max(1, Number(maxColumns) || 1))];
+        return [sanitize(VALIDATION.pendingHeaders)];
       }
       return null;
     }
@@ -128,7 +129,7 @@ function readPendingVerificationTail_(spreadsheet, sheetName, maxRows, maxColumn
         });
       }
     }
-    return header.concat(rows);
+    return header.concat(rows).map(sanitize);
   } catch (error) {
     return null;
   }

@@ -6,7 +6,7 @@ const noticesCard = readFileSync("app/gmail-ingestion-card.tsx", "utf8");
 const page = readFileSync("app/page.tsx", "utf8");
 
 describe("Gmail Shipping-Doc Ingestion production explanation", () => {
-  it("makes no network calls or API references — purely static UI", () => {
+  it("uses the shared snapshot and makes no additional network calls", () => {
     expect(card).not.toMatch(/fetch\(|axios|XMLHttpRequest/);
     expect(card).not.toContain("useState");
     expect(card).not.toContain("useEffect");
@@ -20,14 +20,19 @@ describe("Gmail Shipping-Doc Ingestion production explanation", () => {
     expect(card).not.toContain("Not connected");
   });
 
-  it("explains that Shipment Notices reports the same pipeline without making a duplicate request", () => {
-    expect(card).toMatch(/Shipment Notices[\s\S]*same Worker snapshot/);
-    expect(card).toMatch(/without launching a\s+second ingestion pipeline/);
+  it("reports received documents, time, and exact Drive destination", () => {
+    expect(card).toContain("Recently Received Documents");
+    expect(card).toContain("Documents received");
+    expect(card).toContain("Received");
+    expect(card).toContain("Uploaded to");
+    expect(card).toContain("event.documentNames");
+    expect(card).toContain("event.archiveFolderPath");
+    expect(card.toLowerCase()).not.toContain("placeholder");
   });
 
   it("mounts alongside, not instead of, the real GmailIngestionCard", () => {
     expect(page).toContain("<GmailIngestionCard");
-    expect(page).toContain("<IngestionRoadmapCard />");
+    expect(page).toContain("<IngestionRoadmapCard events={gmailIngestion} />");
   });
 
   it("keeps Shipment Notices limited to sender, shipment, and main point", () => {

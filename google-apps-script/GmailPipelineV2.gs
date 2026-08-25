@@ -221,6 +221,9 @@ function processLogisticsMessageV2_(message) {
     if (parsed.supported) supportedSeen = true;
     parsed.records.forEach(function (record) { records.push(record); });
   });
+  meta.documentNames = documentAttachments.map(function (attachment) {
+    return String(attachment.getName() || "attachment").replace(/[\\/:*?\"<>|]+/g, "_");
+  });
 
   if (!records.length && hasStrongLogisticsContextV2_(context)) {
     records.push(mergeRecordContextV2_({}, context, meta));
@@ -707,6 +710,7 @@ function archiveInboundEmailAttachmentsV2_(attachments, records, context, meta) 
   try {
     var folder = findExistingInboundDocsFolderV2_(records) || getOrCreateInboundDocsFolderV2_(records, context, meta);
     attachments.forEach(function (attachment) { createAttachmentIfMissingV2_(folder, attachment); });
+    meta.archiveFolderPath = shipmentArchiveFolderPathV2_("Import Shipments", folder, meta);
     return folder.getUrl();
   } catch (err) {
     writeLog_("GMAIL V2 ARCHIVE", meta.messageId, String(err));
@@ -719,11 +723,17 @@ function archiveOutboundEmailAttachmentsV2_(attachments, records, context, meta)
     var root = DriveApp.getFolderById(GMAIL_PIPELINE.outboundShipmentsFolderId);
     var folder = getOrCreateShipmentDocsFolderV2_(root, records, context, meta);
     attachments.forEach(function (attachment) { createAttachmentIfMissingV2_(folder, attachment); });
+    meta.archiveFolderPath = shipmentArchiveFolderPathV2_("Outbound Shipments", folder, meta);
     return folder.getUrl();
   } catch (err) {
     writeLog_("GMAIL V2 OUTBOUND ARCHIVE", meta.messageId, String(err));
     return "";
   }
+}
+
+function shipmentArchiveFolderPathV2_(category, folder, meta) {
+  var year = Utilities.formatDate(meta.date || new Date(), "America/Los_Angeles", "yyyy");
+  return "Warehouse Documents / " + category + " / " + year + " / " + folder.getName();
 }
 
 function findExistingInboundDocsFolderV2_(records) {

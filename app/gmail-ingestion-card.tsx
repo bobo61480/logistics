@@ -18,6 +18,8 @@ export interface GmailIngestionEvent {
   driveFileUrl: string;
   timestamp: string;
   sender?: string;
+  documentNames?: string[];
+  archiveFolderPath?: string;
   // Present only while status === "needsReview" and the row has a usable
   // identifier. Sent back verbatim on approve/reject; the backend refuses to
   // act on it if the identifier no longer resolves to exactly one open row.
