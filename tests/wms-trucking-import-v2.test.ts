@@ -35,7 +35,7 @@ describe("WMS trucking importer v2 safeguards", () => {
     expect(helpers.wmsImportEligible_({ key: "2026-08-11" })).toBe(true);
   });
 
-  it("does not reuse a row just because an invoice was previously merged into a nearby date", () => {
+  it("reuses a row when normalized customer and invoice match across ship dates", () => {
     const rows = [
       {
         rowNumber: 653,
@@ -46,8 +46,8 @@ describe("WMS trucking importer v2 safeguards", () => {
     ];
 
     expect(
-      helpers.chooseWmsTargetRow_("BEAUTIFYME___2026-08-11", ["IN00463819"], rows),
-    ).toBeNull();
+      helpers.chooseWmsTargetRow_("BEAUTIFYME___2026-08-11", ["IN00463819"], rows)?.rowNumber,
+    ).toBe(653);
     expect(
       helpers.chooseWmsTargetRow_("BEAUTIFYME___2026-08-10", ["IN00463488"], rows)?.rowNumber,
     ).toBe(653);

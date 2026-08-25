@@ -108,7 +108,7 @@ function chooseWmsTargetRow_(groupKey, invoices, rows) {
 
   for (var i = 0; i < rows.length; i++) {
     var row = rows[i];
-    var rowCustomerKey = normalizeWmsCustomerKey_(canonicalWmsCustomer_(row.customer));
+    var rowCustomerKey = String(row.key || "").split("___")[0];
     if (rowCustomerKey !== customerKey) continue;
     for (var j = 0; j < row.invoices.length; j++) {
       // User-defined shipment identity: an exact normalized customer and an
