@@ -15,7 +15,7 @@ describe("Gmail Shipping-Doc Ingestion production explanation", () => {
   it("labels itself clearly as a connected production automation", () => {
     expect(card).toContain("Production automation · 15-minute polling");
     expect(card).toContain('className="status-tag">Connected');
-    expect(card).toContain("The production pipeline uses Apps Script");
+    expect(card).toContain("Recently Received Documents");
     expect(card).not.toContain("Not built yet");
     expect(card).not.toContain("Not connected");
   });
