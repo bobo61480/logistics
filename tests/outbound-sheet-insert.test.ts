@@ -12,6 +12,11 @@ type InsertHelpers = {
     sheetNames: string[],
     dryRun: boolean,
   ) => UpsertResult;
+  resolveOutboundTargetV2_: (
+    record: Record<string, unknown>,
+    meta: Record<string, unknown>,
+    context: Record<string, unknown>,
+  ) => { sheet: string; customer: string } | null;
 };
 
 class FakeRange {
@@ -77,6 +82,9 @@ class FakeSheet {
   getLastColumn() {
     return this.rows.reduce((max, r) => Math.max(max, r.length), 0);
   }
+  getDataRange() {
+    return this.getRange(1, 1, Math.max(this.getLastRow(), 1), Math.max(this.getLastColumn(), 1));
+  }
   getRange(row: number, col: number, numRows = 1, numCols = 1) {
     return new FakeRange(this, row, col, numRows, numCols);
   }
@@ -108,7 +116,7 @@ function loadInsertHelpers(sheets: Record<string, unknown[][]>, sourceOverride?:
 
   vm.runInContext(
     `${code}\n${statusNorm}\n${customerLookup}\n${customerResolver}\n${storeResolver}\n${pipeline}\n${insert}\n` +
-      ";globalThis.__insert = { chooseOutboundSheetV2_, upsertOutboundEmailAcrossSheetsV2_ };",
+      ";globalThis.__insert = { chooseOutboundSheetV2_, upsertOutboundEmailAcrossSheetsV2_, resolveOutboundTargetV2_ };",
     context,
   );
   return { helpers: context.__insert as InsertHelpers, fakeSheets };
@@ -367,6 +375,31 @@ describe("upsertOutboundEmailAcrossSheetsV2_", () => {
     expect(fakeSheets["ULTA"].setCalls.some((c) => c.value === "180146682")).toBe(true);
   });
 
+  it("matches an existing TJX/ROSS row by its own persisted SHIPMENT # when the BOL/PO on a later email differ", () => {
+    const tjxRows = [
+      ["Order Received", "Order Name", "DC#", "PO#", "SHIPMENT #", "BOL", "CARRIER", "STATUS", "WEBSITE STATUS"],
+      ["", "Ross 92k", "1234", "OLD-PO", "SHIP555", "OLD-BOL", "", "shipped", ""],
+    ];
+    const { helpers, fakeSheets } = loadInsertHelpers({ "TJX/ROSS": tjxRows });
+    // A corrected BOL and a new PO for the same shipment — only the
+    // shipment number is unchanged. Without matching on it, neither BOL
+    // nor PO# alone would find this row (Codex review on PR #103). BOL/PO#
+    // are blank-fill-only, so the pre-existing "OLD-*" values correctly
+    // stay put — what matters here is that the row is FOUND (matched:true)
+    // rather than treated as no-match and inserted as a duplicate; a
+    // genuinely blank CARRIER field still gets filled in to prove a real
+    // update reaches this row once matched.
+    const result = helpers.upsertOutboundEmailAcrossSheetsV2_(
+      { customer: "1234", shipmentNo: "SHIP555", pro: "NEW-BOL", invoice: "NEW-PO", carrier: "Sunset Pacific" },
+      false,
+      ["TJX/ROSS"],
+      false,
+    );
+    expect(result).toMatchObject({ matched: true, action: "updated" });
+    expect(fakeSheets["TJX/ROSS"].setValuesCalls).toHaveLength(0); // no duplicate inserted
+    expect(fakeSheets["TJX/ROSS"].setCalls.some((c) => c.value === "Sunset Pacific")).toBe(true);
+  });
+
   it("persists a PO# learned from a TJX/ROSS row matched by BOL alone", () => {
     const tjxRows = [
       ["Order Received", "Order Name", "DC#", "PO#", "SHIPMENT #", "BOL", "CARRIER", "STATUS", "WEBSITE STATUS"],
@@ -381,5 +414,36 @@ describe("upsertOutboundEmailAcrossSheetsV2_", () => {
     );
     expect(result).toMatchObject({ matched: true, action: "updated" });
     expect(fakeSheets["TJX/ROSS"].setCalls.some((c) => c.value === "11573404")).toBe(true);
+  });
+});
+
+describe("resolveOutboundTargetV2_", () => {
+  // Regression for a Codex review finding: TJX/ROSS's directory is just
+  // bare 3-6 digit numbers, so a coincidental collision with a real store
+  // number is plausible. An explicit "IHERB" mention in the email must not
+  // silently lose to that generic DC-number resolver just because it was
+  // checked first — both signals firing is real conflicting evidence.
+  it("never guesses between an explicit IHERB mention and a coincidentally-matching TJX/ROSS DC# number", () => {
+    const tjxRows = [
+      ["Order Received", "Order Name", "DC#", "STATUS", "WEBSITE STATUS"],
+      ["", "Ross Load", "1234", "shipped", ""],
+    ];
+    const { helpers } = loadInsertHelpers({ "TJX/ROSS": tjxRows });
+    const result = helpers.resolveOutboundTargetV2_(
+      {},
+      { from: "ops@unrelated.com", subject: "IHERB shipment", body: "Please route DC# 1234 for this IHERB order.", messageId: "m1" },
+      {},
+    );
+    expect(result).toBeNull();
+  });
+
+  it("still resolves IHERB cleanly when no DC-number resolver also fires", () => {
+    const { helpers } = loadInsertHelpers({});
+    const result = helpers.resolveOutboundTargetV2_(
+      {},
+      { from: "ops@unrelated.com", subject: "IHERB shipment", body: "New IHERB order attached.", messageId: "m2" },
+      {},
+    );
+    expect(result).toEqual({ sheet: "IHERB", customer: "IHERB" });
   });
 });

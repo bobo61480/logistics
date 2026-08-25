@@ -137,6 +137,26 @@ describe("getOrCreateShipmentDocsFolderV2_", () => {
     const helpers = loadFolderHelpers();
     expect(helpers.sanitizeDriveFolderNameV2_('A/B:C*D?E"F<G>H|I')).toBe("A B C D E F G H I");
   });
+
+  // Regression for a Codex review finding: a shipment's first email often
+  // carries only an invoice/PO; a later email for the same shipment adds a
+  // carrier-assigned PRO/BOL. Preferring invoice keeps both emails naming
+  // the SAME folder instead of splitting the shipment's documents across
+  // two the moment a PRO/BOL becomes known.
+  it("prefers invoice over pro for folder naming, so a later PRO/BOL doesn't split an existing shipment's documents", () => {
+    const root = new FakeFolder("root-id", "ROOT");
+    const helpers = loadFolderHelpers({ "root-id": root });
+    const meta = { subject: "Shipment update", date: new Date("2026-01-01") };
+    const first = helpers.getOrCreateShipmentDocsFolderV2_("outbound", "MEGA MART", [{ invoice: "INV001" }], {}, meta);
+    const second = helpers.getOrCreateShipmentDocsFolderV2_(
+      "outbound",
+      "MEGA MART",
+      [{ invoice: "INV001", pro: "PRO999" }],
+      {},
+      meta,
+    );
+    expect(second).toBe(first);
+  });
 });
 
 describe("findExistingInboundDocsFolderV2_", () => {

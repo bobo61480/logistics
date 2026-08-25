@@ -924,13 +924,22 @@ function getOrCreateShipmentDocsFolderV2_(direction, customerName, records, cont
   return childFolderV2_(bucketFolder, shipmentDocsLeafNameV2_(records, context, meta));
 }
 
+// invoice/PO before pro/BOL: an invoice or PO number is typically assigned
+// at order time, while a carrier PRO/BOL is often assigned later at
+// pickup — checking invoice first keeps a shipment's later emails
+// resolving to the SAME folder name once a PRO/BOL is additionally known,
+// instead of switching folders the moment it appears (Codex review on PR
+// #103). This doesn't fully solve identifier-evolution folder splitting
+// in every order (e.g. a first email with only a PRO, a later one with
+// only an invoice, would still split) — a complete fix needs a real
+// existing-folder lookup across all 4 outbound sheets, out of scope here.
 function shipmentDocsLeafNameV2_(records, context, meta) {
   var names = uniqueTextV2_((records || []).map(function (record) {
-    return record.shipmentNo || record.hbl || record.container || record.mbl || record.pro || record.invoice || "";
+    return record.shipmentNo || record.hbl || record.container || record.mbl || record.invoice || record.pro || "";
   }).filter(Boolean));
   var base = names.length === 1
     ? names[0]
-    : (context.shipmentNo || context.hbl || context.container || context.mbl || context.pro || context.invoice || meta.subject);
+    : (context.shipmentNo || context.hbl || context.container || context.mbl || context.invoice || context.pro || meta.subject);
   return sanitizeDriveFolderNameV2_(base || "EMAIL IMPORT " + Utilities.formatDate(meta.date, "America/Los_Angeles", "yyyyMMdd"));
 }
 

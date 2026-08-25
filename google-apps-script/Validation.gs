@@ -183,7 +183,8 @@ function commitApprovedPendingRow_(sheet, rowIndex1based, data, col) {
   record.note = data[col["Note"]] || record.note;
   var when = data[col["Ship Date / ETA"]];
   var kind = String(data[col["Kind"]] || "outbound").toLowerCase();
-  if (kind === "inbound") { record.eta = when || record.eta; upsertInboundEmailV2_(record, true); }
+  var upsert;
+  if (kind === "inbound") { record.eta = when || record.eta; upsert = upsertInboundEmailV2_(record, true); }
   // Multi-sheet, not the single-sheet upsertOutboundEmailV2_ shim: a human
   // reviewer approving a PENDING VERIFICATION row may have typed an IHERB/
   // ULTA/TJX-ROSS identity into the Customer cell (a bare DC# number, an
@@ -192,9 +193,27 @@ function commitApprovedPendingRow_(sheet, rowIndex1based, data, col) {
   // dryRun: false — a human has already approved this specific write by
   // setting the row's Status to APPROVED; the automatic-ingestion-only
   // safety gate does not apply to an explicit human decision.
-  else { record.shipDate = when || record.shipDate; upsertOutboundEmailAcrossSheetsV2_(record, true, OUTBOUND_INSERT_SHEETS_V2, false); }
+  else { record.shipDate = when || record.shipDate; upsert = upsertOutboundEmailAcrossSheetsV2_(record, true, OUTBOUND_INSERT_SHEETS_V2, false); }
+  // Only mark COMMITTED when the upsert actually matched or inserted —
+  // e.g. a tie among candidate rows returns matched:false, and the row's
+  // own approval would otherwise be silently discarded: Status flips to
+  // COMMITTED, the shipment is neither updated nor inserted anywhere, and
+  // the approval workflow has no way to retry it (Codex review on PR
+  // #103). Leaving Status at APPROVED means the next processApprovedPending()
+  // cycle retries it automatically — a real fix (a human correcting the
+  // ambiguous data) resolves on its own; a still-ambiguous one just keeps
+  // logging and retrying rather than vanishing.
+  if (!upsert || !upsert.matched) {
+    logPipeline_("PENDING APPROVAL COMMIT FAILED", record.customer || record.pro || record.invoice || "", JSON.stringify({
+      row: rowIndex1based,
+      kind: kind,
+      record: record
+    }));
+    return { committed: false };
+  }
   sheet.getRange(rowIndex1based, col["Status"] + 1).setValue("COMMITTED");
   sheet.getRange(rowIndex1based, 1, 1, VALIDATION.pendingHeaders.length).setBackground(VALIDATION.colors.committed);
+  return { committed: true };
 }
 
 /**
@@ -217,8 +236,7 @@ function processApprovedPending() {
       var status = String(data[r][col["Status"]] || "").trim().toUpperCase();
       var rowRange = sheet.getRange(r + 1, 1, 1, VALIDATION.pendingHeaders.length);
       if (status === "APPROVED") {
-        commitApprovedPendingRow_(sheet, r + 1, data[r], col);
-        committed++;
+        if (commitApprovedPendingRow_(sheet, r + 1, data[r], col).committed) committed++;
       } else if (status === "REJECTED") {
         rowRange.setBackground(VALIDATION.colors.rejected).setFontColor("#999999");
       }
@@ -285,9 +303,15 @@ function reviewPendingRow_(payload) {
     var rowRange = sheet.getRange(rowIndex1based, 1, 1, VALIDATION.pendingHeaders.length);
     if (decision === "approve") {
       sheet.getRange(rowIndex1based, col["Status"] + 1).setValue("APPROVED");
-      commitApprovedPendingRow_(sheet, rowIndex1based, data[r0], col);
+      var commitResult = commitApprovedPendingRow_(sheet, rowIndex1based, data[r0], col);
       SpreadsheetApp.flush();
-      return { ok: true, action: "approved", row: rowIndex1based, status: "COMMITTED" };
+      // Report what actually happened — a tie or other non-match leaves
+      // the row at APPROVED (retried automatically by the next
+      // processApprovedPending() cycle), not falsely reported as
+      // COMMITTED (Codex review on PR #103).
+      return commitResult.committed
+        ? { ok: true, action: "approved", row: rowIndex1based, status: "COMMITTED" }
+        : { ok: true, action: "approved", row: rowIndex1based, status: "APPROVED", warning: "Could not be matched or safely inserted yet — left approved for retry." };
     }
     sheet.getRange(rowIndex1based, col["Status"] + 1).setValue("REJECTED");
     rowRange.setBackground(VALIDATION.colors.rejected).setFontColor("#999999");

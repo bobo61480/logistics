@@ -166,6 +166,13 @@ var OUTBOUND_SHEET_SPECS_V2 = {
   "TJX/ROSS": {
     headerFinder: findTjxRossHeader_,
     matchers: [
+      // SHIPMENT # is this pipeline's own persisted identifier (written on
+      // every insert below) and the most stable one once assigned — a
+      // later email correcting the PO or BOL for the same shipment still
+      // carries the same shipment number, and without this matcher neither
+      // BOL nor PO# alone could find the row, so the live insert path
+      // would create a duplicate (Codex review on PR #103).
+      { col: "SHIPMENT #", field: "shipmentNo", weight: 130 },
       { col: "BOL", field: "pro", weight: 120 },
       { col: "PO#", field: "invoice", weight: 80 }
     ],
@@ -174,6 +181,7 @@ var OUTBOUND_SHEET_SPECS_V2 = {
       // field, so a row matched via BOL alone should still pick up a PO#
       // it didn't already have on file.
       { col: "PO#", field: "invoice", label: "PO#", overwrite: false },
+      { col: "SHIPMENT #", field: "shipmentNo", label: "Shipment #", overwrite: false },
       { col: "CARRIER", field: "carrier", label: "Carrier", overwrite: false },
       { col: "BOL", field: "pro", label: "BOL", overwrite: false }
     ],
@@ -223,16 +231,23 @@ function resolveOutboundTargetV2_(record, meta, context) {
   var customerHit = resolveCustomerFromEmailV2_(meta, context, record);
   if (customerHit) return { sheet: "WH Trucking Request", customer: customerHit.customer };
 
+  // ULTA/TJX-ROSS/IHERB are evaluated together, not as a fixed priority
+  // chain: a bare DC# number is a coincidence-prone signal (TJX/ROSS's
+  // directory is just numbers 3-6 digits long), so an IHERB notice whose
+  // "DC #" happens to also be a real TJX/ROSS store number must not
+  // silently lose to whichever resolver was checked first. Exactly one
+  // candidate firing is trusted; two or more is genuine conflicting
+  // evidence and must not be guessed between (Codex review on PR #103).
   var haystack = gmailCustomerResolutionTextV2_(meta, context, record);
+  var candidates = [];
   var ultaHit = resolveUltaDcFromEmailV2_(haystack);
-  if (ultaHit) return { sheet: "ULTA", customer: ultaHit.customer };
-
+  if (ultaHit) candidates.push({ sheet: "ULTA", customer: ultaHit.customer });
   var tjxHit = resolveTjxDcFromEmailV2_(haystack);
-  if (tjxHit) return { sheet: "TJX/ROSS", customer: tjxHit.customer };
+  if (tjxHit) candidates.push({ sheet: "TJX/ROSS", customer: tjxHit.customer });
+  if (isIherbContextV2_(meta)) candidates.push({ sheet: "IHERB", customer: "IHERB" });
 
-  if (isIherbContextV2_(meta)) return { sheet: "IHERB", customer: "IHERB" };
-
-  return null;
+  if (candidates.length !== 1) return null;
+  return candidates[0];
 }
 
 function isIherbContextV2_(meta) {
