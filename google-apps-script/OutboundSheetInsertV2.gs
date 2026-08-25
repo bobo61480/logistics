@@ -118,7 +118,15 @@ var OUTBOUND_SHEET_SPECS_V2 = {
     ],
     updateFields: [
       { col: "TRUCKING", field: "carrier", label: "Carrier", overwrite: false },
-      { col: "BOL", field: "pro", label: "BOL", overwrite: false }
+      { col: "BOL", field: "pro", label: "BOL", overwrite: false },
+      // Same reasoning as the insertFields comment below: PU/QTY blank on a
+      // matched row leaves it unschedulable and invisible to the existing
+      // IHERB pallet aggregation exactly like a blank insert would (Codex
+      // review round 4 on PR #103). PU (ship date) is overwrite:true to
+      // match WH Trucking Request/ULTA's own SHIP DATE field above; QTY is
+      // blank-fill like every other non-date identifier field here.
+      { col: "PU", field: "shipDate", label: "Ship Date", overwrite: true },
+      { col: "QTY", field: "qty", label: "Qty", overwrite: false }
     ],
     invoiceCol: "PO#",
     noteCol: null,
@@ -338,9 +346,14 @@ function upsertOutboundEmailAcrossSheetsV2_(record, allowInsert, sheetNames, dry
   var insertSs = SpreadsheetApp.openById(GMAIL_PIPELINE.masterId);
   var insertSheet = insertSs.getSheetByName(insertSheetName);
   if (!insertSheet) return { matched: false, action: "noop" };
-  var insertScanRows = insertSheet.getRange(1, 1, Math.min(insertSheet.getLastRow(), 10), Math.max(insertSheet.getLastColumn(), 1)).getDisplayValues();
-  var insertHeader = insertSpec.headerFinder(insertScanRows);
-  return insertOutboundRowV2_(insertSheetName, insertSheet, insertHeader, record, insertSpec, dryRun);
+  // Full range, not just a 10-row header scan: insertOutboundRowV2_ needs
+  // every row's matcher-column content to find the last actual business
+  // row (see its own comment for why getLastRow() alone isn't safe).
+  var insertLastRow = Math.max(insertSheet.getLastRow(), 5);
+  var insertLastCol = Math.max(insertSheet.getLastColumn(), 24);
+  var insertData = insertSheet.getRange(1, 1, insertLastRow, insertLastCol).getDisplayValues();
+  var insertHeader = insertSpec.headerFinder(insertData);
+  return insertOutboundRowV2_(insertSheetName, insertSheet, insertHeader, insertData, record, insertSpec, dryRun);
 }
 
 function outboundMatchScoreV2_(row, record, map, matchers) {
@@ -392,7 +405,31 @@ function updateOutboundRowV2_(sheet, rowNumber, oldRow, record, map, spec) {
   return { changed: changed, changes: changes };
 }
 
-function insertOutboundRowV2_(sheetName, sheet, header, record, spec, dryRun) {
+/**
+ * Finds the last row actually holding shipment content in any of the
+ * sheet's own matcher columns (PRO#/invoice/BOL/PO#/shipment#, whichever
+ * the spec defines) — the same "last business row" concept
+ * WmsTruckingSyncV2.gs already uses for this exact reason: a tab can carry
+ * formula/template/footer content below its real data, and getLastRow()
+ * follows THAT, not the last real shipment row. Inserting after
+ * getLastRow() in that case lands the new row outside the contiguous
+ * business table (and past whatever fixed-range readers assume), and picks
+ * that trailing content as the exemplar row instead of a real one (Codex
+ * review round 4 on PR #103).
+ */
+function lastOutboundBusinessRowV2_(data, header, matchers) {
+  var lastBusinessRow = header.rowIndex + 1;
+  for (var r = header.rowIndex + 1; r < data.length; r++) {
+    var hasContent = matchers.some(function (m) {
+      var col = header.map[m.col];
+      return col !== undefined && String(data[r][col] || "").trim() !== "";
+    });
+    if (hasContent) lastBusinessRow = r + 1;
+  }
+  return lastBusinessRow;
+}
+
+function insertOutboundRowV2_(sheetName, sheet, header, data, record, spec, dryRun) {
   if (dryRun) {
     logOutboundInsertDryRunV2_(sheetName, record);
     // matched:false, not true — a dry-run "would insert" is not a commit.
@@ -427,10 +464,11 @@ function insertOutboundRowV2_(sheetName, sheet, header, record, spec, dryRun) {
     newRow[header.map[spec.statusCol]] = insertStatus || "Work in Progress";
   }
 
-  var startRow = Math.max(sheet.getLastRow() + 1, header.rowIndex + 2);
+  var lastBusinessRow = lastOutboundBusinessRowV2_(data, header, spec.matchers);
+  var startRow = lastBusinessRow + 1;
   sheet.getRange(startRow, 1, 1, width).setValues([newRow]);
-  var exemplarRow = startRow - 1;
-  if (exemplarRow > header.rowIndex + 1) {
+  var exemplarRow = Math.max(header.rowIndex + 2, lastBusinessRow);
+  if (exemplarRow > header.rowIndex + 1 && exemplarRow !== startRow) {
     var exemplarRange = sheet.getRange(exemplarRow, 1, 1, width);
     var newRange = sheet.getRange(startRow, 1, 1, width);
     // All three paste types, matching WmsTruckingSyncV2.gs's exemplar-row

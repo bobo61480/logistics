@@ -383,4 +383,16 @@ describe("Apps Script production integrity", () => {
     expect(pipeline).toContain("var isWeakBroadenedMatch = isBroadenedOnly && !records.length;");
     expect(pipeline).toContain("if (documentAttachments.length && !isWeakBroadenedMatch) {");
   });
+
+  it("marks a resolved specialized-sheet record as outbound, not just customer/DC-tagged", () => {
+    const pipeline = read("google-apps-script/GmailPipelineV2.gs");
+    // Codex review round 4 on PR #103: resolving a customer/DC identity set
+    // context.customer but left context.kind blank for a specialized
+    // (ULTA/IHERB/TJX-ROSS) notice with no generic outbound marker — the
+    // attachment parsers' own `context.kind || "inbound"` default then
+    // still classified the record as inbound and could insert it into
+    // IMPORTS instead of the resolved sheet.
+    expect(pipeline).toContain("context.customer = resolvedTarget.customer;");
+    expect(pipeline).toContain('context.kind = "outbound";');
+  });
 });

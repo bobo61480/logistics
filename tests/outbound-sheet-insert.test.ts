@@ -415,6 +415,54 @@ describe("upsertOutboundEmailAcrossSheetsV2_", () => {
     expect(result).toMatchObject({ matched: true, action: "updated" });
     expect(fakeSheets["TJX/ROSS"].setCalls.some((c) => c.value === "11573404")).toBe(true);
   });
+
+  // Regression for a Codex round-4 finding: RJl/insertFields already fixed
+  // the INSERT path to populate IHERB's PU/QTY, but a MATCHED existing row
+  // with blank PU/QTY had no way to pick those values up at all — updateFields
+  // only refreshed TRUCKING/BOL, silently discarding an incoming shipDate/qty.
+  it("populates IHERB's PU (scheduling date) and QTY (pallet count) on a matched row too, not just on insert", () => {
+    const iherbRows = [
+      ["PO#", "BOL", "QTY", "FROM", "TO", "APPT #", "PU", "DELIVERY APPT", "VALUE", "TRUCKING", "RATE", "INVOICE", "STATUS"],
+      ["4500999999", "", "", "", "", "", "", "", "", "", "", "", "Work in Progress"],
+    ];
+    const { helpers, fakeSheets } = loadInsertHelpers({ IHERB: iherbRows });
+    const result = helpers.upsertOutboundEmailAcrossSheetsV2_(
+      { customer: "IHERB", invoice: "4500999999", shipDate: "08/25/2026", qty: "18" },
+      false,
+      ["IHERB"],
+      false,
+    );
+    expect(result).toMatchObject({ matched: true, action: "updated" });
+    expect(fakeSheets["IHERB"].setValuesCalls).toHaveLength(0); // no duplicate inserted
+    expect(fakeSheets["IHERB"].setCalls.some((c) => c.value === "18")).toBe(true);
+    expect(fakeSheets["IHERB"].setCalls.some((c) => c.value === "08/25/2026")).toBe(true);
+  });
+
+  // Regression for a Codex round-4 finding: getLastRow() follows whatever
+  // trailing content a tab has below its real shipment rows (a template or
+  // footer row), not the last real business row — the established WH
+  // importer in WmsTruckingSyncV2.gs derives its own "last business row"
+  // from the identifier columns for exactly this reason.
+  it("inserts after the last real shipment row, not after unrelated trailing footer content", () => {
+    const rows = whTruckingRows([
+      ["MEGA MART", "IN00100000", "", "08/10/2026", "", "", "", "", "", "", "", "", "", "", "", "", "XPO", "", "PRO100", "", "Work in Progress"],
+      ["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "TOTALS BELOW"],
+    ]);
+    const { helpers, fakeSheets } = loadInsertHelpers({ "WH Trucking Request": rows });
+    const result = helpers.upsertOutboundEmailAcrossSheetsV2_(
+      { customer: "TOKTOK BEAUTY", shipDate: "08/25/2026", invoice: "IN00999999", carrier: "XPO" },
+      true,
+      ["WH Trucking Request"],
+      false,
+    );
+    expect(result).toMatchObject({ matched: true, action: "inserted" });
+    // Row 4 is the footer ("TOTALS BELOW"); the new shipment row must land
+    // at row 4, overwriting/using row 3 (the real last shipment row) as its
+    // exemplar — never appended after the footer at row 5.
+    expect(result.row).toBe(4);
+    const written = fakeSheets["WH Trucking Request"].setValuesCalls[0];
+    expect(written.row).toBe(4);
+  });
 });
 
 describe("resolveOutboundTargetV2_", () => {

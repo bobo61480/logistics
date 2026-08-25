@@ -345,7 +345,16 @@ function processLogisticsMessageV2_(message, isBroadenedOnly) {
   // realistic non-WH-Trucking emails (Codex review on PR #103).
   if (context.kind !== "inbound") {
     var resolvedTarget = resolveOutboundTargetV2_({}, meta, context);
-    if (resolvedTarget) context.customer = resolvedTarget.customer;
+    if (resolvedTarget) {
+      context.customer = resolvedTarget.customer;
+      // Without this, context.kind stays "" for exactly the specialized
+      // (ULTA/IHERB/TJX-ROSS) emails this resolver exists for, so the
+      // attachment parsers' own `context.kind || "inbound"` default still
+      // classified a confidently-resolved record as inbound and could
+      // insert it into IMPORTS instead of the resolved sheet (Codex review
+      // round 4 on PR #103).
+      context.kind = "outbound";
+    }
   }
   var attachments = message.getAttachments({ includeInlineImages: false, includeAttachments: true }) || [];
   var records = [];
