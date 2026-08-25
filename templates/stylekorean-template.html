@@ -660,6 +660,7 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
   :root:not([data-theme="light"]) .search { border-color: var(--hairline-strong); background: var(--surface-inset); }
   :root:not([data-theme="light"]) .search input { color: var(--text); }
   :root:not([data-theme="light"]) .search span { color: var(--text-faint); }
+  :root:not([data-theme="light"]) .finished-toggle { color: var(--text-soft); }
   :root:not([data-theme="light"]) .source-legend { border-color: var(--hairline-strong); background: var(--surface); }
   :root:not([data-theme="light"]) .source-legend > strong { color: var(--text); }
   :root:not([data-theme="light"]) .source-legend span { color: var(--text-soft); }
@@ -668,6 +669,7 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
 :root[data-theme="dark"] .search { border-color: var(--hairline-strong); background: var(--surface-inset); }
 :root[data-theme="dark"] .search input { color: var(--text); }
 :root[data-theme="dark"] .search span { color: var(--text-faint); }
+:root[data-theme="dark"] .finished-toggle { color: var(--text-soft); }
 :root[data-theme="dark"] .source-legend { border-color: var(--hairline-strong); background: var(--surface); }
 :root[data-theme="dark"] .source-legend > strong { color: var(--text); }
 :root[data-theme="dark"] .source-legend span { color: var(--text-soft); }
@@ -1524,8 +1526,10 @@ try {
 // RENDER ENGINE — Builds dashboard from STYLEKOREAN_DATA
 // Call renderDashboard() after DOM is ready or after data refresh.
 // ================================================================
+var _lastDashboardData = null;
 function renderDashboard(data) {
-  data = data || STYLEKOREAN_DATA;
+  data = data || _lastDashboardData || STYLEKOREAN_DATA;
+  _lastDashboardData = data;
 
   // Update metric cards
   var metricEls = document.querySelectorAll('.metrics article strong');
@@ -1565,7 +1569,7 @@ function renderDashboard(data) {
         '<td><a href="#">' + escapeHtml(row.shipNo || row.shipmentId || '') + '</a></td>' +
         '<td>' + escapeHtml(row.container || '—') + '</td>' +
         '<td>' + escapeHtml(row.vessel || '') + '</td>' +
-        '<td><span class="mode-pill ' + escapeHtml((row.mode || '').toLowerCase()) + '">' + escapeHtml((row.mode || '').toUpperCase()) + '</span></td>' +
+        '<td><span class="mode-pill ' + (row.mode || '').toLowerCase().replace(/[^a-z0-9-]/g, '') + '">' + escapeHtml((row.mode || '').toUpperCase()) + '</span></td>' +
         '<td>' + escapeHtml(row.eta || '') + '</td>' +
         '<td><span class="status-pill ' + statusClass(row.status) + '">' + escapeHtml((row.status || '').toUpperCase()) + '</span></td>' +
         '<td>' + escapeHtml(invoiceStr) + '</td>';
@@ -1580,9 +1584,12 @@ function renderDashboard(data) {
     data.parcels.forEach(function(p) {
       var card = document.createElement('div');
       card.className = 'parcel-card';
+      var pStatus = (p.trackingStatus || p.status || '').toLowerCase();
+      card.setAttribute('data-status', pStatus);
       card.innerHTML =
         '<div class="parcel-summary">' +
           '<strong>' + escapeHtml(p.carrier || '') + '</strong>' +
+          '<span class="parcel-title">' + escapeHtml(p.title || '') + '</span>' +
           '<span class="parcel-invoice">' + escapeHtml(p.invoice || '') + '</span>' +
         '</div>' +
         '<div class="parcel-detail">' +
@@ -1634,8 +1641,11 @@ function initFilters() {
     var parcels = document.querySelectorAll('.parcel-card');
     parcels.forEach(function(card) {
       var text = card.textContent.toLowerCase();
+      var pStatus = (card.getAttribute('data-status') || '').toLowerCase();
+      var isFinished = finished.some(function(f) { return pStatus.indexOf(f) !== -1; });
       var matchesQuery = !query || text.indexOf(query) !== -1;
-      card.style.display = matchesQuery ? '' : 'none';
+      var matchesFinished = showFinished || !isFinished;
+      card.style.display = (matchesQuery && matchesFinished) ? '' : 'none';
     });
   }
 
