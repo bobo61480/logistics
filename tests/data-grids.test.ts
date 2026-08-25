@@ -42,6 +42,11 @@ describe("Data Grids tabbed section", () => {
     expect(dataGrids).toContain('item.invoice || item.po || item.customer || item.title || "—"');
   });
 
+  it("shows an actual carrier name or vessel instead of a generic shipping mode", () => {
+    expect(dataGrids).toContain('item.carrier || item.vessel || "—"');
+    expect(dataGrids).not.toContain('item.carrier || item.shippingMethod || "—"');
+  });
+
   it("scopes its dark-theme panel-heading override to .data-grids-panel, avoiding the PR-3 leak class", () => {
     expect(css).toContain('[data-theme="dark"] .data-grids-panel .panel-heading');
     expect(css).not.toMatch(/\[data-theme="dark"\]\s+\.panel-heading\s*[,{]/);

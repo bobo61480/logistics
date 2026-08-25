@@ -143,7 +143,7 @@ function ScheduleTable({
             <tr key={item.id}>
               <td className="mono">{item.shipmentNo || item.title || item.reference || "—"}</td>
               <td className="mono">{item.invoice || item.po || item.customer || item.title || "—"}</td>
-              <td>{item.carrier || item.shippingMethod || "—"}</td>
+              <td>{item.carrier || item.vessel || "—"}</td>
               <td className="mono">{item.trackingNumber || item.pro || "—"}</td>
               <td className="mono">{item.dateText || "—"}</td>
               <td>
