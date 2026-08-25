@@ -1301,7 +1301,14 @@ footer strong { margin-right: 5px; padding: 3px 6px; background: var(--ink); col
   color: #fff;
   box-shadow: 0 10px 30px rgba(0, 0, 0, .2);
   font: 500 11px/1.45 "IBM Plex Mono", monospace;
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity .6s ease, transform .6s ease;
 }
+
+.toast.fade-out { opacity: 0; transform: translateY(8px); }
+.transient-error-message { opacity: 1; transition: opacity .6s ease; }
+.transient-error-fade { opacity: 0 !important; }
 
 @media (max-width: 900px) {
   .site-shell { width: min(100% - 14px, 1660px); padding-top: 7px; }

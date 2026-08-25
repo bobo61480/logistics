@@ -2706,6 +2706,7 @@ export default function Home() {
   const [period, setPeriod] = useState<"mtd" | "ytd">("mtd");
   const [savingId, setSavingId] = useState("");
   const [notice, setNotice] = useState("");
+  const [noticeFading, setNoticeFading] = useState(false);
   const [kpis, setKpis] = useState<KpiSnapshot>(EMPTY_KPIS);
   const [inboundInventory, setInboundInventory] = useState<InventoryItem[]>([]);
   const [warehouseStock, setWarehouseStock] = useState<InventoryItem[]>([]);
@@ -2723,6 +2724,20 @@ export default function Home() {
       return date;
     });
   }, []);
+
+  useEffect(() => {
+    if (!notice) {
+      setNoticeFading(false);
+      return;
+    }
+    setNoticeFading(false);
+    const fadeTimer = window.setTimeout(() => setNoticeFading(true), 2400);
+    const clearTimer = window.setTimeout(() => setNotice(""), 3000);
+    return () => {
+      window.clearTimeout(fadeTimer);
+      window.clearTimeout(clearTimer);
+    };
+  }, [notice]);
 
   const load = useCallback(async () => {
     if (loadInFlight.current) return;
@@ -3012,7 +3027,6 @@ export default function Home() {
         current.map((record) => (record.id === item.id ? { ...record, status } : record)),
       );
       setNotice(`${item.title} updated to ${status}.`);
-      window.setTimeout(() => setNotice(""), 4500);
     } catch (statusError) {
       setNotice(
         statusError instanceof Error
@@ -3404,7 +3418,7 @@ export default function Home() {
         <p className="mono">AUTO-REFRESH 30 MIN · STATUS EDITS SYNC TO SOURCE ROWS</p>
       </footer>
 
-      {notice && <div className="toast" role="status">{notice}</div>}
+      {notice && <div className={`toast${noticeFading ? " fade-out" : ""}`} role="status">{notice}</div>}
     </main>
   );
 }
