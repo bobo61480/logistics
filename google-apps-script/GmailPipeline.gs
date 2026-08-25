@@ -14,6 +14,7 @@ var GMAIL_PIPELINE = {
   outboundSheet: "WH Trucking Request",
   warehouseDocumentsFolderId: "1YBWV9lXAasRt7JolWxk199dPkGbx60M9",
   importShipmentsFolderId: "1AhGI2qM2pGFXSb406OY6dsOaN8unlGDM",
+  outboundShipmentsFolderId: "1i054OYAhOR169cUUSqyRlSEVgboUx0X4",
   labels: {
     processed: "sk-logistics/processed",
     pending: "sk-logistics/pending-verification",

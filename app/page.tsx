@@ -342,7 +342,7 @@ function startOfToday() {
 
 // Five-bucket classification covering every value in LOGISTICS_STATUS_OPTIONS
 // (lib/domain/status.ts) with no gaps — see tests/status-pills.test.ts, which
-// asserts each of the 16 canonical statuses maps to exactly one bucket.
+// asserts every canonical status maps to exactly one bucket.
 // Regex-based (not an exact lookup) so it still classifies reasonably for
 // free-text status variants real sheet data can contain beyond the
 // canonical list.

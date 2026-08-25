@@ -28,11 +28,11 @@ const SPREADSHEET_ID = "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc";
 const WMS_SPREADSHEET_ID = "14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I";
 const NATIONAL_SPREADSHEET_ID = "12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8";
 
-const OUTBOUND_STATUS = ["", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "SHIPPING", "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED"];
-const INBOUND_STATUS = ["", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "SHIPPING", "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED", "N/A", "Customs Clearance", "FDA Review / Hold", "FWS Review / Hold", "RECEIVED/FDA HOLD/REVIEW", "FDA Detained", "AQI Examination", "Delayed"];
+const OUTBOUND_STATUS = ["", "SCHEDULE REQUESTED", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "PICKED UP/SHIPPED", "IN TRANSIT", "IN TRANSIT/STOPOVER", "SHIPPING", "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED"];
+const INBOUND_STATUS = ["", "SCHEDULE REQUESTED", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "PICKED UP/SHIPPED", "IN TRANSIT", "IN TRANSIT/STOPOVER", "SHIPPING", "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED", "N/A", "Customs Clearance", "FDA Review / Hold", "FWS Review / Hold", "RECEIVED/FDA HOLD/REVIEW", "FDA Detained", "AQI Examination", "Delayed"];
 const ALLOWED_SHEETS = ["WH Trucking Request", "B2B/E-COM TRUCKING", "TRANSFERS", "ULTA", "IHERB", "IMPORTS", "NATIONAL ORDER PROGRESS", "Outbound Shipping Schedule", "TJX/ROSS"];
 
-const COMPLETED_STATUSES = ["SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED"];
+const COMPLETED_STATUSES = ["RECEIVED", "CANCELLED", "COMPLETED"];
 
 // Required by transferInboundInventory_ -- restored from the pre-2026-08-07 version
 // of this file after it was dropped during a source reconciliation. See
@@ -509,7 +509,7 @@ function isWmsFreightMethod_(value) {
   const method = String(value || "").trim().toUpperCase();
   if (!method) return false;
   if (/\b(UPS|USPS|DHL|FEDEX|AMAZON)\b/.test(method)) return false;
-  return /\b(TRUCKING|LTL|FREIGHT)\b/.test(method) || method.indexOf("LOCAL DELIVERY") !== -1;
+  return method === "TK" || /\b(TRUCKING|LTL|FREIGHT)\b/.test(method) || method.indexOf("LOCAL DELIVERY") !== -1;
 }
 
 function isWmsActiveStatus_(value) {
@@ -643,9 +643,13 @@ function addWebsiteStatusDropdownToAllSourceSheets() {
   ];
 
   const STATUS_LIST = [
+    "SCHEDULE REQUESTED",
     "SCHEDULED",
     "WORK IN PROGRESS",
     "PENDING",
+    "PICKED UP/SHIPPED",
+    "IN TRANSIT",
+    "IN TRANSIT/STOPOVER",
     "SHIPPING",
     "SHIPPED",
     "DELIVERED",
