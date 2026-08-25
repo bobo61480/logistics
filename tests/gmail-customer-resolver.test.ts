@@ -121,6 +121,60 @@ describe("resolveCustomerFromEmailV2_", () => {
     expect(result).toBeNull();
   });
 
+  // Round 2 of the same Codex finding: the bypass was specifically in the
+  // exact-name tier — a BARE, unqualified candidate ("MEGA MART", no
+  // location on file at all) must not match an email naming a MORE
+  // specific, different location ("MEGA MART (FREMONT)") just because the
+  // padded-substring test can't tell a trailing location qualifier apart
+  // from any other trailing word once parens collapse to plain spaces.
+  it("does not resolve a bare unqualified candidate when the email names a specific different location", () => {
+    const dbRows = [HEADER, ["MEGA MART", "1 Main St", "Jane", ""]];
+    const { helpers } = loadResolverHelpers(dbRows);
+    const result = helpers.resolveCustomerFromEmailV2_(
+      { from: "ops@unrelated.com", subject: "New shipment for Mega Mart (Fremont)", body: "", messageId: "m14" },
+      {},
+      {},
+    );
+    expect(result).toBeNull();
+  });
+
+  it("still resolves a bare unqualified candidate when the email names it plainly, with no trailing location", () => {
+    const dbRows = [HEADER, ["MEGA MART", "1 Main St", "Jane", ""]];
+    const { helpers } = loadResolverHelpers(dbRows);
+    const result = helpers.resolveCustomerFromEmailV2_(
+      { from: "ops@unrelated.com", subject: "New shipment for Mega Mart", body: "", messageId: "m15" },
+      {},
+      {},
+    );
+    expect(result?.customer).toBe("MEGA MART");
+  });
+
+  // Regression for a Codex review finding: when the text tier itself finds
+  // internally conflicting evidence (two different customers both
+  // plausibly named), that must block the whole resolution — including a
+  // confident sender match — not be silently treated as "no text signal."
+  it("rejects a confident sender match when the text tier is internally ambiguous", () => {
+    const dbRows = [
+      HEADER,
+      ["MEGA MART", "1 Main St", "Jane", "orders@megamart.com"],
+      ["TOKTOK BEAUTY", "2 Oak Ave", "Jack", ""],
+      ["ROYAL IMEX INC", "3 Pine Rd", "Jill", ""],
+    ];
+    const { helpers, loggedEvents } = loadResolverHelpers(dbRows);
+    const result = helpers.resolveCustomerFromEmailV2_(
+      {
+        from: "orders@megamart.com",
+        subject: "Shipment update",
+        body: "Please coordinate with TokTok Beauty and Royal Imex Inc on this load.",
+        messageId: "m16",
+      },
+      {},
+      {},
+    );
+    expect(result).toBeNull();
+    expect(loggedEvents.some((e) => e.event === "GMAIL V2 CUSTOMER RESOLVE AMBIGUOUS")).toBe(true);
+  });
+
   // The exact same location DOES resolve, and legal-suffix/ampersand
   // differences between the stored name and the email text wash out via
   // the shared light normalization (Codex review: haystack normalization).

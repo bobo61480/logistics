@@ -48,7 +48,18 @@ function resolveCustomerFromEmailV2_(meta, context, record) {
 
     var senderHit = matchCustomerBySenderV2_(meta.from, dbValues, dbHeader);
     var haystack = gmailCustomerResolutionTextV2_(meta, context, record);
-    var textHit = matchCustomerByTextV2_(haystack, records);
+    var textOutcome = matchCustomerByTextV2_(haystack, records);
+
+    // The text tier finding INTERNALLY conflicting evidence (two customers
+    // both plausibly mentioned) must never be silently discarded in favor
+    // of a confident sender match — that conflicting evidence is itself a
+    // reason not to trust anything here, not merely "no text signal"
+    // (Codex review, round 2 on PR #102).
+    if (textOutcome && textOutcome.ambiguous) {
+      logCustomerResolutionAmbiguousV2_(meta, senderHit, null);
+      return null;
+    }
+    var textHit = textOutcome;
 
     if (senderHit && textHit && senderHit.record.rowNumber !== textHit.record.rowNumber) {
       logCustomerResolutionAmbiguousV2_(meta, senderHit, textHit);
@@ -125,16 +136,21 @@ function matchCustomerBySenderV2_(fromHeader, dbValues, dbHeader) {
  * collapsing an unrelated phrase into a false match (e.g. "Mega Corp Mart
  * Inc" stripping down to "Mega Mart").
  */
+var TEXT_MATCH_AMBIGUOUS_V2 = { ambiguous: true };
+
 function matchCustomerByTextV2_(haystack, records) {
   if (!haystack) return null;
   var text = normalizedCustomerHaystackV2_(haystack);
   if (text === "  ") return null;
 
   var exactMatches = records.filter(function (record) {
-    return customerKeyAppearsV2_(text, normalizedCustomerHaystackV2_(record.name).trim());
+    return customerNameAppearsExactlyV2_(text, record.name);
   });
   if (exactMatches.length === 1) return { record: exactMatches[0], method: "text-exact", confidence: "high" };
-  if (exactMatches.length > 1) return null;
+  // 2+ literal full names mentioned is real conflicting evidence, not mere
+  // absence of a signal — must block the whole resolution, including a
+  // confident sender match (Codex review, round 2 on PR #102).
+  if (exactMatches.length > 1) return TEXT_MATCH_AMBIGUOUS_V2;
 
   var byCanonicalKey = {};
   records.forEach(function (record) {
@@ -146,12 +162,41 @@ function matchCustomerByTextV2_(haystack, records) {
   });
 
   var matchedKeys = Object.keys(byCanonicalKey).filter(function (key) {
-    return customerKeyAppearsV2_(text, key);
+    return customerKeyAppearsWithoutTrailingLocationV2_(text, key);
   });
-  if (matchedKeys.length !== 1) return null;
+  if (matchedKeys.length === 0) return null;
+  if (matchedKeys.length > 1) return TEXT_MATCH_AMBIGUOUS_V2;
   var candidates = byCanonicalKey[matchedKeys[0]];
-  if (candidates.length !== 1) return null;
+  if (candidates.length !== 1) return TEXT_MATCH_AMBIGUOUS_V2;
   return { record: candidates[0], method: "text-brand", confidence: "medium" };
+}
+
+/**
+ * Exact-tier match for a candidate with NO location qualifier of its own
+ * (e.g. bare "MEGA MART") must reject a haystack mention that is itself
+ * MORE specific — "MEGA MART (FREMONT)" — since that names a different,
+ * possibly not-yet-on-file location, not the bare candidate (Codex review,
+ * round 2 on PR #102: the padded-substring test alone can't tell these
+ * apart, since parens/dashes collapse to plain spaces during
+ * normalization same as any other punctuation). A candidate that DOES
+ * carry its own qualifier (e.g. "MEGA MART (PALO ALTO)") is unaffected:
+ * its own key already includes the location marker, so it only matches
+ * text naming that same specific location.
+ */
+function customerNameAppearsExactlyV2_(paddedHaystack, name) {
+  var key = normalizedCustomerHaystackV2_(name).trim();
+  if (hasCustomerLocationQualifierV2_(name)) return customerKeyAppearsV2_(paddedHaystack, key);
+  return customerKeyAppearsWithoutTrailingLocationV2_(paddedHaystack, key);
+}
+
+function customerKeyAppearsV2_(paddedHaystack, key) {
+  if (!key) return false;
+  return paddedHaystack.indexOf(" " + key + " ") !== -1;
+}
+
+function customerKeyAppearsWithoutTrailingLocationV2_(paddedHaystack, key) {
+  if (!customerKeyAppearsV2_(paddedHaystack, key)) return false;
+  return paddedHaystack.indexOf(" " + key + " " + CUSTOMER_LOCATION_MARKER_V2) === -1;
 }
 
 /**
@@ -166,17 +211,33 @@ function hasCustomerLocationQualifierV2_(name) {
 }
 
 /**
+ * Marks the position of a location qualifier (an opening paren, or a
+ * "- N" suffix) so it survives the generic punctuation-to-space collapse
+ * below as a distinguishable token, instead of becoming indistinguishable
+ * from any other word-separating space. Applied identically to both a
+ * candidate's own name and the email haystack, so "MEGA MART (PALO ALTO)"
+ * and "MEGA MART (FREMONT)" both retain the marker right after "MEGA
+ * MART" — letting customerKeyAppearsWithoutTrailingLocationV2_ detect that
+ * a BARE "MEGA MART" key is immediately followed by a location qualifier
+ * it doesn't itself include, and refuse to treat that as a match.
+ */
+var CUSTOMER_LOCATION_MARKER_V2 = "SKLOCQUALIFIERV2";
+
+/**
  * Lighter-touch than normalizeWmsCustomerKey_: uppercases, expands "&" to
- * "AND", and collapses punctuation/whitespace to single spaces, but does
- * NOT strip legal suffixes (INC/LLC/CORP/...) — that step is only safe to
- * apply to a known customer-name field, not arbitrary email text (see the
- * function doc comment above). Padded with a leading/trailing space so
- * every comparison below can use a simple, unambiguous substring test.
+ * "AND", marks location-qualifier positions (see above), and collapses
+ * remaining punctuation/whitespace to single spaces — but does NOT strip
+ * legal suffixes (INC/LLC/CORP/...), since that's only safe to apply to a
+ * known customer-name field, not arbitrary email text (see the function
+ * doc comment above). Padded with a leading/trailing space so every
+ * comparison below can use a simple, unambiguous substring test.
  */
 function normalizedCustomerHaystackV2_(text) {
   return " " + String(text || "")
     .toUpperCase()
     .replace(/&/g, " AND ")
+    .replace(/\(/g, " " + CUSTOMER_LOCATION_MARKER_V2 + " ")
+    .replace(/-\s*(\d+)/g, " " + CUSTOMER_LOCATION_MARKER_V2 + " $1")
     .replace(/[^A-Z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim() + " ";
@@ -223,7 +284,12 @@ function logCustomerResolutionAmbiguousV2_(meta, senderHit, textHit) {
   writeLog_("GMAIL V2 CUSTOMER RESOLVE AMBIGUOUS", meta && meta.subject, JSON.stringify({
     messageId: meta && meta.messageId,
     sender: meta && meta.from,
-    senderMatch: senderHit.record.name,
-    textMatch: textHit.record.name
+    senderMatch: senderHit ? senderHit.record.name : "",
+    // textHit is null both when the text tier found nothing and when it
+    // found internally conflicting evidence — the caller only reaches
+    // this log function in the latter case (or a real tier-disagreement),
+    // so a blank value here specifically means "text tier itself was
+    // ambiguous," not "no text signal at all."
+    textMatch: textHit ? textHit.record.name : ""
   }));
 }
