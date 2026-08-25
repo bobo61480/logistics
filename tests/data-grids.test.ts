@@ -35,6 +35,13 @@ describe("Data Grids tabbed section", () => {
     expect(page).toContain("wms={wmsGridItems}");
   });
 
+  it("shows the shipment identity under Reference and moves the former value to Invoice #", () => {
+    expect(dataGrids).toContain("<th>Reference</th>");
+    expect(dataGrids).toContain("<th>Invoice #</th>");
+    expect(dataGrids).toContain('item.shipmentNo || item.title || item.reference || "—"');
+    expect(dataGrids).toContain('item.invoice || item.po || item.customer || item.title || "—"');
+  });
+
   it("scopes its dark-theme panel-heading override to .data-grids-panel, avoiding the PR-3 leak class", () => {
     expect(css).toContain('[data-theme="dark"] .data-grids-panel .panel-heading');
     expect(css).not.toMatch(/\[data-theme="dark"\]\s+\.panel-heading\s*[,{]/);

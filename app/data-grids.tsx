@@ -131,6 +131,7 @@ function ScheduleTable({
         <thead>
           <tr>
             <th>Reference</th>
+            <th>Invoice #</th>
             <th>Carrier</th>
             <th>Tracking / PRO #</th>
             <th>Date</th>
@@ -140,7 +141,8 @@ function ScheduleTable({
         <tbody>
           {items.map((item) => (
             <tr key={item.id}>
-              <td className="mono">{item.invoice || item.po || item.customer || item.title}</td>
+              <td className="mono">{item.shipmentNo || item.title || item.reference || "—"}</td>
+              <td className="mono">{item.invoice || item.po || item.customer || item.title || "—"}</td>
               <td>{item.carrier || item.shippingMethod || "—"}</td>
               <td className="mono">{item.trackingNumber || item.pro || "—"}</td>
               <td className="mono">{item.dateText || "—"}</td>
