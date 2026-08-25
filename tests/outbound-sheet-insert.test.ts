@@ -88,6 +88,9 @@ class FakeSheet {
   getRange(row: number, col: number, numRows = 1, numCols = 1) {
     return new FakeRange(this, row, col, numRows, numCols);
   }
+  insertRowBefore(rowPosition: number) {
+    this.rows.splice(rowPosition - 1, 0, []);
+  }
 }
 
 function loadInsertHelpers(sheets: Record<string, unknown[][]>, sourceOverride?: (src: string) => string) {
@@ -279,6 +282,30 @@ describe("upsertOutboundEmailAcrossSheetsV2_", () => {
     expect(fakeSheets["WH Trucking Request"].setCalls).toHaveLength(0);
   });
 
+  // Regression for a Codex round-5 finding: unequal matcher weights hid a
+  // DIFFERENT conflict than an equal-score tie — PRO# (weight 120) matches
+  // one row while PO# (weight 80) matches a DIFFERENT row, so the higher
+  // weight wins outright with no tie ever detected. Blank-filling/merging
+  // the record's PO# into the PRO#-matched row would then contaminate two
+  // distinct shipments with each other's identifiers.
+  it("never guesses when a record's identifiers resolve to two different rows", () => {
+    const rows = whTruckingRows([
+      ["MEGA MART", "IN00100000", "", "08/10/2026", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "PRO100", "", "Work in Progress"],
+      ["MEGA MART", "IN00200000", "", "08/12/2026", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "PRO200", "", "Work in Progress"],
+    ]);
+    const { helpers, fakeSheets } = loadInsertHelpers({ "WH Trucking Request": rows });
+    // PRO100 matches row 3 (weight 120); IN00200000 matches row 4 (weight
+    // 80) — row 3 would win the weighted score outright, with no tie.
+    const result = helpers.upsertOutboundEmailAcrossSheetsV2_(
+      { customer: "MEGA MART", pro: "PRO100", invoice: "IN00200000", carrier: "NEW CARRIER" },
+      false,
+      ["WH Trucking Request"],
+      false,
+    );
+    expect(result).toEqual({ matched: false, action: "noop" });
+    expect(fakeSheets["WH Trucking Request"].setCalls).toHaveLength(0);
+  });
+
   it("never writes when allowInsert is false, even for an eligible new record", () => {
     const rows = whTruckingRows([]);
     const { helpers, fakeSheets } = loadInsertHelpers({ "WH Trucking Request": rows });
@@ -375,6 +402,35 @@ describe("upsertOutboundEmailAcrossSheetsV2_", () => {
     expect(fakeSheets["ULTA"].setCalls.some((c) => c.value === "180146682")).toBe(true);
   });
 
+  // Regression for a Codex round-5 finding: record.qty was discarded on
+  // both the insert and matched-row update paths, so the existing ULTA
+  // pallet aggregation (ceil(cartons / 20), defaulting a blank value to one
+  // pallet) under-reports a real shipment's pallet count.
+  it("populates ULTA's Total Cartons on insert and on a matched blank row", () => {
+    const ultaHeader = ["DC", "Date", "PO#", "Ship To", "TRUCKING", "Height", "Weight", "Total Cartons", "ship date", "PRO#", "RATE", "Invoice", "NOTE", "STATUS"];
+    const insertRows = [ultaHeader];
+    const { helpers: insertHelpers, fakeSheets: insertSheets } = loadInsertHelpers({ ULTA: insertRows });
+    const insertResult = insertHelpers.upsertOutboundEmailAcrossSheetsV2_(
+      { customer: "ULTA (FRESNO)", pro: "PRO999", shipDate: "08/25/2026", qty: "100" },
+      true,
+      ["ULTA"],
+      false,
+    );
+    expect(insertResult.action).toBe("inserted");
+    expect(insertSheets["ULTA"].setValuesCalls[0].values[0][7]).toBe("100");
+
+    const matchRows = [ultaHeader, ["ULTA (FRESNO)", "", "", "", "", "", "", "", "", "PRO999", "", "", "", "Work in Progress"]];
+    const { helpers: matchHelpers, fakeSheets: matchSheets } = loadInsertHelpers({ ULTA: matchRows });
+    const matchResult = matchHelpers.upsertOutboundEmailAcrossSheetsV2_(
+      { customer: "ULTA (FRESNO)", pro: "PRO999", qty: "100" },
+      false,
+      ["ULTA"],
+      false,
+    );
+    expect(matchResult).toMatchObject({ matched: true, action: "updated" });
+    expect(matchSheets["ULTA"].setCalls.some((c) => c.value === "100")).toBe(true);
+  });
+
   it("matches an existing TJX/ROSS row by its own persisted SHIPMENT # when the BOL/PO on a later email differ", () => {
     const tjxRows = [
       ["Order Received", "Order Name", "DC#", "PO#", "SHIPMENT #", "BOL", "CARRIER", "STATUS", "WEBSITE STATUS"],
@@ -443,7 +499,7 @@ describe("upsertOutboundEmailAcrossSheetsV2_", () => {
   // footer row), not the last real business row — the established WH
   // importer in WmsTruckingSyncV2.gs derives its own "last business row"
   // from the identifier columns for exactly this reason.
-  it("inserts after the last real shipment row, not after unrelated trailing footer content", () => {
+  it("inserts a new row above trailing footer content instead of overwriting it", () => {
     const rows = whTruckingRows([
       ["MEGA MART", "IN00100000", "", "08/10/2026", "", "", "", "", "", "", "", "", "", "", "", "", "XPO", "", "PRO100", "", "Work in Progress"],
       ["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "TOTALS BELOW"],
@@ -457,11 +513,14 @@ describe("upsertOutboundEmailAcrossSheetsV2_", () => {
     );
     expect(result).toMatchObject({ matched: true, action: "inserted" });
     // Row 4 is the footer ("TOTALS BELOW"); the new shipment row must land
-    // at row 4, overwriting/using row 3 (the real last shipment row) as its
-    // exemplar — never appended after the footer at row 5.
+    // at row 4 via a PHYSICAL insert (pushing the footer down to row 5),
+    // never by overwriting the footer's own content in place (Codex review
+    // round 5 on PR #103: setValues alone would have destroyed it).
     expect(result.row).toBe(4);
-    const written = fakeSheets["WH Trucking Request"].setValuesCalls[0];
+    const sheet = fakeSheets["WH Trucking Request"];
+    const written = sheet.setValuesCalls[0];
     expect(written.row).toBe(4);
+    expect(sheet.rows[4][21]).toBe("TOTALS BELOW");
   });
 });
 

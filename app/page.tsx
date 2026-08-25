@@ -2182,7 +2182,7 @@ async function postPendingReview(event: GmailIngestionEvent, decision: "approve"
     body: JSON.stringify({ reviewKey: event.reviewKey, decision, shipmentId: event.shipmentId || undefined }),
   });
   const result = (await response.json().catch(() => null)) as
-    | { ok?: boolean; error?: string; action?: string; status?: string }
+    | { ok?: boolean; error?: string; action?: string; status?: string; warning?: string }
     | null;
   if (!response.ok || result?.ok !== true) {
     throw new Error(result?.error || `Review action failed (${response.status}).`);
@@ -3058,18 +3058,29 @@ export default function Home() {
     setReviewingKey(key);
     setNotice(decision === "approve" ? `Approving ${event.shipmentId || "review row"}…` : `Rejecting ${event.shipmentId || "review row"}…`);
     try {
-      await postPendingReview(event, decision);
-      setGmailIngestion((current) =>
-        (current ?? []).map((row) =>
-          row.reviewKey && row.reviewKey === key
-            ? { ...row, status: decision === "approve" ? "committed" : "rejected", reviewKey: undefined }
-            : row,
-        ),
-      );
+      const result = await postPendingReview(event, decision);
+      // An "approve" that couldn't actually be matched/inserted yet (a tie,
+      // an ambiguous identifier) comes back ok:true but status:"APPROVED",
+      // not "COMMITTED" — the row is left open on the sheet for automatic
+      // retry. Treating that the same as a real commit would clear the
+      // review controls and tell the operator it's live when it isn't
+      // (Codex review round 5 on PR #103).
+      const stillPending = decision === "approve" && result.status !== "COMMITTED";
+      if (!stillPending) {
+        setGmailIngestion((current) =>
+          (current ?? []).map((row) =>
+            row.reviewKey && row.reviewKey === key
+              ? { ...row, status: decision === "approve" ? "committed" : "rejected", reviewKey: undefined }
+              : row,
+          ),
+        );
+      }
       setNotice(
-        decision === "approve"
-          ? `${event.shipmentId || "Row"} approved and committed to the live schedule.`
-          : `${event.shipmentId || "Row"} rejected.`,
+        stillPending
+          ? `${event.shipmentId || "Row"} approved, but ${result.warning || "could not be committed yet — it will retry automatically."}`
+          : decision === "approve"
+            ? `${event.shipmentId || "Row"} approved and committed to the live schedule.`
+            : `${event.shipmentId || "Row"} rejected.`,
       );
       window.setTimeout(() => setNotice(""), 4500);
     } catch (reviewError) {

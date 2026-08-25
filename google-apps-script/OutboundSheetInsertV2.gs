@@ -161,12 +161,17 @@ var OUTBOUND_SHEET_SPECS_V2 = {
       { col: "PO#", field: "invoice", label: "PO#", overwrite: false },
       { col: "TRUCKING", field: "carrier", label: "Carrier", overwrite: false },
       { col: "PRO#", field: "pro", label: "PRO #", overwrite: false },
-      { col: "SHIP DATE", field: "shipDate", label: "Ship Date", overwrite: true }
+      { col: "SHIP DATE", field: "shipDate", label: "Ship Date", overwrite: true },
+      // "Total Cartons" drives the existing ULTA pallet aggregation
+      // (ceil(cartons / 20), defaulting a blank value to one pallet) —
+      // leaving it blank on a matched row under-reports real pallet count
+      // exactly like a blank insert would (Codex review round 5 on PR #103).
+      { col: "TOTAL CARTONS", field: "qty", label: "Total Cartons", overwrite: false }
     ],
     invoiceCol: null,
     noteCol: "NOTE",
     statusCol: "STATUS",
-    insertFields: { "DC": "customer", "PO#": "invoice", "SHIP DATE": "shipDate", "TRUCKING": "carrier", "PRO#": "pro" },
+    insertFields: { "DC": "customer", "PO#": "invoice", "SHIP DATE": "shipDate", "TRUCKING": "carrier", "PRO#": "pro", "TOTAL CARTONS": "qty" },
     insertEligible: function (record) {
       return Boolean(record.customer && record.shipDate && (record.invoice || record.pro));
     }
@@ -328,6 +333,17 @@ function upsertOutboundEmailAcrossSheetsV2_(record, allowInsert, sheetNames, dry
           return { matched: false, action: "noop" };
         }
         var rowNumber = candidates[0].row;
+        // Unequal weights hid a different conflict: one identifier (e.g.
+        // BOL, weight 120) can match THIS row while another populated
+        // identifier on the same record (e.g. PO#, weight 80) matches a
+        // DIFFERENT row — the higher weight wins the tie-check above with
+        // no tie ever detected, then the update would blank-fill/merge the
+        // other identifier's value into this row, contaminating two
+        // distinct shipments. That is exactly the KORHEIM-class risk this
+        // codebase never guesses through (Codex review round 5 on PR #103).
+        if (outboundIdentifiersConflictV2_(data, header, matchSpec.matchers, record, rowNumber)) {
+          return { matched: false, action: "noop" };
+        }
         if (dryRun) {
           logOutboundUpdateDryRunV2_(matchSheetName, rowNumber, record);
           return { matched: false, action: "noop" };
@@ -354,6 +370,26 @@ function upsertOutboundEmailAcrossSheetsV2_(record, allowInsert, sheetNames, dry
   var insertData = insertSheet.getRange(1, 1, insertLastRow, insertLastCol).getDisplayValues();
   var insertHeader = insertSpec.headerFinder(insertData);
   return insertOutboundRowV2_(insertSheetName, insertSheet, insertHeader, insertData, record, insertSpec, dryRun);
+}
+
+/**
+ * True when some populated matcher field on the record matches a row OTHER
+ * than rowNumber (the row the weighted score picked). A per-field match
+ * that lands anywhere but the winning row is real conflicting evidence —
+ * not merely a weaker signal outvoted by a stronger one.
+ */
+function outboundIdentifiersConflictV2_(data, header, matchers, record, rowNumber) {
+  return matchers.some(function (m) {
+    var col = header.map[m.col];
+    if (col === undefined) return false;
+    var wanted = record[m.field];
+    if (!wanted) return false;
+    for (var r = header.rowIndex + 1; r < data.length; r++) {
+      var isMatch = m.multiline ? multilineHasV2_(data[r][col], wanted) : sameEmailIdV2_(data[r][col], wanted);
+      if (isMatch && r + 1 !== rowNumber) return true;
+    }
+    return false;
+  });
 }
 
 function outboundMatchScoreV2_(row, record, map, matchers) {
@@ -466,6 +502,16 @@ function insertOutboundRowV2_(sheetName, sheet, header, data, record, spec, dryR
 
   var lastBusinessRow = lastOutboundBusinessRowV2_(data, header, spec.matchers);
   var startRow = lastBusinessRow + 1;
+  // A physical insert, not a plain write, whenever startRow already holds
+  // real content (a formula/template/footer row directly below the last
+  // shipment) — writing there with setValues would destroy that row
+  // outright instead of landing the new shipment above it (Codex review
+  // round 5 on PR #103; the regression test below proves the footer row
+  // survives, shifted down, rather than being overwritten). No insert is
+  // needed when startRow is past the sheet's current content — there is
+  // nothing there to preserve, and inserting anyway would leave a stray
+  // blank row.
+  if (startRow <= sheet.getLastRow()) sheet.insertRowBefore(startRow);
   sheet.getRange(startRow, 1, 1, width).setValues([newRow]);
   var exemplarRow = Math.max(header.rowIndex + 2, lastBusinessRow);
   if (exemplarRow > header.rowIndex + 1 && exemplarRow !== startRow) {

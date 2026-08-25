@@ -333,28 +333,26 @@ function processLogisticsMessageV2_(message, isBroadenedOnly) {
   // Resolved once per message, before any per-record work exists, so both
   // the Drive archiving below (which runs before records are finalized)
   // and every record (via mergeRecordContextV2_'s carry-forward list) see
-  // the same customer/DC identity. Any context.kind other than "inbound"
-  // (not narrowed to exactly "outbound") — extractEmailContextV2_'s
-  // outbound detection looks specifically for WH-Trucking/CARGOMATIC-style
-  // markers (STY/PRO#/PICKUP/RATE RQ), which a genuine ULTA/IHERB/TJX-ROSS
-  // notice (just a PO/BOL/date) has no reason to contain, so context.kind
-  // stays "" for exactly the emails this resolver chain most needs to
-  // reach. Narrowing this to "outbound" only (an earlier revision, to
-  // avoid a purely cosmetic archiving-bucket edge case below) made the
-  // whole specialized-sheet routing capability effectively unreachable for
-  // realistic non-WH-Trucking emails (Codex review on PR #103).
-  if (context.kind !== "inbound") {
-    var resolvedTarget = resolveOutboundTargetV2_({}, meta, context);
-    if (resolvedTarget) {
-      context.customer = resolvedTarget.customer;
-      // Without this, context.kind stays "" for exactly the specialized
-      // (ULTA/IHERB/TJX-ROSS) emails this resolver exists for, so the
-      // attachment parsers' own `context.kind || "inbound"` default still
-      // classified a confidently-resolved record as inbound and could
-      // insert it into IMPORTS instead of the resolved sheet (Codex review
-      // round 4 on PR #103).
-      context.kind = "outbound";
-    }
+  // the same customer/DC identity. Always attempted — never gated on
+  // context.kind's own guess: extractEmailContextV2_'s "inbound" detection
+  // fires on a bare ETA mention, which a genuine ULTA/IHERB/TJX-ROSS notice
+  // can easily also contain (an appointment/delivery date), so gating
+  // resolution on "not inbound" silently dropped exactly the confident,
+  // specific evidence (a resolved DC#/store/customer identity) that should
+  // override a generic ETA-based guess, not lose to it (Codex review round
+  // 5 on PR #103: fresh evidence the earlier "not narrowed to outbound"
+  // fix still left this reachable whenever ETA classified the mail
+  // inbound).
+  var resolvedTarget = resolveOutboundTargetV2_({}, meta, context);
+  if (resolvedTarget) {
+    context.customer = resolvedTarget.customer;
+    // Without this, context.kind stays "" for exactly the specialized
+    // (ULTA/IHERB/TJX-ROSS) emails this resolver exists for, so the
+    // attachment parsers' own `context.kind || "inbound"` default still
+    // classified a confidently-resolved record as inbound and could
+    // insert it into IMPORTS instead of the resolved sheet (Codex review
+    // round 4 on PR #103).
+    context.kind = "outbound";
   }
   var attachments = message.getAttachments({ includeInlineImages: false, includeAttachments: true }) || [];
   var records = [];
@@ -699,7 +697,18 @@ function tableToShipmentRecordsV2_(rows, context, sourceName) {
     return -1;
   }
   var cContainer = idx(["CONTAINER", "CONTAINER#", "CNTR", "CNTR#", "CNTRNO", "CONTAINERNO"]);
-  var cInvoice = idx(["INVOICE", "INVOICE#", "INVOICENO", "PI", "PINO", "ENTRYNO", "ENTRYNUMBER"]);
+  // PO#/PONO checked FIRST, ahead of the inbound INVOICE aliases: IHERB's
+  // real live header has BOTH a "PO#" column (the field
+  // OutboundSheetInsertV2.gs's matchers actually key record.invoice off of)
+  // and a separate "INVOICE" column (a different, later-assigned value) —
+  // if INVOICE won the lookup whenever both are present, an IHERB/ULTA/
+  // TJX-ROSS attachment's real PO# would be silently discarded in favor of
+  // its own unrelated INVOICE column. IMPORTS-style inbound attachments
+  // don't use "PO#" at all, so this ordering doesn't change inbound
+  // extraction (Codex review round 5 on PR #103: neither header was
+  // recognized before, so an attachment-only PO/BOL file produced no usable
+  // identifier at all for those three sheets).
+  var cInvoice = idx(["PO#", "PONO", "PONUMBER", "INVOICE", "INVOICE#", "INVOICENO", "PI", "PINO", "ENTRYNO", "ENTRYNUMBER"]);
   var cMbl = idx(["MBL", "MAWB", "MASTERBL", "MASTERB/L"]);
   var cHbl = idx(["HBL", "HAWB", "HOUSEBL", "HOUSEB/L"]);
   var cEta = idx(["ETA", "ESTIMATEDARRIVAL", "ARRIVALDATE"]);
@@ -710,6 +719,13 @@ function tableToShipmentRecordsV2_(rows, context, sourceName) {
   var cStatus = idx(["STATUS", "DELIVERY", "CUSTOMSSTATUS", "WEBSITESTATUS"]);
   var cNote = idx(["NOTE", "NOTES", "NOTES/REMARKS", "REMARKS"]);
   var cShipment = idx(["SHIPMENT", "SHIPMENT#", "차수"]);
+  // PRO#/BOL are the outbound-side counterpart of record.pro (WH Trucking
+  // Request/IHERB/ULTA all use one of these as their own PRO/BOL column);
+  // TRUCKING/CARRIER and SHIP DATE/PU are likewise outbound-only fields
+  // OutboundSheetInsertV2.gs's matchers/insertEligible already expect.
+  var cPro = idx(["PRO#", "PRONO", "BOL", "BOL#", "BLNUMBER"]);
+  var cCarrier = idx(["CARRIER", "TRUCKING"]);
+  var cShipDate = idx(["SHIPDATE", "PU", "PICKUPDATE"]);
   var records = [];
 
   rows.slice(headerRow + 1).forEach(function (row) {
@@ -727,7 +743,10 @@ function tableToShipmentRecordsV2_(rows, context, sourceName) {
     record.status = normalizeEmailStatusV2_(val(cStatus));
     record.note = val(cNote) || sourceName;
     record.shipmentNo = val(cShipment);
-    if (record.container || record.invoice || record.mbl || record.hbl || record.shipmentNo || record.sku) records.push(record);
+    record.pro = val(cPro);
+    record.carrier = val(cCarrier);
+    record.shipDate = normalizeEmailDateV2_(val(cShipDate));
+    if (record.container || record.invoice || record.mbl || record.hbl || record.shipmentNo || record.sku || record.pro) records.push(record);
   });
   return records;
 }
@@ -737,7 +756,13 @@ function findLogisticsHeaderRowV2_(rows) {
   for (var r = 0; r < Math.min(rows.length, 40); r++) {
     var joined = rows[r].map(normalizeHeaderV2_);
     var score = 0;
-    ["CONTAINER", "CONTAINER#", "CNTR#", "INVOICE", "INVOICE#", "MBL", "MAWB", "HBL", "HAWB", "ETA", "ETD", "VSL", "VESSEL", "SKU", "QTY"].forEach(function (name) {
+    // PO#/PRO#/BOL/DC#/SHIPMENT#/TRUCKING/CARRIER added so a real IHERB/
+    // ULTA/TJX-ROSS export (whose headers otherwise share only one word,
+    // "INVOICE", with the original inbound keyword list) can still score
+    // >= 2 and be recognized as a header row at all (Codex review round 5
+    // on PR #103).
+    ["CONTAINER", "CONTAINER#", "CNTR#", "INVOICE", "INVOICE#", "MBL", "MAWB", "HBL", "HAWB", "ETA", "ETD", "VSL", "VESSEL", "SKU", "QTY",
+      "PO#", "PRO#", "BOL", "DC#", "SHIPMENT#", "TRUCKING", "CARRIER"].forEach(function (name) {
       if (joined.indexOf(name) !== -1) score++;
     });
     if (score > bestScore) { bestScore = score; best = r; }

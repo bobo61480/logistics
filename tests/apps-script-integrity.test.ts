@@ -297,7 +297,14 @@ describe("Apps Script production integrity", () => {
     // ULTA/IHERB/TJX-ROSS routing capability effectively unreachable, since
     // a genuine specialized-sheet notice (just a PO/BOL/date) has no reason
     // to contain those markers and leaves context.kind blank instead.
-    expect(pipeline).toContain('if (context.kind !== "inbound") {');
+    //
+    // Round 5 of the same review: gating on "not inbound" was still too
+    // narrow — extractEmailContextV2_ classifies any ETA mention as
+    // inbound, which a genuine ULTA/IHERB/TJX-ROSS notice can easily also
+    // contain (an appointment/delivery date). Resolution now runs
+    // unconditionally, every time, so a confidently resolved identity can
+    // never be skipped by a generic inbound guess.
+    expect(pipeline).not.toContain('if (context.kind !== "inbound") {');
     expect(pipeline).not.toContain('if (context.kind === "outbound") {\n    var resolvedTarget');
     // Archiving direction must also follow a resolved customer/DC identity,
     // not just context.kind, for the same reason.
