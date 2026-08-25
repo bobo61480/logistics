@@ -34,28 +34,63 @@ function processLogisticsEmailsV2() {
     // gmailV2Queries_() — used below only to attribute a thread found
     // exclusively by it, for observing its yield/noise independently.
     var broadenedQueryIndex = GMAIL_V2_BROADENED_SEARCH_ENABLED_V2 ? queries.length - 1 : -1;
-    // Each query gets its own reserved share of GMAIL_V2_MAX_THREADS rather
-    // than filling threadsById in query order and slicing the combined set
-    // afterward — with a flat slice, a busy mailbox where the first two
-    // (already-established) queries alone find 12+ distinct threads would
-    // silently discard every result the new broadened query found, since
-    // its matches are always inserted last (Codex review on PR #102). A
-    // thread already found by an earlier query costs nothing against a
-    // later query's own share, so this still caps at GMAIL_V2_MAX_THREADS
-    // total when queries agree, while guaranteeing each query can always
-    // contribute up to its share of genuinely new threads.
     var perQueryThreadCap = Math.ceil(GMAIL_V2_MAX_THREADS / queries.length);
-    var threadsById = {};
+
+    // One GmailApp.search call per query (never repeated — API quota),
+    // cached locally so both passes below read from the same results.
+    var perQueryResults = queries.map(function (query) {
+      return GmailApp.search(query, 0, GMAIL_V2_MAX_THREADS);
+    });
+
+    // Pass 1: record which quer(y/ies) matched each thread, with NO cap
+    // applied yet. Codex review on PR #102: computing attribution only
+    // among admitted threads let a thread that overflowed query 0's own
+    // share get admitted instead under the broadened query's share and
+    // counted as "broadened-only" even though query 0 found it too —
+    // inflating the metric this counter exists to keep honest.
+    var matchedByQueryIndex = {};
+    perQueryResults.forEach(function (threads, queryIndex) {
+      threads.forEach(function (thread) {
+        var id = thread.getId();
+        if (!matchedByQueryIndex[id]) matchedByQueryIndex[id] = {};
+        matchedByQueryIndex[id][queryIndex] = true;
+      });
+    });
     var matchedOnlyByBroadenedQuery = {};
-    queries.forEach(function (query, queryIndex) {
+    if (broadenedQueryIndex !== -1) {
+      Object.keys(matchedByQueryIndex).forEach(function (id) {
+        var membership = matchedByQueryIndex[id];
+        if (membership[broadenedQueryIndex] && Object.keys(membership).length === 1) {
+          matchedOnlyByBroadenedQuery[id] = true;
+        }
+      });
+    }
+
+    // Pass 2: admit threads into this run's working set, each query given
+    // its own reserved share of GMAIL_V2_MAX_THREADS rather than filling
+    // threadsById in query order and slicing the combined set afterward —
+    // with a flat slice, a busy mailbox where the first two (already-
+    // established) queries alone find 12+ distinct threads would silently
+    // discard every result the new broadened query found, since its
+    // matches were always inserted last (Codex review on PR #102). A
+    // thread already admitted by an earlier query costs nothing against a
+    // later query's own share. A thread with no unprocessed message left
+    // (every message already seen, retry-deferred, or past the lookback
+    // window) is skipped WITHOUT consuming its query's share — otherwise a
+    // query that stably returns the same already-fully-handled threads on
+    // every run can permanently starve a genuinely new thread ranked just
+    // below the cap in that same query's results (Codex review on PR #102,
+    // a failure mode this per-query cap made newly reachable).
+    var threadsById = {};
+    perQueryResults.forEach(function (threads, queryIndex) {
       var addedForThisQuery = 0;
-      GmailApp.search(query, 0, GMAIL_V2_MAX_THREADS).forEach(function (thread) {
+      threads.forEach(function (thread) {
         var id = thread.getId();
         if (id in threadsById) return;
         if (addedForThisQuery >= perQueryThreadCap) return;
+        if (!gmailV2ThreadHasUnprocessedMessageV2_(thread)) return;
         threadsById[id] = thread;
         addedForThisQuery++;
-        if (queryIndex === broadenedQueryIndex) matchedOnlyByBroadenedQuery[id] = true;
       });
     });
 
@@ -72,6 +107,7 @@ function processLogisticsEmailsV2() {
         break;
       }
       var thread = threadsById[threadIds[ti]];
+      var isBroadenedOnly = Boolean(matchedOnlyByBroadenedQuery[threadIds[ti]]);
       stats.threads++;
       var threadPending = false;
       var threadError = false;
@@ -91,7 +127,7 @@ function processLogisticsEmailsV2() {
         if (Date.now() - message.getDate().getTime() > GMAIL_V2_LOOKBACK_DAYS * 86400000) continue;
         stats.messages++;
         try {
-          var result = processLogisticsMessageV2_(message);
+          var result = processLogisticsMessageV2_(message, isBroadenedOnly);
           stats.inserted += result.inserted;
           stats.updated += result.updated;
           stats.noop += result.noop;
@@ -188,6 +224,27 @@ function gmailV2RetryDeferred_(messageId) {
   return value > Date.now();
 }
 
+/**
+ * True when at least one message in this thread would actually be
+ * processed (not already seen, not retry-deferred, within the lookback
+ * window) — the exact same three checks the main per-message loop applies
+ * later. Used only at thread-ADMISSION time, so a thread with nothing
+ * left to do doesn't consume its query's share of the per-query thread
+ * cap (Codex review on PR #102).
+ */
+function gmailV2ThreadHasUnprocessedMessageV2_(thread) {
+  var messages = thread.getMessages();
+  for (var i = 0; i < messages.length; i++) {
+    var message = messages[i];
+    var messageId = message.getId();
+    if (gmailV2Seen_(messageId)) continue;
+    if (gmailV2RetryDeferred_(messageId)) continue;
+    if (Date.now() - message.getDate().getTime() > GMAIL_V2_LOOKBACK_DAYS * 86400000) continue;
+    return true;
+  }
+  return false;
+}
+
 function gmailV2ClearRetry_(messageId) {
   var props = PropertiesService.getScriptProperties();
   props.deleteProperty(GMAIL_V2_ATTEMPT_PREFIX + messageId);
@@ -243,7 +300,25 @@ function ensureGmailV2Trigger_() {
   return GMAIL_PIPELINE_TRIGGER_SYNC_VERSION;
 }
 
-function processLogisticsMessageV2_(message) {
+// Kill switch for auto-committing (match-update OR insert) a record whose
+// thread was found ONLY by the sender-agnostic broadened query. Query 0
+// (Korean/logistics subject keywords) was already fully sender-agnostic
+// before this file's changes, so this doesn't newly introduce untrusted
+// senders reaching the pipeline — but the broadened query measurably
+// widens that pre-existing surface, and unlike query 0/1's specific
+// keyword sets, its terms ("commercial invoice", "delivery order", ...)
+// are common enough that a structurally plausible but unrelated or
+// adversarial email could in principle score a strong-identifier match
+// against a real existing row and get updated with no human review at all
+// (Codex review on PR #102). Starting false forces every broadened-only
+// find through PENDING VERIFICATION regardless of match/insert
+// eligibility, for an observation period — the same "watch it work safely
+// before trusting it" rollout this codebase already uses elsewhere
+// (WMS_TRUCKING_DRY_RUN, OUTBOUND_INSERT_DRY_RUN_V2). Flip only after
+// reviewing real PENDING VERIFICATION rows this produces.
+var GMAIL_V2_BROADENED_AUTOCOMMIT_ENABLED_V2 = false;
+
+function processLogisticsMessageV2_(message, isBroadenedOnly) {
   var subject = String(message.getSubject() || "").trim();
   var body = String(message.getPlainBody() || "");
   var meta = {
@@ -317,6 +392,19 @@ function processLogisticsMessageV2_(message) {
       driveUrl: documentFolderUrl
     });
     return { inserted: 0, updated: 0, noop: 0, pending: 1 };
+  }
+
+  if (isBroadenedOnly && !GMAIL_V2_BROADENED_AUTOCOMMIT_ENABLED_V2) {
+    records.forEach(function (record) {
+      addPendingRow_({
+        kind: record.kind || context.kind || guessKindFromRecordV2_(record),
+        issues: ["Broadened search match — routed to review during the initial observation period (GMAIL_V2_BROADENED_AUTOCOMMIT_ENABLED_V2 = false)."],
+        record: record,
+        meta: meta,
+        driveUrl: record._driveFolder || documentFolderUrl
+      });
+    });
+    return { inserted: 0, updated: 0, noop: 0, pending: records.length };
   }
 
   var result = { inserted: 0, updated: 0, noop: 0, pending: 0 };

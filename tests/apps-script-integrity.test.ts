@@ -320,6 +320,35 @@ describe("Apps Script production integrity", () => {
     // whenever the first two queries alone already filled every slot.
     expect(pipeline).toContain("var perQueryThreadCap = Math.ceil(GMAIL_V2_MAX_THREADS / queries.length);");
     expect(pipeline).not.toMatch(/Object\.keys\(threadsById\)\.slice\(/);
+    // Round 2 of the same review: attribution (which quer(y/ies) matched a
+    // thread, for the broadenedMatches metric) must be computed from the
+    // full, uncapped search results — not from which threads happened to
+    // win a slot under the per-query cap — or a thread that overflowed one
+    // query's share could get admitted under another's and miscounted.
+    expect(pipeline).toContain("var matchedByQueryIndex = {};");
+    expect(pipeline).toContain("perQueryResults.forEach(function (threads, queryIndex) {");
+    // And: a thread with no unprocessed message left must not consume its
+    // query's admission share either, or a query that stably returns the
+    // same already-fully-handled threads can permanently starve a
+    // genuinely new thread ranked just below the cap.
+    expect(pipeline).toContain("if (!gmailV2ThreadHasUnprocessedMessageV2_(thread)) return;");
+    expect(pipeline).toContain("function gmailV2ThreadHasUnprocessedMessageV2_(thread) {");
+  });
+
+  it("forces every broadened-only-matched record through PENDING VERIFICATION until explicitly trusted", () => {
+    const pipeline = read("google-apps-script/GmailPipelineV2.gs");
+    // Codex review on PR #102: query 0 was already fully sender-agnostic
+    // before this file's changes, but the broadened query's generic terms
+    // ("commercial invoice", "delivery order", ...) measurably widen how
+    // much untrusted-sender traffic reaches match/insert logic that can
+    // mutate a live sheet with no human review at all for a matched
+    // update. Starting disabled forces every broadened-only find through
+    // PENDING VERIFICATION for an observation period, the same rollout
+    // discipline as every other new-automation flag in this codebase.
+    expect(pipeline).toContain("var GMAIL_V2_BROADENED_AUTOCOMMIT_ENABLED_V2 = false;");
+    expect(pipeline).toContain("if (isBroadenedOnly && !GMAIL_V2_BROADENED_AUTOCOMMIT_ENABLED_V2) {");
+    expect(pipeline).toContain("function processLogisticsMessageV2_(message, isBroadenedOnly) {");
+    expect(pipeline).toContain("processLogisticsMessageV2_(message, isBroadenedOnly)");
   });
 
   it("only archives Gmail attachments once at least one shipment record was actually extracted", () => {
