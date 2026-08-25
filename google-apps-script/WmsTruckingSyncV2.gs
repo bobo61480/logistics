@@ -253,6 +253,7 @@ function scanAndImportWmsTruckingOrdersV2() {
     var repaired = 0;
     var skippedTerminal = 0;
     var pendingRows = [];
+    var pendingKeys = new Set();
     var width = Math.max(targetLastColumn, 24);
 
     groups.forEach(function (group, key) {
@@ -319,6 +320,21 @@ function scanAndImportWmsTruckingOrdersV2() {
         return;
       }
 
+      // Defense in depth: groups is keyed by the same canonical customer/date
+      // identity, but never allow a malformed or future grouping regression to
+      // stage the same shipment more than once in a single execution. This is
+      // deliberately shipment-level; legitimate pallet detail stays inside the
+      // row's fulfillment summary instead of becoming duplicate shipments.
+      if (pendingKeys.has(key)) {
+        logPipeline_("WMS TRUCKING DUPLICATE SUPPRESSED", group.customer, JSON.stringify({
+          groupKey: key,
+          shipDate: group.shipDate,
+          invoices: group.invoices
+        }));
+        return;
+      }
+      pendingKeys.add(key);
+
       var newRow = new Array(width).fill("");
       newRow[targetMap["CUSTOMER"]] = group.customer;
       newRow[targetMap["INVOICE NO."]] = group.invoices.join("\n");
@@ -341,6 +357,15 @@ function scanAndImportWmsTruckingOrdersV2() {
         logWmsDryRun_("insert", null, group, group.invoices, totalAmount);
       } else {
         pendingRows.push({ row: newRow, group: group });
+        targetRows.push({
+          rowNumber: lastBusinessRow + pendingRows.length,
+          key: key,
+          customer: group.customer,
+          dateInfo: normalizeWmsShipDate_(group.shipDate),
+          invoices: group.invoices.slice(),
+          active: true,
+          status: "WORK IN PROGRESS"
+        });
       }
       imported++;
     });
