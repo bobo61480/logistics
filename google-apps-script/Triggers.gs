@@ -8,11 +8,12 @@
 
 /* eslint-disable no-unused-vars */
 
-var GMAIL_PIPELINE_TRIGGER_SYNC_VERSION = "2026-08-12-central-v1";
+var GMAIL_PIPELINE_TRIGGER_SYNC_VERSION = "2026-08-24-central-v2-xpo";
 var APPS_SCRIPT_DEPLOY_SYNC_VERSION = "2026-08-12-stabilization-v1";
 
 var TRIGGER_PLAN = [
   { handler: "processLogisticsEmailsV2", minutes: 15 },
+  { handler: "processXpoTrackingEmailsV2", minutes: 15 },
   { handler: "processApprovedPending", minutes: 30 },
   { handler: "scanAndImportWmsTruckingOrdersV2", minutes: 15 },
   { handler: "trackSmallParcelsStatusUpdates", hours: 1 },
@@ -21,15 +22,26 @@ var TRIGGER_PLAN = [
   { handler: "reconcileCustomerBackfill", daily: 5 }
 ];
 
+// customerLookupOnEdit is retained here ONLY as a cleanup target: an earlier
+// revision of PR #92 registered it as an installable trigger, but
+// deploy-apps-script.yml never runs setupAllTriggers(), so that trigger
+// would have silently disabled the customer-lookup automation after every
+// deploy until a human manually re-ran setup. Reverted — CustomerLookup.gs's
+// onEdit(e) is a bare, zero-config simple trigger again (see that file's
+// header comment for how it now avoids the authorization-requiring calls a
+// simple trigger can't make). This entry just ensures setupAllTriggers()
+// deletes any stray installable trigger left over from that revision.
 var TRIGGER_CLEANUP_HANDLERS = [
   "processLogisticsEmails",
   "processLogisticsEmailsV2",
+  "processXpoTrackingEmailsV2",
   "scanAndImportWmsTruckingOrders",
   "scanAndImportWmsTruckingOrdersV2",
   "trackSmallParcelsStatusUpdates",
   "syncInventoryModule",
   "enrichImportsFromContainerLog",
   "reconcileCustomerBackfill",
+  "customerLookupOnEdit",
   "requestSiteRedeploy"
 ];
 

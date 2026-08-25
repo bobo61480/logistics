@@ -75,6 +75,11 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # Required by the `gh issue create` fallback below — without it, gh
+          # has no credential and fails before the real failure can even be
+          # filed as an issue (confirmed: "set the GH_TOKEN environment
+          # variable" on a live run where this step failed).
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           # A version-only deployment cannot recover a detached zone route.

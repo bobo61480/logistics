@@ -63,7 +63,7 @@ Run `typecheck` and `npm test` before every commit. The project uses `"strict": 
 | Nationals | `12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8` |
 | WMS/Sales | `14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I` |
 
-Tabs written by Apps Script: `WH Trucking Request`, `B2B/E-COM TRUCKING`, `TRANSFERS`, `ULTA`, `IHERB`, `IMPORTS`, `NATIONAL ORDER PROGRESS`, `Outbound Shipping Schedule`, `TJX/ROSS`.
+Tabs written by Apps Script: `WH Trucking Request`, `B2B/E-COM TRUCKING`, `TRANSFERS`, `ULTA`, `IHERB`, `IMPORTS`, `NATIONAL ORDER PROGRESS`, `Outbound Shipping Schedule`, `TJX/ROSS`, `TRUCKING` (the customer master — written live by `CustomerLookup.gs`'s per-edit lookup/create and `CustomerBackfill.gs`'s daily reconciliation, both gated by their own `_ENABLED`/`_DRY_RUN` flags).
 
 ## Status Values
 
