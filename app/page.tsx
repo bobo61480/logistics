@@ -13,7 +13,7 @@ import { LiveMapPanel, useParcelTracking, type MilestoneShipment, type Trackable
 import { ThemeToggle } from "./theme-toggle";
 import { DataGrids } from "./data-grids";
 import { IngestionRoadmapCard } from "./ingestion-roadmap-card";
-import { LOGISTICS_STATUS_OPTIONS } from "../lib/domain/status";
+import { LOGISTICS_STATUS_OPTIONS, normalizeLogisticsStatus } from "../lib/domain/status";
 import { inboundScheduleDateSource } from "../lib/domain/inbound-schedule";
 
 const SHEET_ID =
@@ -177,26 +177,16 @@ const DEPARTMENT_LEGEND: OutboundDepartment[] = [
   "NJ",
 ];
 
-const STATUS_OPTIONS = [
-  "Scheduled",
-  "Work in Progress",
-  "Pending",
-  "Shipping",
-  "Shipped",
-  "Delivered",
-  "Received",
-  "Cancelled",
-  "Completed",
-];
-
-const INBOUND_STATUS_OPTIONS = [
-  ...STATUS_OPTIONS,
+const INBOUND_ONLY_STATUSES = new Set([
   "N/A",
   "Customs Clearance",
-  "FDA Review/Hold",
-  "FWS Review/Hold",
-  "Delayed",
-];
+  "FDA Review / Hold",
+  "FWS Review / Hold",
+  "FDA Detained",
+  "AQI Examination",
+]);
+const STATUS_OPTIONS: string[] = LOGISTICS_STATUS_OPTIONS.filter((status) => !INBOUND_ONLY_STATUSES.has(status));
+const INBOUND_STATUS_OPTIONS: string[] = LOGISTICS_STATUS_OPTIONS;
 
 const finished = new Set(["shipped", "delivered", "received", "cancelled", "completed"]);
 const finishedImports = new Set(["delivered", "received", "cancelled", "completed"]);
@@ -1216,7 +1206,7 @@ async function fetchSheetSnapshot() {
     fetchCsvRows(SHEET_ID, OUTBOUND_GID),
     fetchCsvRows(SHEET_ID, TRUCKING_GID),
     fetchTable(NATIONAL_SHEET_ID, NATIONAL_GID, "A1:U3500", 1),
-    fetchTable(SALES_SHEET_ID, SALES_GID, "A2:AF4200", 1),
+    fetchTable(SALES_SHEET_ID, SALES_GID, "A2:AG4200", 1),
     fetchLiveKpis(),
     fetchOptionalSheet("INVENTORY", "A1:O6500"),
     fetchOptionalSheet("SKW_Inbound", "A1:R2500"),
@@ -1292,6 +1282,8 @@ async function fetchOperationalSnapshot() {
 type ConnectionState = Awaited<ReturnType<typeof fetchOperationalSnapshot>>["connection"];
 
 function normalizeStatus(value: string) {
+  const canonical = normalizeLogisticsStatus(value);
+  if (canonical) return canonical;
   const normalized = clean(value).toLowerCase();
   if (!normalized) return "Scheduled";
   if (normalized === "wip") return "Work in Progress";
@@ -1939,7 +1931,7 @@ function nationalOutboundItems(table: any): ScheduleItem[] {
         sourceSheet: "NATIONAL ORDER PROGRESS",
         sourceRow,
         sourceUrl: NATIONAL_SHEET_URL,
-        editable: false,
+        editable: true,
         customer: channel,
         customerNo: channel,
         po,
@@ -1967,8 +1959,11 @@ function salesOutboundItems(table: any): ScheduleItem[] {
     if (!date || !customer || (!isSmallParcel && !isTrucking)) return [];
     const sourceRow = index + 3;
     const issue = cell(row, 7);
-    const autoTrackedStatus = issue.match(/\[AUTO TRACK[^\]]*·\s*(Delivered|Received|Shipping|Shipped|Delayed|Customs Clearance|FDA Review\/Hold|Scheduled)\b/i)?.[1];
-    const status = autoTrackedStatus
+    const websiteStatus = cell(row, 32);
+    const autoTrackedStatus = issue.match(/\[AUTO TRACK[^\]]*·\s*(Delivered|Received|Shipping|Shipped|Delayed|Customs Clearance|FDA Review\s*\/\s*Hold|Scheduled)\b/i)?.[1];
+    const status = websiteStatus
+      ? normalizeStatus(websiteStatus)
+      : autoTrackedStatus
       ? normalizeStatus(autoTrackedStatus)
       : /yes|issue|hold|pending/i.test(issue) ? "Pending" : "Scheduled";
     const trackingNumber = isSmallParcel
@@ -1989,7 +1984,7 @@ function salesOutboundItems(table: any): ScheduleItem[] {
         sourceSheet: "Stylekorean",
         sourceRow,
         sourceUrl: SALES_SHEET_URL,
-        editable: false,
+        editable: true,
         customer,
         customerNo: customer,
         invoice: cell(row, 1),
@@ -2089,10 +2084,9 @@ function consolidateTruckingItems(records: ScheduleItem[]) {
       reference: invoice || primary.reference,
       secondary,
       status: statusSource.status,
-      // The status dropdown and "source row" link act on primary's row — if a different
-      // constituent supplied the displayed status, editing here would silently write to the
-      // wrong shipment, so fall back to that constituent's own source and make it read-only.
-      editable: statusSource === primary ? primary.editable : false,
+      // The status dropdown and source link follow the exact constituent row
+      // that supplied the displayed status, even when that row is not primary.
+      editable: statusSource.editable,
       sourceSheet: statusSource.sourceSheet,
       sourceRow: statusSource.sourceRow,
     };

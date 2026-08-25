@@ -14,6 +14,11 @@ describe("Apps Script production integrity", () => {
     expect(code).toContain("const master = SpreadsheetApp.openById(SPREADSHEET_ID);");
     expect(code).not.toContain("readSnapshotRows_(SPREADSHEET_ID,");
     expect(code).toContain("function readSnapshotRows_(spreadsheet,");
+    expect(code).toContain("salesOutbound: readSnapshotRows_(wms, null, 0, 2, 4199, 33)");
+    expect(code).toContain("function statusSpreadsheetForSource_(sourceSheet)");
+    expect(code).toContain("function ensureWmsWebsiteStatusColumn_(sheet)");
+    expect(code).toContain("sheet.insertColumnsAfter(sheet.getMaxColumns(), column - sheet.getMaxColumns())");
+    expect(code).toContain('header.setValue("WEBSITE STATUS")');
   });
 
   it("deploys the snapshot as an anonymous owner-authorized web app and smoke-tests it", () => {

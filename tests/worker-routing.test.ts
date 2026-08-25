@@ -22,7 +22,7 @@ describe("control tower Worker routing", () => {
     expect(wrangler).toContain("workers_dev = false");
   });
 
-  it("keeps the WMS source read-only and proxies writes only to the approved Apps Script endpoint", () => {
+  it("keeps source writes behind the approved Apps Script proxy", () => {
     const sources = read("worker/sources.ts");
     const status = read("worker/status-command.ts");
     const wrangler = read("wrangler.toml");
@@ -30,6 +30,8 @@ describe("control tower Worker routing", () => {
     expect(sources).toContain("14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I");
     expect(sources).not.toMatch(/fetch\([^\n]+method:\s*["']POST/i);
     expect(status).toContain("EDITABLE_SHEETS");
+    expect(status).toContain('"NATIONAL ORDER PROGRESS"');
+    expect(status).toContain('"Stylekorean"');
     expect(status).toContain("Cross-origin status writes are not allowed");
     expect(status).toContain("Cross-site status writes are not allowed");
     expect(status).toContain("Content-Type must be application/json");
@@ -80,8 +82,8 @@ describe("control tower Worker routing", () => {
 
     expect(page).toContain("function consolidateTruckingItems");
     expect(page).toContain(
-      "The status dropdown and \"source row\" link act on primary's row",
+      "The status dropdown and source link follow the exact constituent row",
     );
-    expect(page).toContain('editable: statusSource === primary ? primary.editable : false');
+    expect(page).toContain("editable: statusSource.editable");
   });
 });

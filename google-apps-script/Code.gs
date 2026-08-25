@@ -28,7 +28,7 @@ const SPREADSHEET_ID = "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc";
 const WMS_SPREADSHEET_ID = "14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I";
 const NATIONAL_SPREADSHEET_ID = "12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8";
 
-const OUTBOUND_STATUS = ["", "SCHEDULE REQUESTED", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "PICKED UP/SHIPPED", "IN TRANSIT", "IN TRANSIT/STOPOVER", "SHIPPING", "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED"];
+const OUTBOUND_STATUS = ["", "SCHEDULE REQUESTED", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "PICKED UP/SHIPPED", "IN TRANSIT", "IN TRANSIT/STOPOVER", "SHIPPING", "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED", "DELAYED"];
 const INBOUND_STATUS = ["", "SCHEDULE REQUESTED", "SCHEDULED", "WORK IN PROGRESS", "PENDING", "PICKED UP/SHIPPED", "IN TRANSIT", "IN TRANSIT/STOPOVER", "SHIPPING", "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED", "COMPLETED", "N/A", "Customs Clearance", "FDA Review / Hold", "FWS Review / Hold", "RECEIVED/FDA HOLD/REVIEW", "FDA Detained", "AQI Examination", "Delayed"];
 const ALLOWED_SHEETS = ["WH Trucking Request", "B2B/E-COM TRUCKING", "TRANSFERS", "ULTA", "IHERB", "IMPORTS", "NATIONAL ORDER PROGRESS", "Outbound Shipping Schedule", "TJX/ROSS"];
 
@@ -59,7 +59,7 @@ function doGet(e) {
         trucking: readSnapshotRows_(master, "WH Trucking Request", null, 1, 25000, 32),
         transfers: readSnapshotRows_(master, "TRANSFERS", null, 1, 2500, 29),
         nationalOutbound: readSnapshotRows_(national, null, 99300389, 1, 3500, 21),
-        salesOutbound: readSnapshotRows_(wms, null, 0, 2, 4199, 32),
+        salesOutbound: readSnapshotRows_(wms, null, 0, 2, 4199, 33),
         inventoryDashboardTable: readSnapshotRows_(master, "INVENTORY", null, 1, 6500, 15),
         skwInboundTable: readSnapshotRows_(master, "SKW_Inbound", null, 1, 2500, 18),
         skwStockTable: readSnapshotRows_(master, "SKW_Stock", null, 1, 2500, 10),
@@ -169,9 +169,11 @@ function doPost(e) {
     }
 
     validateRequest_(request);
-    const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const spreadsheet = statusSpreadsheetForSource_(request.sourceSheet);
     const sheet = spreadsheet.getSheetByName(request.sourceSheet);
     if (!sheet) throw new Error("Source sheet not found.");
+
+    if (request.sourceSheet === "Stylekorean") ensureWmsWebsiteStatusColumn_(sheet);
 
     const target = request.kind === "inbound"
       ? findInboundTarget_(sheet, request)
@@ -224,6 +226,34 @@ function doPost(e) {
 function validateRequest_(request) {
   if (!["outbound", "inbound"].includes(request.kind)) throw new Error("Invalid relation kind.");
   if (!ALLOWED_SHEETS.includes(request.sourceSheet)) throw new Error("Source sheet is not allowed.");
+}
+
+function statusSpreadsheetForSource_(sourceSheet) {
+  if (sourceSheet === "NATIONAL ORDER PROGRESS") return SpreadsheetApp.openById(NATIONAL_SPREADSHEET_ID);
+  if (sourceSheet === "Stylekorean") return SpreadsheetApp.openById(WMS_SPREADSHEET_ID);
+  return SpreadsheetApp.openById(SPREADSHEET_ID);
+}
+
+function ensureWmsWebsiteStatusColumn_(sheet) {
+  const headerRow = 2;
+  const column = 33; // AG; A:AF is the existing WMS schema.
+  if (sheet.getMaxColumns() < column) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), column - sheet.getMaxColumns());
+  }
+  const header = sheet.getRange(headerRow, column);
+  if (String(header.getDisplayValue() || "").trim().toUpperCase() === "WEBSITE STATUS") return;
+  if (String(header.getDisplayValue() || "").trim()) {
+    throw new Error("WMS column AG is already in use; WEBSITE STATUS was not created.");
+  }
+  header.setValue("WEBSITE STATUS");
+  const values = OUTBOUND_STATUS.filter(function (status) { return status; }).map(function (status) {
+    return canonicalLogisticsStatus_(status);
+  });
+  const validation = SpreadsheetApp.newDataValidation()
+    .requireValueInList(values, true)
+    .setAllowInvalid(false)
+    .build();
+  sheet.getRange(3, column, Math.max(sheet.getMaxRows() - 2, 1), 1).setDataValidation(validation);
 }
 
 function importsSectionMarkerRow_(values, marker) {
