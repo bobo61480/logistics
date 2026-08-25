@@ -74,6 +74,24 @@ describe("resolveUltaDcFromEmailV2_", () => {
     );
     expect(helpers.resolveUltaDcFromEmailV2_("Ship-to: Fresno, CA")).toBeNull();
   });
+
+  // Regression for a Codex round-3 finding on PR #102: a whole-text city
+  // search can't tell a directory city mentioned as the PICKUP/origin apart
+  // from one mentioned as the actual destination. "Pickup in Fresno; deliver
+  // to the new Phoenix DC" must not resolve to ULTA (FRESNO) just because
+  // Fresno is the only directory-known city anywhere in the email — Phoenix
+  // (the real destination) isn't on file yet, so this must resolve to null.
+  it("does not resolve a directory city that only appears on a pickup/origin line", () => {
+    const helpers = loadStoreResolverHelpers(ultaRows, []);
+    const result = helpers.resolveUltaDcFromEmailV2_("Pickup: Fresno, CA\nDeliver to: Phoenix, AZ");
+    expect(result).toBeNull();
+  });
+
+  it("still resolves the destination city when a pickup line names a different directory city", () => {
+    const helpers = loadStoreResolverHelpers(ultaRows, []);
+    const result = helpers.resolveUltaDcFromEmailV2_("Pickup: Fresno, CA\nDeliver to: Dallas, TX");
+    expect(result).toEqual({ customer: "ULTA (DALLAS)", method: "ulta-dc-city", confidence: "medium" });
+  });
 });
 
 describe("resolveTjxDcFromEmailV2_", () => {

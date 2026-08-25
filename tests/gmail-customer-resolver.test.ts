@@ -196,6 +196,24 @@ describe("resolveCustomerFromEmailV2_", () => {
     expect(suffixResult?.customer).toBe("A&B LLC");
   });
 
+  // Regression for a Codex round-3 finding on PR #102: the location-marker
+  // insertion only marked the OPENING paren, so a stored qualifier that is a
+  // prefix of a longer haystack mention of the same brand ("MEGA MART
+  // (PALO)" stored vs. an email naming "MEGA MART (PALO ALTO)") matched as
+  // a padded substring even though PALO and PALO ALTO are different, not
+  // yet on-file locations. Marking the closing paren too requires the full
+  // qualifier text to match, not just a prefix of it.
+  it("does not resolve a shorter stored location qualifier against a longer haystack location", () => {
+    const dbRows = [HEADER, ["MEGA MART (PALO)", "1 Palo Way", "Jane", ""]];
+    const { helpers } = loadResolverHelpers(dbRows);
+    const result = helpers.resolveCustomerFromEmailV2_(
+      { from: "ops@unrelated.com", subject: "New shipment for Mega Mart (Palo Alto)", body: "", messageId: "m-loc" },
+      {},
+      {},
+    );
+    expect(result).toBeNull();
+  });
+
   // Regression for the 2026-08-12 KORHEIM incident's customer-matching bug
   // class: an unrelated name that merely starts with an aliased brand must
   // never resolve to that brand.
