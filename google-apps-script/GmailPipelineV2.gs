@@ -385,6 +385,14 @@ function extractEmailContextV2_(subject, body) {
     var vesselCandidate = cleanVesselV2_(vessel[1]);
     if (isPlausibleVesselV2_(vesselCandidate)) context.vessel = vesselCandidate;
   }
+  // KCC air notices frequently render AIRLINE as a table header and the
+  // flight (for example OZ-204) later in the flattened body, so it is not
+  // adjacent enough for the VSL/VESSEL label parser above.  A flight number
+  // is safe to use as the inbound transport name only when a MAWB is present.
+  if (!context.vessel && mawb) {
+    var flight = text.match(/\b([A-Z]{2})[- ]?(\d{2,4})\b/);
+    if (flight) context.vessel = flight[1] + "-" + flight[2];
+  }
 
   context.status = explicitEmailStatusV2_(subject, body);
 

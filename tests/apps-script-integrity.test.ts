@@ -265,6 +265,12 @@ describe("Apps Script production integrity", () => {
     );
   });
 
+  it("captures flattened KCC air-notice flight numbers as the inbound transport name", () => {
+    const gmail = read("google-apps-script/GmailPipelineV2.gs");
+    expect(gmail).toContain("if (!context.vessel && mawb)");
+    expect(gmail).toContain('context.vessel = flight[1] + "-" + flight[2]');
+  });
+
   it("does not provision an installable onEdit trigger for customer lookup (deploy-apps-script.yml never runs setupAllTriggers)", () => {
     const triggers = read("google-apps-script/Triggers.gs");
     const workflow = read(".github/workflows/deploy-apps-script.yml");
