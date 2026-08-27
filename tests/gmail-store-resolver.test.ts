@@ -12,7 +12,14 @@ function loadStoreResolverHelpers(
   tjxRows: unknown[][],
   sourceOverride?: (src: string) => string,
 ) {
-  let source = readFileSync("google-apps-script/GmailStoreResolverV2.gs", "utf8");
+  // resolveUltaDcFromEmailV2_/resolveTjxDcFromEmailV2_ now reuse
+  // gmailStripQuotedReplyHistoryV2_ from GmailCustomerResolverV2.gs
+  // in-function (Codex review round 10 on PR #102) — same single flat
+  // Apps Script global namespace both files share in production.
+  let source =
+    readFileSync("google-apps-script/GmailCustomerResolverV2.gs", "utf8") +
+    "\n" +
+    readFileSync("google-apps-script/GmailStoreResolverV2.gs", "utf8");
   if (sourceOverride) source = sourceOverride(source);
 
   const ultaSheet = { getDataRange: () => ({ getDisplayValues: () => ultaRows }) };
@@ -127,6 +134,28 @@ describe("resolveUltaDcFromEmailV2_", () => {
     const result = helpers.resolveUltaDcFromEmailV2_("Ship To:\n123 Main St, Dallas, TX 75201");
     expect(result).toEqual({ customer: "ULTA (DALLAS)", method: "ulta-dc-city", confidence: "medium" });
   });
+
+  // Regression for a Codex review finding: a destination block not
+  // followed by a blank line must still stop carrying forward once a
+  // non-address section (Contact/Phone/etc) begins — "Ship To: Phoenix
+  // \n123 Main St\nContact: Dallas office" must not resolve to the known
+  // Dallas DC just because "Dallas office" is textually below the last
+  // destination label seen.
+  it("stops carrying a destination label forward at a Contact: section boundary with no blank line", () => {
+    const helpers = loadStoreResolverHelpers(ultaRows, []);
+    const result = helpers.resolveUltaDcFromEmailV2_("Ship To: Phoenix\n123 Main St\nContact: Dallas office");
+    expect(result).toBeNull();
+  });
+
+  // Regression for a Codex review finding: a reply about a new/unknown
+  // destination whose quoted history below it names exactly one known city
+  // must not resolve to that OLD shipment's DC just because the whole text
+  // (including quoted history) was scanned.
+  it("does not resolve a city that only appears in quoted reply history", () => {
+    const helpers = loadStoreResolverHelpers(ultaRows, []);
+    const text = "Any update on the new load to Seattle?\n\nOn Mon, Jan 1, vendor@example.com wrote:\n> Ship-to: Fresno, CA";
+    expect(helpers.resolveUltaDcFromEmailV2_(text)).toBeNull();
+  });
 });
 
 describe("resolveTjxDcFromEmailV2_", () => {
@@ -176,5 +205,21 @@ describe("resolveTjxDcFromEmailV2_", () => {
     ];
     const helpers = loadStoreResolverHelpers([], zipRows);
     expect(helpers.resolveTjxDcFromEmailV2_("Deliver to our Washington DC 20001 store.")).toBeNull();
+  });
+
+  // Regression for a Codex review finding: a reply about a new/unknown
+  // destination whose quoted history below it names exactly one known DC#
+  // must not resolve to that OLD shipment's DC just because the whole text
+  // (including quoted history) was scanned.
+  it("does not resolve a DC# that only appears in quoted reply history", () => {
+    const helpers = loadStoreResolverHelpers([], tjxRows);
+    const text = "Any update on the new load?\n\nOn Mon, Jan 1, vendor@example.com wrote:\n> Route to DC# 1234 for this load.";
+    expect(helpers.resolveTjxDcFromEmailV2_(text)).toBeNull();
+  });
+
+  it("still resolves a DC# in the current message even when quoted history mentions a different one", () => {
+    const helpers = loadStoreResolverHelpers([], tjxRows);
+    const text = "New load: DC# 1234 please.\n\nOn Mon, Jan 1, vendor@example.com wrote:\n> Old load was DC# 9999.";
+    expect(helpers.resolveTjxDcFromEmailV2_(text)).toEqual({ customer: "1234", method: "tjx-dc-number", confidence: "medium" });
   });
 });

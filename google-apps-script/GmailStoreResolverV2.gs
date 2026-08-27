@@ -50,6 +50,13 @@ function buildUltaDcDirectory_() {
 
 var ULTA_DESTINATION_LABEL_PATTERN_V2 = /\b(SHIP(PING)?[\s-]*TO|DELIVER(Y)?[\s-]*(TO|ADDRESS)|CONSIGNEE|DESTINATION|DROP[\s-]*(OFF|AT)|RECEIVING)\b/;
 var ULTA_ORIGIN_LABEL_PATTERN_V2 = /\b(PICK[\s-]*UP|PICKUP|ORIGIN|SHIP(PING)?[\s-]*FROM|FROM[\s-]*ADDRESS)\b/;
+// Common non-address section markers that end a carried-forward address
+// block even with no intervening blank line — a "Ship To:" address that
+// isn't followed by a blank line before a "Contact:"/"Phone:"/signature
+// line must not keep swallowing that unrelated line as more destination
+// text (Codex review round 10 on PR #102: e.g. "Ship To: Phoenix\n123 Main
+// St\nContact: Dallas office" must not resolve to the Dallas DC).
+var GMAIL_STORE_SECTION_BOUNDARY_PATTERN_V2 = /^\s*(CONTACT|PHONE|TEL|FAX|EMAIL|ATTN|ATTENTION|REGARDS|SINCERELY|THANKS|BEST\s+REGARDS|NOTE|REFERENCE|RE|PO|INVOICE|ACCOUNT|CUSTOMER|ORDER)\s*[:#-]/i;
 
 /**
  * Splits a single line into label-owned segments — one per label
@@ -112,6 +119,7 @@ function gmailStoreLabeledLinesV2_(haystack) {
       carry = segments[segments.length - 1].bucket;
       return;
     }
+    if (GMAIL_STORE_SECTION_BOUNDARY_PATTERN_V2.test(line)) { carry = null; return; }
     if (carry === "dest") { destination.push(line); return; }
     if (carry === "origin") { origin.push(line); return; }
     carry = null;
@@ -129,7 +137,14 @@ function resolveUltaDcFromEmailV2_(text) {
   if (!GMAIL_STORE_RESOLVER_ENABLED_V2) return null;
   try {
     var directory = buildUltaDcDirectory_();
-    var haystack = String(text || "").toUpperCase();
+    // Strips quoted reply history in-function (idempotent if the caller
+    // already stripped it via gmailCustomerResolutionTextV2_) rather than
+    // trusting every caller to remember — a reply about a new/unknown
+    // destination whose quoted history below it names exactly one known
+    // city must not resolve to that OLD shipment's DC (Codex review round
+    // 10 on PR #102; same discipline as GmailCustomerResolverV2.gs's own
+    // text tier).
+    var haystack = gmailStripQuotedReplyHistoryV2_(String(text || "")).toUpperCase();
     var labeled = gmailStoreLabeledLinesV2_(haystack);
     // When the email labels a destination (or a pickup/origin) anywhere,
     // only the destination-labeled text can identify the DC — a directory
@@ -182,7 +197,12 @@ function resolveTjxDcFromEmailV2_(text) {
   if (!GMAIL_STORE_RESOLVER_ENABLED_V2) return null;
   try {
     var directory = buildTjxDcDirectory_();
-    var haystack = String(text || "");
+    // See the matching comment in resolveUltaDcFromEmailV2_ above — strips
+    // quoted reply history here too (idempotent if already stripped),
+    // since this scan otherwise treats an old DC# in quoted history as
+    // current evidence for the new message (Codex review round 10 on PR
+    // #102).
+    var haystack = gmailStripQuotedReplyHistoryV2_(String(text || ""));
     // Requires an explicit "#" or ":" marker between "DC" and the number —
     // both were previously optional, so ordinary postal text like "Deliver
     // to Washington DC 20001" matched as a DC-number mention; if that ZIP

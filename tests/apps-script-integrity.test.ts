@@ -368,9 +368,35 @@ describe("Apps Script production integrity", () => {
     // has no built-in "exclude already-handled" filter. Paging past them at
     // search time (before admission) is what actually lets threads ranked
     // behind the fully-processed ones surface.
-    expect(pipeline).toContain("function gmailV2AdmissibleThreadsForQueryV2_(query, deadline) {");
+    expect(pipeline).toContain("function gmailV2AdmissibleThreadsForQueryV2_(query, deadline, offsetKey) {");
     expect(pipeline).toContain("var evaluation = gmailV2EvaluateThreadV2_(page[i]);");
-    expect(pipeline).toContain("return gmailV2AdmissibleThreadsForQueryV2_(query, queryDeadline);");
+    expect(pipeline).toContain(
+      "return gmailV2AdmissibleThreadsForQueryV2_(query, queryDeadline, GMAIL_V2_DISCOVERY_OFFSET_PREFIX + index);",
+    );
+    // Round 10 of the same review: a deadline hit mid-page previously
+    // abandoned the rest of that page with no memory of where it stopped —
+    // every trigger invocation restarted the same query at offset 0, so a
+    // stable backlog of already-seen/retry-deferred threads at the front of
+    // the results could permanently starve an unseen thread ranked behind
+    // it. The search offset now persists per query across runs and only
+    // resets once that query's results are genuinely exhausted.
+    expect(pipeline).toContain('var GMAIL_V2_DISCOVERY_OFFSET_PREFIX = "GMAIL_V2_DISCOVERY_OFFSET_";');
+    expect(pipeline).toContain("var start = props ? Number(props.getProperty(offsetKey) || 0) : 0;");
+    expect(pipeline).toContain("if (exhausted) props.deleteProperty(offsetKey);");
+    expect(pipeline).toContain("else props.setProperty(offsetKey, String(start));");
+    // A short/near-exhausted page combined with a tight deadline must not
+    // be misread as "nothing left" — only a page fully evaluated before
+    // deciding it's shorter than a full page counts as real exhaustion.
+    expect(pipeline).toContain("if (i < page.length) break;");
+    // Round 10, a second finding on the same review: "not matched by an
+    // established query" is only trustworthy when that query's discovery
+    // actually reached its true end-of-results this run — otherwise a
+    // thread the broadened query also found could be misclassified as
+    // broadened-only and forced into PENDING VERIFICATION instead of that
+    // established query's normal upsert path.
+    expect(pipeline).toContain("return { admissible: admissible, deferredCounts: deferredCounts, truncated: !exhausted };");
+    expect(pipeline).toContain("var anyEstablishedQueryTruncated = perQueryDiscovery.some(function (discovery, queryIndex) {");
+    expect(pipeline).toContain("if (broadenedQueryIndex !== -1 && !anyEstablishedQueryTruncated) {");
     expect(pipeline).toContain("function gmailV2ThreadHasUnprocessedMessageV2_(thread) {");
     expect(pipeline).toContain("return gmailV2EvaluateThreadV2_(thread).admissible;");
     // Round 7 of the same review: discovery itself must respect the run's
