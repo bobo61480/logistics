@@ -476,6 +476,99 @@ describe("upsertOutboundEmailAcrossSheetsV2_", () => {
     expect(fakeSheets["ULTA"].setCalls.some((c) => c.value === "180146682")).toBe(true);
   });
 
+  it("matches an existing ULTA row by just one of several newline-separated POs on file", () => {
+    // Regression for a Codex review finding: the PO# matcher compared the
+    // whole cell as one blob (sameEmailIdV2_) instead of token-by-token, so
+    // a later notice naming only ONE of several POs already on a row could
+    // never match it — and, once inserts go live, would create a duplicate.
+    const ultaRows = [
+      ["DC", "Date", "PO#", "Ship To", "TRUCKING", "Height", "Weight", "Total Cartons", "ship date", "PRO#", "RATE", "Invoice", "NOTE", "STATUS"],
+      ["ULTA (FRESNO)", "", "PO-111\nPO-222", "", "", "", "", "", "", "", "", "", "", "Work in Progress"],
+    ];
+    const { helpers, fakeSheets } = loadInsertHelpers({ ULTA: ultaRows });
+    const result = helpers.upsertOutboundEmailAcrossSheetsV2_(
+      { customer: "ULTA (FRESNO)", invoice: "PO-222", carrier: "XPO" },
+      true,
+      ["ULTA"],
+      false,
+    );
+    expect(result).toMatchObject({ matched: true, action: "updated", row: 2 });
+    expect(fakeSheets["ULTA"].setValuesCalls).toHaveLength(0); // no duplicate insert
+  });
+
+  it("matches an existing TJX/ROSS row by just one of several newline-separated POs on file", () => {
+    const tjxRows = [
+      ["Order Received", "Order Name", "DC#", "PO#", "SHIPMENT #", "BOL", "CARRIER", "STATUS", "WEBSITE STATUS"],
+      ["", "Ross Load", "1234", "PO-111\nPO-222", "", "", "", "", ""],
+    ];
+    const { helpers, fakeSheets } = loadInsertHelpers({ "TJX/ROSS": tjxRows });
+    const result = helpers.upsertOutboundEmailAcrossSheetsV2_(
+      { customer: "1234", invoice: "PO-222", carrier: "XPO" },
+      true,
+      ["TJX/ROSS"],
+      false,
+    );
+    expect(result).toMatchObject({ matched: true, action: "updated", row: 2 });
+    expect(fakeSheets["TJX/ROSS"].setValuesCalls).toHaveLength(0);
+  });
+
+  it("never updates an ULTA row under a different DC even when the PRO# happens to collide", () => {
+    // Regression for a Codex review finding (P1): the matchers only scored
+    // shipment identifiers and never checked the candidate row's own DC
+    // against the already-resolved record.customer, so a PRO# reused (or
+    // coincidentally colliding) across two different ULTA DCs could
+    // silently update the wrong DC's row, including overwriting its ship
+    // date — the KORHEIM-class mismatch this codebase never guesses through.
+    const ultaRows = [
+      ["DC", "Date", "PO#", "Ship To", "TRUCKING", "Height", "Weight", "Total Cartons", "ship date", "PRO#", "RATE", "Invoice", "NOTE", "STATUS"],
+      ["ULTA (DALLAS)", "", "", "", "", "", "", "", "", "PRO999", "", "", "", "Work in Progress"],
+    ];
+    const { helpers, fakeSheets } = loadInsertHelpers({ ULTA: ultaRows });
+    const result = helpers.upsertOutboundEmailAcrossSheetsV2_(
+      { customer: "ULTA (FRESNO)", pro: "PRO999" }, // no shipDate: not insert-eligible either
+      true,
+      ["ULTA"],
+      false,
+    );
+    expect(result).toEqual({ matched: false, action: "noop" });
+    expect(fakeSheets["ULTA"].setCalls).toHaveLength(0);
+    expect(fakeSheets["ULTA"].setValuesCalls).toHaveLength(0);
+  });
+
+  it("never updates a TJX/ROSS row under a different DC even when the SHIPMENT # happens to collide", () => {
+    const tjxRows = [
+      ["Order Received", "Order Name", "DC#", "PO#", "SHIPMENT #", "BOL", "CARRIER", "STATUS", "WEBSITE STATUS"],
+      ["", "Ross Load", "5678", "", "SH001", "", "", "", ""],
+    ];
+    const { helpers, fakeSheets } = loadInsertHelpers({ "TJX/ROSS": tjxRows });
+    const result = helpers.upsertOutboundEmailAcrossSheetsV2_(
+      { customer: "1234", shipmentNo: "SH001", carrier: "XPO" },
+      true,
+      ["TJX/ROSS"],
+      false,
+    );
+    expect(result).toEqual({ matched: false, action: "noop" });
+    expect(fakeSheets["TJX/ROSS"].setCalls).toHaveLength(0);
+  });
+
+  it("still matches an ULTA row when the resolved DC agrees, even with a blank DC cell on file", () => {
+    // A blank identity cell is missing data, not conflicting evidence —
+    // it must not block a genuine match.
+    const ultaRows = [
+      ["DC", "Date", "PO#", "Ship To", "TRUCKING", "Height", "Weight", "Total Cartons", "ship date", "PRO#", "RATE", "Invoice", "NOTE", "STATUS"],
+      ["", "", "", "", "", "", "", "", "", "PRO999", "", "", "", "Work in Progress"],
+    ];
+    const { helpers, fakeSheets } = loadInsertHelpers({ ULTA: ultaRows });
+    const result = helpers.upsertOutboundEmailAcrossSheetsV2_(
+      { customer: "ULTA (FRESNO)", pro: "PRO999", carrier: "XPO" },
+      true,
+      ["ULTA"],
+      false,
+    );
+    expect(result).toMatchObject({ matched: true, action: "updated" });
+    expect(fakeSheets["ULTA"].setCalls.length).toBeGreaterThan(0);
+  });
+
   // Regression for a Codex round-5 finding: record.qty was discarded on
   // both the insert and matched-row update paths, so the existing ULTA
   // pallet aggregation (ceil(cartons / 20), defaulting a blank value to one
@@ -655,6 +748,23 @@ describe("resolveOutboundTargetV2_", () => {
       {},
     );
     expect(result).toEqual({ sheet: "WH Trucking Request", customer: "MEGA MART" });
+  });
+
+  // Regression for a Codex review finding: the generic WH-Trucking resolver
+  // used to return immediately on any hit, before the specialized ULTA/
+  // TJX-ROSS/IHERB resolvers ever got a chance to run — so a message with
+  // BOTH a generic customer-name mention (e.g. a CC'd rep's known domain)
+  // AND genuine specialized evidence (an explicit IHERB mention here) was
+  // always routed to WH Trucking Request, silently overriding the more
+  // specific evidence instead of treating the disagreement as ambiguous.
+  it("never guesses between a generic WH-Trucking customer match and specialized IHERB evidence", () => {
+    const { helpers } = loadInsertHelpers({ TRUCKING: truckingRows });
+    const result = helpers.resolveOutboundTargetV2_(
+      {},
+      { from: "orders@megamart.com", subject: "IHERB shipment", body: "New IHERB order attached.", messageId: "m5" },
+      {},
+    );
+    expect(result).toBeNull();
   });
 });
 

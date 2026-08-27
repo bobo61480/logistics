@@ -58,6 +58,22 @@ describe("tableToShipmentRecordsV2_ recognizes specialized-sheet headers", () =>
     expect(records[0]).toMatchObject({ invoice: "PO-555", pro: "BOL-777", carrier: "XPO" });
   });
 
+  it("detects a compact PO#+PU-only header that scored below 2 before the date aliases were counted", () => {
+    // Regression for a Codex review finding: SHIPDATE/PU/PICKUPDATE/
+    // SHIPOUTDATE were parsed by cShipDate but absent from the separate
+    // header-scoring keyword list, so a minimal specialized sheet with
+    // only an identifier column plus a date column scored 1 and was
+    // rejected before extraction ever ran.
+    const helpers = loadExtractionHelpers();
+    const rows = [
+      ["PO#", "PU"],
+      ["4500999999", "08/25/2026"],
+    ];
+    const records = helpers.tableToShipmentRecordsV2_(rows, {}, "compact.csv");
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ invoice: "4500999999", shipDate: "08/25/26" });
+  });
+
   it("still detects the original inbound header shape unaffected by the new aliases", () => {
     const helpers = loadExtractionHelpers();
     const rows = [

@@ -694,15 +694,28 @@ function extractEmailContextV2_(subject, body) {
   if (containers && containers.length === 1) context.container = containers[0].toUpperCase();
   var invoices = text.match(/\bIN\d{8}\b/gi);
   if (invoices && invoices.length) context.invoice = uniqueTextV2_(invoices.map(function (v) { return v.toUpperCase(); })).join("\n");
+  // PO# fallback, only when no StyleKorean-format invoice number (IN########)
+  // was found above — that specific pattern is a much stronger signal than
+  // an arbitrary PO# value, so it's tried first (Codex review round 9 on PR
+  // #103: the specialized IHERB/ULTA/TJX-ROSS label set that
+  // tableToShipmentRecordsV2_ recognizes for CSV/XLSX tables was never
+  // applied to a converted PDF's plain text, which only ever went through
+  // this function).
+  if (!context.invoice) {
+    var po = text.match(/\bPO\s*#\s*[:#]?\s*([A-Z0-9-]{4,})\b/i);
+    if (po) context.invoice = po[1].toUpperCase();
+  }
   var filing = text.match(/\bN8N-\d{6,}-\d+\b/i);
   if (filing) context.filing = filing[0].toUpperCase();
   if (sty) context.pro = sty[1].replace(/\s/g, "").toUpperCase();
   var pro = text.match(/\bPRO\s*#?\s*[:#]?\s*([A-Z0-9-]{6,})\b/i);
   if (!context.pro && pro) context.pro = pro[1].toUpperCase();
+  var bol = text.match(/\bBOL\s*#?\s*[:#]?\s*([A-Z0-9-]{4,})\b/i);
+  if (!context.pro && bol) context.pro = bol[1].toUpperCase();
 
   context.eta = dateAfterLabelV2_(text, "ETA") || dateAfterLabelV2_(text, "ESTIMATED ARRIVAL");
   context.etd = dateAfterLabelV2_(text, "ETD");
-  context.shipDate = dateAfterLabelV2_(text, "SHIP DATE") || dateAfterLabelV2_(text, "PICKUP DATE");
+  context.shipDate = dateAfterLabelV2_(text, "SHIP DATE") || dateAfterLabelV2_(text, "PICKUP DATE") || dateAfterLabelV2_(text, "PU");
 
   var vessel = text.match(/\b(?:VSL|VESSEL(?:\s*\/\s*VOY)?)\b\s*[:#-]?\s*([^\r\n]{3,60})/i);
   if (vessel) {
@@ -932,8 +945,14 @@ function findLogisticsHeaderRowV2_(rows) {
     // "INVOICE", with the original inbound keyword list) can still score
     // >= 2 and be recognized as a header row at all (Codex review round 5
     // on PR #103).
+    // SHIPDATE/PU/PICKUPDATE/SHIPOUTDATE added so a compact specialized
+    // sheet whose only strong columns are an identifier (PO#/BOL/etc) plus
+    // a date column doesn't score below the >= 2 threshold and get
+    // rejected before column extraction ever runs — these are exactly
+    // cShipDate's own aliases below, just missing from this separate
+    // scoring list (Codex review round 9 on PR #103).
     ["CONTAINER", "CONTAINER#", "CNTR#", "INVOICE", "INVOICE#", "MBL", "MAWB", "HBL", "HAWB", "ETA", "ETD", "VSL", "VESSEL", "SKU", "QTY",
-      "PO#", "PRO#", "BOL", "DC#", "SHIPMENT#", "TRUCKING", "CARRIER"].forEach(function (name) {
+      "PO#", "PRO#", "BOL", "DC#", "SHIPMENT#", "TRUCKING", "CARRIER", "SHIPDATE", "PU", "PICKUPDATE", "SHIPOUTDATE"].forEach(function (name) {
       if (joined.indexOf(name) !== -1) score++;
     });
     if (score > bestScore) { bestScore = score; best = r; }

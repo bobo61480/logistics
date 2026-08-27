@@ -155,7 +155,13 @@ var OUTBOUND_SHEET_SPECS_V2 = {
     headerFinder: findUltaHeader_,
     matchers: [
       { col: "PRO#", field: "pro", weight: 120 },
-      { col: "PO#", field: "invoice", weight: 80 }
+      // multiline: true, matching WH Trucking Request/IHERB's own invoice
+      // matchers — a PO# cell holding several newline/comma-separated PO
+      // numbers must be compared token-by-token, or a later notice
+      // mentioning just ONE of those POs never matches the existing row
+      // and, once live, creates a duplicate (Codex review round 9 on PR
+      // #103).
+      { col: "PO#", field: "invoice", weight: 80, multiline: true }
     ],
     updateFields: [
       // Blank-fill only, matching every other identifier field here — a
@@ -175,6 +181,13 @@ var OUTBOUND_SHEET_SPECS_V2 = {
     ],
     invoiceCol: null,
     noteCol: "NOTE",
+    // identityCol: a matched candidate row's OWN DC must agree with the
+    // already-resolved record.customer — the shipment-identifier matchers
+    // above (PRO#/PO#) never check this, so the same PO or PRO/BOL number
+    // reused (or coincidentally colliding) across two different ULTA DCs
+    // could otherwise silently update the wrong DC's row, including
+    // overwriting its ship date (Codex review round 9 on PR #103).
+    identityCol: "DC",
     statusCol: "STATUS",
     insertFields: { "DC": "customer", "PO#": "invoice", "SHIP DATE": "shipDate", "TRUCKING": "carrier", "PRO#": "pro", "TOTAL CARTONS": "qty" },
     insertEligible: function (record) {
@@ -192,7 +205,9 @@ var OUTBOUND_SHEET_SPECS_V2 = {
       // would create a duplicate (Codex review on PR #103).
       { col: "SHIPMENT #", field: "shipmentNo", weight: 130 },
       { col: "BOL", field: "pro", weight: 120 },
-      { col: "PO#", field: "invoice", weight: 80 }
+      // multiline: true — see the matching comment on ULTA's own PO#
+      // matcher above (Codex review round 9 on PR #103).
+      { col: "PO#", field: "invoice", weight: 80, multiline: true }
     ],
     updateFields: [
       // Same reasoning as ULTA above: PO# is a matcher and an insert
@@ -205,6 +220,10 @@ var OUTBOUND_SHEET_SPECS_V2 = {
     ],
     invoiceCol: null,
     noteCol: null,
+    // See the matching comment on ULTA's own identityCol above — TJX/ROSS's
+    // SHIPMENT #/BOL/PO# matchers have the exact same cross-DC risk (Codex
+    // review round 9 on PR #103).
+    identityCol: "DC#",
     statusCol: "STATUS",
     insertFields: { "DC#": "customer", "PO#": "invoice", "SHIPMENT #": "shipmentNo", "BOL": "pro", "CARRIER": "carrier" },
     // Same reasoning as IHERB above: validateRecord_ requires a ship date
@@ -257,10 +276,7 @@ function resolveOutboundTargetV2_(record, meta, context) {
   // resolvers below are deliberately NOT gated this way — see the caller's
   // own comment on why their more specific, confident evidence should
   // still override a weak ETA-only inbound guess.
-  if (context.kind !== "inbound") {
-    var customerHit = resolveCustomerFromEmailV2_(meta, context, record);
-    if (customerHit) return { sheet: "WH Trucking Request", customer: customerHit.customer };
-  }
+  var customerHit = context.kind !== "inbound" ? resolveCustomerFromEmailV2_(meta, context, record) : null;
 
   // ULTA/TJX-ROSS/IHERB are evaluated together, not as a fixed priority
   // chain: a bare DC# number is a coincidence-prone signal (TJX/ROSS's
@@ -276,6 +292,20 @@ function resolveOutboundTargetV2_(record, meta, context) {
   var tjxHit = resolveTjxDcFromEmailV2_(haystack);
   if (tjxHit) candidates.push({ sheet: "TJX/ROSS", customer: tjxHit.customer });
   if (isIherbContextV2_(meta)) candidates.push({ sheet: "IHERB", customer: "IHERB" });
+
+  // A generic WH-Trucking customer hit is NOT automatically trusted over
+  // specialized evidence: a message could mention a known WH Trucking
+  // Request customer's name in passing (a CC'd rep, a boilerplate footer)
+  // while its real, specific evidence (a DC#/IHERB context) points
+  // elsewhere entirely. Reconcile rather than prioritizing the generic hit
+  // (Codex review round 9 on PR #103): the generic hit only wins outright
+  // when NO specialized candidate fired at all; any specialized evidence
+  // present, even alongside a generic hit, is genuine conflicting evidence
+  // between two different sheets and must not be guessed between.
+  if (customerHit) {
+    if (candidates.length === 0) return { sheet: "WH Trucking Request", customer: customerHit.customer };
+    return null;
+  }
 
   if (candidates.length !== 1) return null;
   return candidates[0];
@@ -337,6 +367,13 @@ function upsertOutboundEmailAcrossSheetsV2_(record, allowInsert, sheetNames, dry
 
       var candidates = [];
       for (var r = header.rowIndex + 1; r < data.length; r++) {
+        // identityCol (ULTA/TJX-ROSS only): a candidate row whose OWN DC
+        // disagrees with the already-resolved record.customer is excluded
+        // outright, before scoring — the shipment-identifier matchers below
+        // never check this, so a PO/PRO/BOL number that happens to collide
+        // across two different DCs could otherwise update the wrong one
+        // (Codex review round 9 on PR #103).
+        if (!outboundCandidateIdentityMatchesV2_(data[r], header, matchSpec, record)) continue;
         var score = outboundMatchScoreV2_(data[r], record, header.map, matchSpec.matchers);
         if (score) candidates.push({ row: r + 1, score: score });
       }
@@ -408,6 +445,24 @@ function outboundIdentifiersConflictV2_(data, header, matchers, record, rowNumbe
     }
     return false;
   });
+}
+
+/**
+ * True unless spec.identityCol names a real column on this row AND that
+ * cell's value disagrees with the already-resolved record.customer — a
+ * blank identity cell (nothing on file yet) is not treated as a conflict,
+ * only an affirmatively different one is. Sheets with no identityCol (WH
+ * Trucking Request/IHERB) always pass: their customer identity isn't a
+ * coarse multi-row bucket the way ULTA's DC/TJX-ROSS's DC# are, so this
+ * check doesn't apply to them at all.
+ */
+function outboundCandidateIdentityMatchesV2_(row, header, spec, record) {
+  if (!spec.identityCol || !record.customer) return true;
+  var col = header.map[spec.identityCol];
+  if (col === undefined) return true;
+  var rowIdentity = String(row[col] || "").trim().toUpperCase();
+  if (!rowIdentity) return true;
+  return rowIdentity === String(record.customer).trim().toUpperCase();
 }
 
 function outboundMatchScoreV2_(row, record, map, matchers) {
