@@ -471,7 +471,7 @@ describe("Apps Script production integrity", () => {
     const pipeline = read("google-apps-script/GmailPipelineV2.gs");
     // Codex review on PR #102: query 0 was already fully sender-agnostic
     // before this file's changes, but the broadened query's generic terms
-    expect(pipeline).toContain("var GMAIL_V2_BROADENED_AUTOCOMMIT_ENABLED_V2 = true;");
+    expect(pipeline).toContain("var GMAIL_V2_BROADENED_AUTOCOMMIT_ENABLED_V2 = false;");
     expect(pipeline).toContain("if (isBroadenedOnly && !GMAIL_V2_BROADENED_AUTOCOMMIT_ENABLED_V2) {");
     expect(pipeline).toContain("function processLogisticsMessageV2_(message, isBroadenedOnly) {");
     expect(pipeline).toContain("processLogisticsMessageV2_(message, isBroadenedOnly)");
