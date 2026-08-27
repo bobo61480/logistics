@@ -3088,16 +3088,21 @@ export default function Home() {
       // review controls and tell the operator it's live when it isn't
       // (Codex review round 5 on PR #103).
       const stillPending = decision === "approve" && result.status !== "COMMITTED";
-      if (!stillPending) {
-        // Refetch rather than optimistically patching every event sharing
-        // this reviewKey: reviewKeyForRow_ is a composite of shipment
-        // identifiers, not a per-row token, so repeated emails for the same
-        // shipment can leave 2+ open rows sharing one key. The server only
-        // ever resolves the newest matching row (reviewPendingRow_), so a
-        // client-side update-by-key would incorrectly mark an older,
-        // still-open row as resolved too (Codex review round 8 on PR #103).
-        void load();
-      }
+      // Refetch rather than optimistically patching every event sharing
+      // this reviewKey: reviewKeyForRow_ is a composite of shipment
+      // identifiers, not a per-row token, so repeated emails for the same
+      // shipment can leave 2+ open rows sharing one key. The server only
+      // ever resolves the newest matching row (reviewPendingRow_), so a
+      // client-side update-by-key would incorrectly mark an older,
+      // still-open row as resolved too (Codex review round 8 on PR #103).
+      // Also refetches on a deferred approval (stillPending), not just a
+      // real commit/reject: the server already moved that row out of its
+      // original "open" state even though it isn't COMMITTED yet, so
+      // skipping the refresh left the local event stuck showing active
+      // Approve/Reject buttons for a row that either rejects a second click
+      // outright or, worse, could act on a different older row sharing the
+      // same reviewKey (Codex review round 10 on PR #103).
+      void load();
       setNotice(
         stillPending
           ? `${event.shipmentId || "Row"} approved, but ${result.warning || "could not be committed yet — it will retry automatically."}`

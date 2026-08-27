@@ -1170,7 +1170,16 @@ function archiveEmailAttachmentsV2_(attachments, records, direction, customerNam
     var existing = direction === "inbound" ? findExistingInboundDocsFolderV2_(records) : null;
     var folder = existing || getOrCreateShipmentDocsFolderV2_(direction, customerName, records, context, meta);
     attachments.forEach(function (attachment) { createAttachmentIfMissingV2_(folder, attachment); });
-    meta.archiveFolderPath = shipmentArchiveFolderPathV2_(direction, customerName, folder);
+    // Only a freshly created folder is guaranteed to actually live at the
+    // synthesized Root -> Inbound|Outbound -> bucket -> shipment-id path —
+    // a reused "existing" folder was found via a Drive link stored on an
+    // older IMPORTS row created before this nesting scheme existed, and can
+    // live anywhere in Drive. Leaving archiveFolderPath unset for that case
+    // (rather than fabricating a nested path it doesn't actually have)
+    // falls through to IngestionRoadmapCard's own honest generic fallback
+    // label instead of showing a location that doesn't exist (Codex review
+    // round 10 on PR #103).
+    meta.archiveFolderPath = existing ? "" : shipmentArchiveFolderPathV2_(direction, customerName, folder);
     return folder.getUrl();
   } catch (err) {
     writeLog_("GMAIL V2 ARCHIVE", meta.messageId, String(err));

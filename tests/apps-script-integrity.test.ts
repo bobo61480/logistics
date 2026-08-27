@@ -22,7 +22,11 @@ describe("Apps Script production integrity", () => {
     // nesting rather than a stale flat path (Codex review round 8 on PR
     // #103) — see also tests/gmail-folder-hierarchy.test.ts.
     expect(pipeline).toContain("function shipmentArchiveFolderPathV2_(direction, customerName, folder) {");
-    expect(pipeline).toContain('meta.archiveFolderPath = shipmentArchiveFolderPathV2_(direction, customerName, folder);');
+    // A reused legacy folder (found via a stored Drive link, not newly
+    // created) is never assumed to actually live at the synthesized nested
+    // path — only a freshly created folder gets that path (Codex review
+    // round 10 on PR #103).
+    expect(pipeline).toContain('meta.archiveFolderPath = existing ? "" : shipmentArchiveFolderPathV2_(direction, customerName, folder);');
     expect(validation).toContain("_documentNames:");
     expect(validation).toContain("_archiveFolderPath:");
     expect(validation).toContain('"Sender", "Documents", "Archive Folder"');

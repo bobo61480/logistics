@@ -13,6 +13,14 @@ type FolderHelpers = {
   sanitizeDriveFolderNameV2_: (value: string) => string;
   findExistingInboundDocsFolderV2_: (records: Record<string, unknown>[]) => FakeFolder | null;
   shipmentArchiveFolderPathV2_: (direction: string, customerName: string, folder: FakeFolder) => string;
+  archiveEmailAttachmentsV2_: (
+    attachments: unknown[],
+    records: Record<string, unknown>[],
+    direction: string,
+    customerName: string,
+    context: Record<string, unknown>,
+    meta: Record<string, unknown>,
+  ) => string;
 };
 
 class FakeFolder {
@@ -85,7 +93,7 @@ function loadFolderHelpers(byId: Record<string, FakeFolder> = {}, importsRows?: 
     },
   });
   vm.runInContext(
-    `${pipeline}\n;globalThis.__folders = { getOrCreateShipmentDocsFolderV2_, sanitizeDriveFolderNameV2_, findExistingInboundDocsFolderV2_, shipmentArchiveFolderPathV2_ };`,
+    `${pipeline}\n;globalThis.__folders = { getOrCreateShipmentDocsFolderV2_, sanitizeDriveFolderNameV2_, findExistingInboundDocsFolderV2_, shipmentArchiveFolderPathV2_, archiveEmailAttachmentsV2_ };`,
     context,
   );
   return context.__folders as FolderHelpers;
@@ -187,5 +195,35 @@ describe("shipmentArchiveFolderPathV2_", () => {
     const leaf = new FakeFolder("leaf-id", "SHIP123");
     expect(helpers.shipmentArchiveFolderPathV2_("outbound", "MEGA MART", leaf)).toBe("Outbound / MEGA MART / SHIP123");
     expect(helpers.shipmentArchiveFolderPathV2_("inbound", "", leaf)).toBe("Inbound / UNSORTED / SHIP123");
+  });
+});
+
+describe("archiveEmailAttachmentsV2_", () => {
+  // Regression for a Codex review finding: a reused legacy folder (found
+  // via a stored Drive link on an older IMPORTS row created before the
+  // nested-path scheme existed) can live anywhere in Drive — synthesizing
+  // the nested Root -> Inbound/Outbound -> bucket -> shipment-id path for
+  // it would show a location that doesn't actually exist. Only a freshly
+  // created folder should get that synthesized path.
+  it("does not synthesize a nested path for a reused legacy folder", () => {
+    const existingFolder = new FakeFolder("existing-folder-id", "SHIP123");
+    const importsRows: unknown[][] = [
+      [],
+      [],
+      ["SHIP123", "https://drive.google.com/drive/folders/existing-folder-id", "", "", "", "", "", "ABCD1234567"],
+    ];
+    const helpers = loadFolderHelpers({ "existing-folder-id": existingFolder }, importsRows);
+    const meta: Record<string, unknown> = { subject: "Update", date: new Date("2026-01-01") };
+    const url = helpers.archiveEmailAttachmentsV2_([], [{ container: "ABCD1234567" }], "inbound", "", {}, meta);
+    expect(url).toBe(existingFolder.getUrl());
+    expect(meta.archiveFolderPath).toBe("");
+  });
+
+  it("still synthesizes the nested path for a freshly created folder", () => {
+    const root = new FakeFolder("root-id", "ROOT");
+    const helpers = loadFolderHelpers({ "root-id": root });
+    const meta: Record<string, unknown> = { subject: "Update", date: new Date("2026-01-01") };
+    helpers.archiveEmailAttachmentsV2_([], [{ invoice: "INV001" }], "outbound", "MEGA MART", {}, meta);
+    expect(meta.archiveFolderPath).toBe("Outbound / MEGA MART / INV001");
   });
 });
