@@ -12,6 +12,7 @@ type FolderHelpers = {
   ) => FakeFolder;
   sanitizeDriveFolderNameV2_: (value: string) => string;
   findExistingInboundDocsFolderV2_: (records: Record<string, unknown>[]) => FakeFolder | null;
+  shipmentArchiveFolderPathV2_: (direction: string, customerName: string, folder: FakeFolder) => string;
 };
 
 class FakeFolder {
@@ -21,6 +22,9 @@ class FakeFolder {
   constructor(id: string, name: string) {
     this.id = id;
     this.name = name;
+  }
+  getName() {
+    return this.name;
   }
   getFoldersByName(name: string) {
     const matches = this.children.filter((c) => c.name === name);
@@ -81,7 +85,7 @@ function loadFolderHelpers(byId: Record<string, FakeFolder> = {}, importsRows?: 
     },
   });
   vm.runInContext(
-    `${pipeline}\n;globalThis.__folders = { getOrCreateShipmentDocsFolderV2_, sanitizeDriveFolderNameV2_, findExistingInboundDocsFolderV2_ };`,
+    `${pipeline}\n;globalThis.__folders = { getOrCreateShipmentDocsFolderV2_, sanitizeDriveFolderNameV2_, findExistingInboundDocsFolderV2_, shipmentArchiveFolderPathV2_ };`,
     context,
   );
   return context.__folders as FolderHelpers;
@@ -170,5 +174,18 @@ describe("findExistingInboundDocsFolderV2_", () => {
     const helpers = loadFolderHelpers({ "existing-folder-id": existingFolder }, importsRows);
     const found = helpers.findExistingInboundDocsFolderV2_([{ container: "ABCD1234567" }]);
     expect(found).toBe(existingFolder);
+  });
+});
+
+describe("shipmentArchiveFolderPathV2_", () => {
+  // Regression for a Codex review finding: the displayed path must reflect
+  // the REAL nesting (no year directory, correct direction), not a stale
+  // legacy flat path — even though the Drive link itself always pointed to
+  // the right folder.
+  it("reflects the real direction/bucket/leaf nesting, not the legacy flat path", () => {
+    const helpers = loadFolderHelpers();
+    const leaf = new FakeFolder("leaf-id", "SHIP123");
+    expect(helpers.shipmentArchiveFolderPathV2_("outbound", "MEGA MART", leaf)).toBe("Outbound / MEGA MART / SHIP123");
+    expect(helpers.shipmentArchiveFolderPathV2_("inbound", "", leaf)).toBe("Inbound / UNSORTED / SHIP123");
   });
 });

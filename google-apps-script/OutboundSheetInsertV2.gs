@@ -104,6 +104,11 @@ var OUTBOUND_SHEET_SPECS_V2 = {
     ],
     invoiceCol: "INVOICE NO.",
     noteCol: "NOTE",
+    // Only WH Trucking Request's real header supports turning its invoice
+    // cell into a Drive-folder link — IHERB's own PO# lands on a different
+    // column (A, not B) and ULTA/TJX-ROSS have no equivalent column at all
+    // (Codex review round 8 on PR #103; see setOutboundDocsLinkV2_).
+    driveLinkCol: "INVOICE NO.",
     statusCol: "STATUS",
     insertFields: { "CUSTOMER": "customer", "INVOICE NO.": "invoice", "SHIP DATE": "shipDate", "CARRIER": "carrier", "PRO#": "pro" },
     insertEligible: function (record) {
@@ -241,8 +246,21 @@ function chooseOutboundSheetV2_(record, sheetNames) {
  * routes off record.customer alone via chooseOutboundSheetV2_ above.
  */
 function resolveOutboundTargetV2_(record, meta, context) {
-  var customerHit = resolveCustomerFromEmailV2_(meta, context, record);
-  if (customerHit) return { sheet: "WH Trucking Request", customer: customerHit.customer };
+  // The generic WH-Trucking resolver (sender/text customer match) only
+  // overrides an inbound classification the caller has NOT already made
+  // confidently — extractEmailContextV2_'s "inbound" kind requires strong
+  // evidence (MAWB/HAWB/ARRIVAL NOTICE/etc, not merely a bare ETA), so a
+  // genuinely inbound container/MBL/ETA notice that happens to also
+  // mention a known WH Trucking Request customer's name in its body must
+  // not be forcibly reclassified outbound and routed to the wrong sheet
+  // (Codex review round 8 on PR #103). The specialized ULTA/TJX-ROSS/IHERB
+  // resolvers below are deliberately NOT gated this way — see the caller's
+  // own comment on why their more specific, confident evidence should
+  // still override a weak ETA-only inbound guess.
+  if (context.kind !== "inbound") {
+    var customerHit = resolveCustomerFromEmailV2_(meta, context, record);
+    if (customerHit) return { sheet: "WH Trucking Request", customer: customerHit.customer };
+  }
 
   // ULTA/TJX-ROSS/IHERB are evaluated together, not as a fixed priority
   // chain: a bare DC# number is a coincidence-prone signal (TJX/ROSS's
@@ -434,6 +452,16 @@ function updateOutboundRowV2_(sheet, rowNumber, oldRow, record, map, spec) {
     if (canAutoTransitionLogisticsStatus_(currentStatus, normalized)) set(spec.statusCol, normalized, true, "Status");
   }
 
+  // Only WH Trucking Request's spec carries a driveLinkCol — the pre-
+  // generalization upsertOutboundEmailV2_ linked _driveFolder into its
+  // invoice column for every matched row; the generalized path dropped
+  // this entirely, leaving newly archived WH documents inaccessible from
+  // their operational row and, worse, a doc-link-only change silently
+  // reporting as a no-op (Codex review round 8 on PR #103).
+  if (spec.driveLinkCol && map[spec.driveLinkCol] !== undefined && record._driveFolder) {
+    if (setOutboundDocsLinkV2_(sheet, rowNumber, map[spec.driveLinkCol] + 1, record.invoice || record.pro || "DOCS", record._driveFolder)) changed = true;
+  }
+
   if (changed && spec.statusCol && map[spec.statusCol] !== undefined) {
     formatEmailStatusRowV2_(sheet, rowNumber, String(oldRow[map[spec.statusCol]] || record.status || ""));
   }
@@ -500,6 +528,14 @@ function insertOutboundRowV2_(sheetName, sheet, header, data, record, spec, dryR
     newRow[header.map[spec.statusCol]] = insertStatus || "Work in Progress";
   }
 
+  // See the matching comment in updateOutboundRowV2_ — same regression,
+  // insert side (Codex review round 8 on PR #103). setOutboundDocsLinkV2_
+  // is applied after the physical row write below, once startRow is known.
+  var driveLinkColNumber = spec.driveLinkCol && header.map[spec.driveLinkCol] !== undefined
+    ? header.map[spec.driveLinkCol] + 1
+    : 0;
+  var driveFolderToLink = driveLinkColNumber && record._driveFolder ? record._driveFolder : "";
+
   var lastBusinessRow = lastOutboundBusinessRowV2_(data, header, spec.matchers);
   var startRow = lastBusinessRow + 1;
   // A physical insert, not a plain write, whenever startRow already holds
@@ -525,6 +561,9 @@ function insertOutboundRowV2_(sheetName, sheet, header, data, record, spec, dryR
     exemplarRange.copyTo(newRange, SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
     exemplarRange.copyTo(newRange, SpreadsheetApp.CopyPasteType.PASTE_FORMULA, false);
     exemplarRange.copyTo(newRange, SpreadsheetApp.CopyPasteType.PASTE_DATA_VALIDATION, false);
+  }
+  if (driveFolderToLink) {
+    setOutboundDocsLinkV2_(sheet, startRow, driveLinkColNumber, record.invoice || record.pro || "DOCS", driveFolderToLink);
   }
   return { matched: true, action: "inserted", row: startRow };
 }

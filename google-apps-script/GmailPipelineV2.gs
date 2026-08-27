@@ -866,7 +866,11 @@ function tableToShipmentRecordsV2_(rows, context, sourceName) {
   var cEta = idx(["ETA", "ESTIMATEDARRIVAL", "ARRIVALDATE"]);
   var cEtd = idx(["ETD", "DEPARTUREDATE"]);
   var cVessel = idx(["VSL", "VESSEL", "VESSEL/VOY", "VESSELVOY"]);
-  var cQty = idx(["QTY", "QUANTITY", "TOTALQTY", "PCS", "UNITS"]);
+  // TOTALCARTONS added for ULTA's real live header ("Total Cartons") —
+  // without it, an ULTA attachment's carton count was silently discarded
+  // and its pallet aggregation defaulted every shipment to one pallet
+  // regardless of the actual total (Codex review round 8 on PR #103).
+  var cQty = idx(["QTY", "QUANTITY", "TOTALQTY", "PCS", "UNITS", "TOTALCARTONS"]);
   var cSku = idx(["SKU", "SKU#", "ITEM", "ITEMCODE"]);
   var cStatus = idx(["STATUS", "DELIVERY", "CUSTOMSSTATUS", "WEBSITESTATUS"]);
   var cNote = idx(["NOTE", "NOTES", "NOTES/REMARKS", "REMARKS"]);
@@ -877,7 +881,12 @@ function tableToShipmentRecordsV2_(rows, context, sourceName) {
   // OutboundSheetInsertV2.gs's matchers/insertEligible already expect.
   var cPro = idx(["PRO#", "PRONO", "BOL", "BOL#", "BLNUMBER"]);
   var cCarrier = idx(["CARRIER", "TRUCKING"]);
-  var cShipDate = idx(["SHIPDATE", "PU", "PICKUPDATE"]);
+  // SHIPOUTDATE added for TJX/ROSS's real live header ("SHIPOUT DATE",
+  // wrapped onto two lines in the sheet) — without it, an otherwise
+  // eligible TJX/ROSS attachment carried no shipDate and was rejected by
+  // both validateRecord_ and the TJX insertEligible predicate even though
+  // the date was right there (Codex review round 8 on PR #103).
+  var cShipDate = idx(["SHIPDATE", "PU", "PICKUPDATE", "SHIPOUTDATE"]);
   var records = [];
 
   rows.slice(headerRow + 1).forEach(function (row) {
@@ -952,7 +961,15 @@ function collapseShipmentRecordsV2_(records) {
       groups["ERROR_" + Object.keys(groups).length] = record;
       return;
     }
-    var key = normalizedEmailKeyV2_(record.container || record.mbl || record.hbl || record.filing || record.shipmentNo || firstTokenV2_(record.invoice) || record.pro || record.sku);
+    // pro (PRO#/BOL) checked ahead of invoice/PO# for a record with a
+    // carrier identifier: two rows sharing one PO but shipping under
+    // different BOL/PRO numbers are genuinely distinct shipments — grouping
+    // them by the shared PO instead merged them into one record, silently
+    // discarding the second BOL and ship date and summing their quantities
+    // (Codex review round 8 on PR #103). record.pro is essentially never
+    // populated on a genuine inbound IMPORTS attachment, so this ordering
+    // doesn't change inbound grouping.
+    var key = normalizedEmailKeyV2_(record.container || record.mbl || record.hbl || record.filing || record.shipmentNo || record.pro || firstTokenV2_(record.invoice) || record.sku);
     if (!key) key = "ROW_" + Object.keys(groups).length;
     if (!groups[key]) groups[key] = record;
     else groups[key] = mergeShipmentRecordV2_(groups[key], record);
@@ -1065,7 +1082,7 @@ function archiveEmailAttachmentsV2_(attachments, records, direction, customerNam
     var existing = direction === "inbound" ? findExistingInboundDocsFolderV2_(records) : null;
     var folder = existing || getOrCreateShipmentDocsFolderV2_(direction, customerName, records, context, meta);
     attachments.forEach(function (attachment) { createAttachmentIfMissingV2_(folder, attachment); });
-    meta.archiveFolderPath = shipmentArchiveFolderPathV2_("Import Shipments", folder, meta);
+    meta.archiveFolderPath = shipmentArchiveFolderPathV2_(direction, customerName, folder);
     return folder.getUrl();
   } catch (err) {
     writeLog_("GMAIL V2 ARCHIVE", meta.messageId, String(err));
@@ -1073,22 +1090,19 @@ function archiveEmailAttachmentsV2_(attachments, records, direction, customerNam
   }
 }
 
-function archiveOutboundEmailAttachmentsV2_(attachments, records, context, meta) {
-  try {
-    var root = DriveApp.getFolderById(GMAIL_PIPELINE.outboundShipmentsFolderId);
-    var folder = getOrCreateShipmentDocsFolderV2_(root, records, context, meta);
-    attachments.forEach(function (attachment) { createAttachmentIfMissingV2_(folder, attachment); });
-    meta.archiveFolderPath = shipmentArchiveFolderPathV2_("Outbound Shipments", folder, meta);
-    return folder.getUrl();
-  } catch (err) {
-    writeLog_("GMAIL V2 OUTBOUND ARCHIVE", meta.messageId, String(err));
-    return "";
-  }
-}
-
-function shipmentArchiveFolderPathV2_(category, folder, meta) {
-  var year = Utilities.formatDate(meta.date || new Date(), "America/Los_Angeles", "yyyy");
-  return "Warehouse Documents / " + category + " / " + year + " / " + folder.getName();
+/**
+ * Mirrors getOrCreateShipmentDocsFolderV2_'s real Root -> Inbound|Outbound
+ * -> <bucket> -> <shipment-id> nesting for display purposes (surfaced by
+ * IngestionRoadmapCard as the upload location). Previously hardcoded a
+ * stale flat "Warehouse Documents / Import Shipments / <year>/<leaf>"
+ * path that matched neither the actual nesting nor the outbound direction
+ * — the Drive link itself was correct, but the displayed path pointed
+ * nowhere real (Codex review round 8 on PR #103).
+ */
+function shipmentArchiveFolderPathV2_(direction, customerName, folder) {
+  var directionLabel = direction === "outbound" ? "Outbound" : "Inbound";
+  var bucketLabel = sanitizeDriveFolderNameV2_(customerName) || "UNSORTED";
+  return directionLabel + " / " + bucketLabel + " / " + folder.getName();
 }
 
 function findExistingInboundDocsFolderV2_(records) {
@@ -1301,9 +1315,19 @@ function upsertOutboundEmailV2_(record, allowInsert) {
   return upsertOutboundEmailAcrossSheetsV2_(record, allowInsert, ["WH Trucking Request"], false);
 }
 
-function setOutboundDocsLinkV2_(sheet, rowNumber, label, folderUrl) {
+/**
+ * Turns an outbound row's own invoice/PO cell into a rich-text hyperlink to
+ * its archived Drive folder, keeping the cell's existing display text. col
+ * is a real 1-based column number (from the calling sheet's own header
+ * map), not hardcoded — only WH Trucking Request's spec currently sets
+ * driveLinkCol (its INVOICE NO. column happens to be column B on that
+ * sheet, but callers must never assume that's universal: IHERB's own PO#
+ * column is column A, and ULTA/TJX-ROSS have no natural docs-link column
+ * at all).
+ */
+function setOutboundDocsLinkV2_(sheet, rowNumber, col, label, folderUrl) {
   if (!folderUrl) return false;
-  var cell = sheet.getRange(rowNumber, 2);
+  var cell = sheet.getRange(rowNumber, col);
   var text = String(cell.getDisplayValue() || label || "DOCS").trim();
   var prior = cell.getRichTextValue();
   var priorUrl = prior && prior.getLinkUrl ? prior.getLinkUrl() : "";

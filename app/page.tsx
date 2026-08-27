@@ -3089,13 +3089,14 @@ export default function Home() {
       // (Codex review round 5 on PR #103).
       const stillPending = decision === "approve" && result.status !== "COMMITTED";
       if (!stillPending) {
-        setGmailIngestion((current) =>
-          (current ?? []).map((row) =>
-            row.reviewKey && row.reviewKey === key
-              ? { ...row, status: decision === "approve" ? "committed" : "rejected", reviewKey: undefined }
-              : row,
-          ),
-        );
+        // Refetch rather than optimistically patching every event sharing
+        // this reviewKey: reviewKeyForRow_ is a composite of shipment
+        // identifiers, not a per-row token, so repeated emails for the same
+        // shipment can leave 2+ open rows sharing one key. The server only
+        // ever resolves the newest matching row (reviewPendingRow_), so a
+        // client-side update-by-key would incorrectly mark an older,
+        // still-open row as resolved too (Codex review round 8 on PR #103).
+        void load();
       }
       setNotice(
         stillPending
@@ -3477,7 +3478,13 @@ export default function Home() {
       {/* .ingestion-archive-row keeps this row ordered above the footer on the
           flex-reordered /light, /light-full, and /fulfillment-style variants. */}
       <div className="ingestion-archive-row mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2" aria-label="Email ingestion and document archive">
-        <GmailIngestionCard events={gmailIngestion} loading={loading} />
+        <GmailIngestionCard
+          events={gmailIngestion}
+          loading={loading}
+          onReview={handleReview}
+          reviewingKey={reviewingKey}
+          sheetUrl={SHEET_URL}
+        />
         <DriveArchiveCard />
       </div>
 

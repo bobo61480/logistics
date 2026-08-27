@@ -37,7 +37,13 @@ function validateRecord_(record, kind) {
     }
   } else {
     if (!record.customer) issues.push("Customer is missing.");
-    if (!record.invoice && !record.pro) issues.push("Neither invoice/PO nor PRO/BOL found.");
+    // shipmentNo accepted alongside invoice/pro: TJX/ROSS's own insert
+    // path (OutboundSheetInsertV2.gs's insertEligible) allows a record
+    // through with only its persisted SHIPMENT # and no PO#/BOL yet — this
+    // universal gate ran before that path could ever be reached and had no
+    // matching allowance, so that advertised shipment-number-only insert
+    // was unreachable in practice (Codex review round 8 on PR #103).
+    if (!record.invoice && !record.pro && !record.shipmentNo) issues.push("Neither invoice/PO, PRO/BOL, nor shipment # found.");
     if (!record.shipDate) issues.push("Ship date is missing.");
     if (record.shipDate && !isSaneDate_(record.shipDate)) issues.push("Ship date does not parse or is outside the expected window: " + record.shipDate);
   }

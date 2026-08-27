@@ -18,8 +18,11 @@ describe("Apps Script production integrity", () => {
     const validation = read("google-apps-script/Validation.gs");
 
     expect(pipeline).toContain("meta.documentNames = documentAttachments.map");
-    expect(pipeline).toContain('shipmentArchiveFolderPathV2_("Import Shipments"');
-    expect(pipeline).toContain('shipmentArchiveFolderPathV2_("Outbound Shipments"');
+    // Reflects the real Root -> Inbound|Outbound -> <bucket> -> <shipment-id>
+    // nesting rather than a stale flat path (Codex review round 8 on PR
+    // #103) — see also tests/gmail-folder-hierarchy.test.ts.
+    expect(pipeline).toContain("function shipmentArchiveFolderPathV2_(direction, customerName, folder) {");
+    expect(pipeline).toContain('meta.archiveFolderPath = shipmentArchiveFolderPathV2_(direction, customerName, folder);');
     expect(validation).toContain("_documentNames:");
     expect(validation).toContain("_archiveFolderPath:");
     expect(validation).toContain('"Sender", "Documents", "Archive Folder"');

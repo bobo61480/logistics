@@ -62,6 +62,20 @@ class FakeRange {
   setFontColor() {
     return this;
   }
+  getDisplayValue() {
+    return String((this.sheet.rows[this.row - 1] || [])[this.col - 1] ?? "");
+  }
+  getRichTextValue() {
+    const key = `${this.row}:${this.col}`;
+    const url = this.sheet.richTextLinks.get(key);
+    return url ? { getLinkUrl: () => url } : null;
+  }
+  setRichTextValue(value: { text: string; url: string }) {
+    this.sheet.ensureCell(this.row, this.col);
+    this.sheet.rows[this.row - 1][this.col - 1] = value.text;
+    this.sheet.richTextLinks.set(`${this.row}:${this.col}`, value.url);
+    return this;
+  }
 }
 
 class FakeSheet {
@@ -69,6 +83,7 @@ class FakeSheet {
   setCalls: { row: number; col: number; value: unknown }[] = [];
   setValuesCalls: { row: number; col: number; values: unknown[][] }[] = [];
   copyToCalls: unknown[] = [];
+  richTextLinks = new Map<string, string>();
   constructor(initialRows: unknown[][]) {
     this.rows = initialRows.map((r) => [...r]);
   }
@@ -114,6 +129,22 @@ function loadInsertHelpers(sheets: Record<string, unknown[][]>, sourceOverride?:
     SpreadsheetApp: {
       openById: () => ({ getSheetByName: (name: string) => fakeSheets[name] || null }),
       CopyPasteType: { PASTE_FORMAT: "FORMAT", PASTE_FORMULA: "FORMULA", PASTE_DATA_VALIDATION: "DATA_VALIDATION" },
+      newRichTextValue: () => {
+        let text = "";
+        let url = "";
+        const builder = {
+          setText: (t: string) => {
+            text = t;
+            return builder;
+          },
+          setLinkUrl: (u: string) => {
+            url = u;
+            return builder;
+          },
+          build: () => ({ text, url }),
+        };
+        return builder;
+      },
     },
   });
 
@@ -241,6 +272,49 @@ describe("upsertOutboundEmailAcrossSheetsV2_", () => {
     expect(result).toMatchObject({ matched: true, action: "updated", row: 3 });
     expect(fakeSheets["WH Trucking Request"].setValuesCalls).toHaveLength(0); // no insert happened
     expect(fakeSheets["WH Trucking Request"].setCalls.some((c) => c.value === "NEW CARRIER")).toBe(true);
+  });
+
+  it("links a matched WH Trucking Request row's invoice cell to its archived Drive folder", () => {
+    // Regression for a Codex review finding: the pre-generalization
+    // upsertOutboundEmailV2_ linked _driveFolder into the invoice column
+    // for every matched row; the generalized path dropped this entirely.
+    const rows = whTruckingRows([
+      ["MEGA MART", "IN00100000", "", "08/10/2026", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "PRO100", "", "Work in Progress"],
+    ]);
+    const { helpers, fakeSheets } = loadInsertHelpers({ "WH Trucking Request": rows });
+    const result = helpers.upsertOutboundEmailAcrossSheetsV2_(
+      { customer: "MEGA MART", pro: "PRO100", _driveFolder: "https://drive.google.com/drive/folders/abc123" },
+      true,
+      ["WH Trucking Request"],
+      false,
+    );
+    expect(result).toMatchObject({ matched: true, action: "updated", row: 3 });
+    const sheet = fakeSheets["WH Trucking Request"];
+    expect(sheet.richTextLinks.get("3:2")).toBe("https://drive.google.com/drive/folders/abc123");
+    expect(sheet.rows[2][1]).toBe("IN00100000"); // display text preserved, not overwritten
+  });
+
+  it("links a newly inserted WH Trucking Request row's invoice cell to its archived Drive folder", () => {
+    const rows = whTruckingRows([
+      ["MEGA MART", "IN00100000", "", "08/10/2026", "", "", "", "", "", "", "", "", "", "", "", "", "XPO", "", "PRO100", "", "Work in Progress"],
+    ]);
+    const { helpers, fakeSheets } = loadInsertHelpers({ "WH Trucking Request": rows });
+    const result = helpers.upsertOutboundEmailAcrossSheetsV2_(
+      {
+        customer: "TOKTOK BEAUTY",
+        shipDate: "08/25/2026",
+        invoice: "IN00999999",
+        carrier: "XPO",
+        _driveFolder: "https://drive.google.com/drive/folders/def456",
+      },
+      true,
+      ["WH Trucking Request"],
+      false,
+    );
+    expect(result.action).toBe("inserted");
+    const sheet = fakeSheets["WH Trucking Request"];
+    const insertedRow = result.row as number;
+    expect(sheet.richTextLinks.get(`${insertedRow}:2`)).toBe("https://drive.google.com/drive/folders/def456");
   });
 
   it("matches an existing WH Trucking Request row by PRO# even with no resolved customer at all", () => {
@@ -552,5 +626,64 @@ describe("resolveOutboundTargetV2_", () => {
       {},
     );
     expect(result).toEqual({ sheet: "IHERB", customer: "IHERB" });
+  });
+
+  const truckingRows = [
+    ["CUSTOMER NAME", "ADDRESS", "CONTACT", "EMAIL SENDERS"],
+    ["MEGA MART", "123 Main St", "Jane", "orders@megamart.com"],
+  ];
+
+  it("does not let a generic WH-Trucking customer match override a confidently-classified inbound message", () => {
+    // Regression for a Codex review finding: an otherwise clear inbound
+    // container/MBL/ETA notice that happens to also mention a known WH
+    // Trucking customer's name must not be forced to outbound and routed
+    // to the wrong sheet just because the generic resolver fires.
+    const { helpers } = loadInsertHelpers({ TRUCKING: truckingRows });
+    const result = helpers.resolveOutboundTargetV2_(
+      {},
+      { from: "orders@megamart.com", subject: "Arrival notice", body: "Container arriving, ETA next week.", messageId: "m3" },
+      { kind: "inbound" },
+    );
+    expect(result).toBeNull();
+  });
+
+  it("still resolves a generic WH-Trucking customer match when the message isn't confidently inbound", () => {
+    const { helpers } = loadInsertHelpers({ TRUCKING: truckingRows });
+    const result = helpers.resolveOutboundTargetV2_(
+      {},
+      { from: "orders@megamart.com", subject: "New PO", body: "Please schedule pickup.", messageId: "m4" },
+      {},
+    );
+    expect(result).toEqual({ sheet: "WH Trucking Request", customer: "MEGA MART" });
+  });
+});
+
+describe("validateRecord_ (Validation.gs)", () => {
+  function loadValidateRecord() {
+    const code = readFileSync("google-apps-script/Validation.gs", "utf8");
+    const ctx = vm.createContext({ console });
+    vm.runInContext(`${code}\n;globalThis.__v = { validateRecord_ };`, ctx);
+    return (ctx.__v as { validateRecord_: (r: Record<string, unknown>, kind: string) => { ok: boolean; issues: string[] } })
+      .validateRecord_;
+  }
+
+  it("accepts an outbound record identified only by shipmentNo (TJX/ROSS's own insert allowance)", () => {
+    // Regression for a Codex review finding: OutboundSheetInsertV2.gs's
+    // TJX/ROSS insertEligible allows a record through with only its
+    // persisted SHIPMENT # and no PO#/BOL — but this universal gate ran
+    // first and had no matching allowance, so that path was unreachable.
+    const validateRecord_ = loadValidateRecord();
+    const result = validateRecord_(
+      { customer: "1234", shipmentNo: "SH001", shipDate: "08/25/2026" },
+      "outbound",
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it("still rejects an outbound record with no invoice/pro/shipmentNo at all", () => {
+    const validateRecord_ = loadValidateRecord();
+    const result = validateRecord_({ customer: "MEGA MART", shipDate: "08/25/2026" }, "outbound");
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContain("Neither invoice/PO, PRO/BOL, nor shipment # found.");
   });
 });
