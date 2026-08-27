@@ -1,5 +1,5 @@
 /**
- * Server-side UPS / FedEx / USPS tracking integrations.
+ * Server-side UPS / FedEx / USPS / DHL tracking integrations.
  *
  * Field names and endpoints verified against official docs (Aug 2026):
  * - UPS:   activity[0].location.address.{city,stateProvince,countryCode}
@@ -8,14 +8,15 @@
  * - USPS:  trackingEvents[0].{eventCity,eventState,eventCountry}
  *          (legacy XML Web Tools API was retired Jan 25 2026 — v3 REST only)
  *
- * None of the three return coordinates; geocode(city, state, country) in
+ * Carriers generally return checkpoint addresses rather than coordinates;
+ * geocode(city, state, country) in
  * ./geo converts the returned place name to an approximate lat/lng for the
  * map. Each carrier degrades to `configured:false` when its secrets are
  * unset, rather than throwing — the tracking panel shows "not connected"
  * for that carrier instead of erroring the whole map.
  */
 
-export type Carrier = "ups" | "fedex" | "usps";
+export type Carrier = "ups" | "fedex" | "usps" | "dhl";
 
 export type TrackingResult = {
   carrier: Carrier;
@@ -29,8 +30,17 @@ export type TrackingResult = {
   postal?: string;
   country?: string;
   timestamp?: string;
+  trackingUrl?: string;
   error?: string;
 };
+
+function officialTrackingUrl(carrier: Carrier, number: string) {
+  const encoded = encodeURIComponent(number);
+  if (carrier === "ups") return `https://www.ups.com/track?tracknum=${encoded}`;
+  if (carrier === "fedex") return `https://www.fedex.com/fedextrack/?trknbr=${encoded}`;
+  if (carrier === "usps") return `https://tools.usps.com/go/TrackConfirmAction?tLabels=${encoded}`;
+  return `https://www.dhl.com/global-en/home/tracking.html?tracking-id=${encoded}`;
+}
 
 // Per-isolate token cache. Best-effort — Workers isolates recycle
 // periodically, at which point a fresh token is fetched. This is fine at
@@ -65,7 +75,7 @@ async function upsToken(env: Env): Promise<string> {
 }
 
 async function trackUps(env: Env, number: string): Promise<TrackingResult> {
-  const base: TrackingResult = { carrier: "ups", number, ok: false, configured: true };
+  const base: TrackingResult = { carrier: "ups", number, ok: false, configured: true, trackingUrl: officialTrackingUrl("ups", number) };
   try {
     const token = await upsToken(env);
     const response = await fetch(`https://onlinetools.ups.com/api/track/v1/details/${encodeURIComponent(number)}`, {
@@ -117,7 +127,7 @@ async function fedexToken(env: Env): Promise<string> {
 }
 
 async function trackFedex(env: Env, number: string): Promise<TrackingResult> {
-  const base: TrackingResult = { carrier: "fedex", number, ok: false, configured: true };
+  const base: TrackingResult = { carrier: "fedex", number, ok: false, configured: true, trackingUrl: officialTrackingUrl("fedex", number) };
   try {
     const token = await fedexToken(env);
     const response = await fetch("https://apis.fedex.com/track/v1/trackingnumbers", {
@@ -172,7 +182,7 @@ async function uspsToken(env: Env): Promise<string> {
 }
 
 async function trackUsps(env: Env, number: string): Promise<TrackingResult> {
-  const base: TrackingResult = { carrier: "usps", number, ok: false, configured: true };
+  const base: TrackingResult = { carrier: "usps", number, ok: false, configured: true, trackingUrl: officialTrackingUrl("usps", number) };
   try {
     const token = await uspsToken(env);
     const response = await fetch(
@@ -203,12 +213,48 @@ async function trackUsps(env: Env, number: string): Promise<TrackingResult> {
   }
 }
 
+// ---------------------------------------------------------------- DHL ----
+
+async function trackDhl(env: Env, number: string): Promise<TrackingResult> {
+  const base: TrackingResult = { carrier: "dhl", number, ok: false, configured: true, trackingUrl: officialTrackingUrl("dhl", number) };
+  try {
+    const url = new URL("https://api-eu.dhl.com/track/shipments");
+    url.searchParams.set("trackingNumber", number);
+    url.searchParams.set("language", "en");
+    const response = await fetch(url, {
+      headers: { accept: "application/json", "DHL-API-Key": env.DHL_API_KEY ?? "" },
+    });
+    if (!response.ok) return { ...base, error: `DHL track failed (${response.status})` };
+    const data = (await response.json()) as any;
+    const shipment = data?.shipments?.[0];
+    const events = Array.isArray(shipment?.events) ? [...shipment.events] : [];
+    events.sort((a, b) => new Date(b?.timestamp ?? 0).getTime() - new Date(a?.timestamp ?? 0).getTime());
+    const latest = events[0];
+    const address = latest?.location?.address ?? shipment?.status?.location?.address;
+    if (!shipment) return { ...base, error: "No DHL shipment found" };
+    return {
+      ...base,
+      ok: true,
+      status: shipment?.status?.description ?? latest?.description ?? shipment?.status?.status,
+      statusCategory: shipment?.status?.statusCode ?? shipment?.status?.status,
+      city: address?.addressLocality,
+      state: address?.addressRegion,
+      postal: address?.postalCode,
+      country: address?.countryCode,
+      timestamp: latest?.timestamp ?? shipment?.status?.timestamp,
+    };
+  } catch (error) {
+    return { ...base, error: error instanceof Error ? error.message : "DHL lookup failed" };
+  }
+}
+
 // ------------------------------------------------------------- shared ----
 
 export function carrierConfigured(env: Env, carrier: Carrier): boolean {
   if (carrier === "ups") return Boolean(env.UPS_CLIENT_ID && env.UPS_CLIENT_SECRET);
   if (carrier === "fedex") return Boolean(env.FEDEX_CLIENT_ID && env.FEDEX_CLIENT_SECRET);
-  return Boolean(env.USPS_CLIENT_ID && env.USPS_CLIENT_SECRET);
+  if (carrier === "usps") return Boolean(env.USPS_CLIENT_ID && env.USPS_CLIENT_SECRET);
+  return Boolean(env.DHL_API_KEY);
 }
 
 export async function trackParcel(env: Env, carrier: Carrier, number: string): Promise<TrackingResult> {
@@ -217,5 +263,6 @@ export async function trackParcel(env: Env, carrier: Carrier, number: string): P
   }
   if (carrier === "ups") return trackUps(env, number);
   if (carrier === "fedex") return trackFedex(env, number);
-  return trackUsps(env, number);
+  if (carrier === "usps") return trackUsps(env, number);
+  return trackDhl(env, number);
 }

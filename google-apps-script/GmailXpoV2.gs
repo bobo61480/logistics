@@ -145,7 +145,10 @@ function xpoCanonicalStatusV2_(rawStatus, body) {
   if (/\bCOMPLETED\b/i.test(rawStatus)) return "Completed";
   if (/\b(?:POTENTIAL DELAY|DELAYED|EXCEPTION OCCURRED|EXCEPTION OCCURED|DELIVERY ATTEMPTED|ATTEMPTED DELIVERY|ATTEMPTED)\b/i.test(signal)) return "Delayed";
   if (/\bARRIVED AT INTERIM\b/i.test(rawStatus) && /\b(?:POSSIBLE DELAY NOTIFICATION|THIS SHIPMENT MAY BE DELAYED|CURRENT ESTIMATED DELIVERY DATE OF THE SHIPMENT IS NOW)\b/i.test(signal)) return "Delayed";
-  if (/\b(?:OUT FOR DELIVERY|PICKED UP|ARRIVED AT INTERIM|IN TRANSIT|SHIPPED)\b/i.test(rawStatus)) return "Shipping";
+  if (/\bARRIVED AT INTERIM\b/i.test(rawStatus)) return "In Transit/Stopover";
+  if (/\bIN TRANSIT\b/i.test(rawStatus)) return "In Transit";
+  if (/\bPICKED UP\b/i.test(rawStatus)) return "Picked Up/Shipped";
+  if (/\b(?:OUT FOR DELIVERY|SHIPPED)\b/i.test(rawStatus)) return "Shipping";
   return "";
 }
 

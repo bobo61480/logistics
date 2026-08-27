@@ -2,18 +2,22 @@
  * Canonical operational status vocabulary shared by Gmail, tracking, manual
  * writeback, and strict Google Sheets validation.
  */
-var LOGISTICS_STATUS_VOCABULARY_VERSION = "2026-08-12-v1";
+var LOGISTICS_STATUS_VOCABULARY_VERSION = "2026-08-25-v2-operational-milestones";
 
 var LOGISTICS_STATUS_ALIASES_ = {
   "SCHEDULED": "Scheduled",
+  "SCHEDULE REQUESTED": "Schedule Requested",
   "READY": "Scheduled",
   "ROUTED/BOOKED": "Scheduled",
-  "PICKED UP": "Scheduled",
+  "PICKED UP": "Picked Up/Shipped",
+  "PICKED UP/SHIPPED": "Picked Up/Shipped",
   "WORK IN PROGRESS": "Work in Progress",
   "WIP": "Work in Progress",
   "PENDING": "Pending",
   "SHIPPING": "Shipping",
-  "IN TRANSIT": "Shipping",
+  "IN TRANSIT": "In Transit",
+  "ARRIVED AT INTERIM": "In Transit/Stopover",
+  "IN TRANSIT/STOPOVER": "In Transit/Stopover",
   "SHIPPED": "Shipped",
   "DELIVERED": "Delivered",
   "RECEIVED": "Received",
@@ -45,7 +49,7 @@ function canonicalLogisticsStatus_(value) {
 
 function isTerminalLogisticsStatus_(value) {
   var status = canonicalLogisticsStatus_(value);
-  return /^(Shipped|Delivered|Received|Cancelled|Completed)$/.test(status);
+  return /^(Received|Cancelled|Completed)$/.test(status);
 }
 
 function canAutoTransitionLogisticsStatus_(current, next) {

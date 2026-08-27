@@ -69,6 +69,7 @@ describe("WMS trucking synchronization safeguards", () => {
 
   it("accepts freight methods and excludes pickup and parcel carriers", () => {
     expect(helpers.isWmsFreightMethod_("TRUCKING")).toBe(true);
+    expect(helpers.isWmsFreightMethod_("TK")).toBe(true);
     expect(helpers.isWmsFreightMethod_("LTL Freight")).toBe(true);
     expect(helpers.isWmsFreightMethod_("Local Delivery")).toBe(true);
     expect(helpers.isWmsFreightMethod_("UPS Freight")).toBe(false);

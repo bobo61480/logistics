@@ -25,6 +25,9 @@ const PENDING_HEADER = [
   "Source Email",
   "Drive File",
   "Raw JSON",
+  "Sender",
+  "Documents",
+  "Archive Folder",
 ];
 
 describe("deriveGmailIngestion", () => {
@@ -116,6 +119,48 @@ describe("deriveGmailIngestion", () => {
       driveFileUrl: "https://drive.google.com/file/d/xyz",
       timestamp: "2026-08-17 09:15",
     });
+  });
+
+  it("exposes the sender captured in the pending row raw record", () => {
+    const row = ["2026-08-17", "inbound", "COMMITTED", "", "", "IN003", "", "", "", "", "", "Changed: status", "", "", JSON.stringify({ _sender: "Karen Yun <karen@broker.example>" })];
+    const events = deriveGmailIngestion({
+      importsRows: null,
+      outboundRows: null,
+      pendingVerificationTable: gvizTable(PENDING_HEADER, [row]),
+    });
+    expect(events[0].sender).toBe("Karen Yun <karen@broker.example>");
+  });
+
+  it("exposes received document names and their archive folder path", () => {
+    const raw = {
+      _documentNames: ["Commercial Invoice.pdf", "Packing List.xlsx"],
+      _archiveFolderPath: "Warehouse Documents / Import Shipments / 2026 / JSL12345",
+    };
+    const row = ["2026-08-25 09:15", "inbound", "COMMITTED", "", "", "IN003", "", "", "", "", "", "Received: JSL12345", "", "https://drive.google.com/drive/folders/folder-id", JSON.stringify(raw)];
+    const events = deriveGmailIngestion({
+      importsRows: null,
+      outboundRows: null,
+      pendingVerificationTable: gvizTable(PENDING_HEADER, [row]),
+    });
+    expect(events[0].documentNames).toEqual(["Commercial Invoice.pdf", "Packing List.xlsx"]);
+    expect(events[0].archiveFolderPath).toBe(raw._archiveFolderPath);
+  });
+
+  it("reads safe document metadata columns without requiring Raw JSON", () => {
+    const row = [
+      "2026-08-25 09:15", "inbound", "COMMITTED", "", "", "IN004", "", "", "", "", "",
+      "Received: OSL900", "", "https://drive.google.com/drive/folders/folder-id", "",
+      "KCC <ops@kcc.example>", '["MBL.pdf","Commercial Invoice.pdf"]',
+      "Warehouse Documents / Import Shipments / 2026 / OSL900",
+    ];
+    const events = deriveGmailIngestion({
+      importsRows: null,
+      outboundRows: null,
+      pendingVerificationTable: gvizTable(PENDING_HEADER, [row]),
+    });
+    expect(events[0].sender).toBe("KCC <ops@kcc.example>");
+    expect(events[0].documentNames).toEqual(["MBL.pdf", "Commercial Invoice.pdf"]);
+    expect(events[0].archiveFolderPath).toContain("Import Shipments / 2026 / OSL900");
   });
 
   it("lists pending events before committed ones and degrades gracefully with no pending table", () => {

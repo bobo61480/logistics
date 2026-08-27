@@ -19,26 +19,28 @@ function loadGmailQueryHelpers(): GmailQueryHelpers {
 }
 
 describe("gmailV2Queries_ broadened search", () => {
-  it("ships enabled by default, appended as a third query", () => {
+  it("ships enabled by default, appended as the last query", () => {
     const helpers = loadGmailQueryHelpers();
     expect(helpers.GMAIL_V2_BROADENED_SEARCH_ENABLED_V2).toBe(true);
     const queries = helpers.gmailV2Queries_();
-    expect(queries).toHaveLength(3);
+    expect(queries).toHaveLength(4);
   });
 
-  it("the two original queries stay byte-for-byte unchanged", () => {
+  it("the original queries stay byte-for-byte unchanged", () => {
     const helpers = loadGmailQueryHelpers();
     const queries = helpers.gmailV2Queries_();
     expect(queries[0]).toContain("AIR SHIPMENT");
     expect(queries[0]).toContain("MAWB subject:HAWB}");
     expect(queries[1]).toContain("from:info@cargomatic.com");
     expect(queries[1]).toContain("subject:pickup}");
+    expect(queries[2]).toContain("from:xpo.com");
+    expect(queries[2]).toContain('subject:"Pickup Request Created"');
   });
 
   it("the new clause is sender-agnostic — no from: terms", () => {
     const helpers = loadGmailQueryHelpers();
     const queries = helpers.gmailV2Queries_();
-    const broadened = queries[2];
+    const broadened = queries[queries.length - 1];
     expect(broadened).not.toMatch(/from:/);
     expect(broadened).toContain('subject:"bill of lading"');
     expect(broadened).toContain('subject:"tracking number"');
@@ -47,13 +49,13 @@ describe("gmailV2Queries_ broadened search", () => {
   it("every generic term configured is present in the built clause", () => {
     const helpers = loadGmailQueryHelpers();
     const queries = helpers.gmailV2Queries_();
-    const broadened = queries[2];
+    const broadened = queries[queries.length - 1];
     helpers.GMAIL_V2_GENERIC_LOGISTICS_TERMS_V2.forEach((term) => {
       expect(broadened).toContain(`subject:"${term}"`);
     });
   });
 
-  it("is removable via its own kill switch without touching the other two queries", () => {
+  it("is removable via its own kill switch without touching the other queries", () => {
     const code = readFileSync("google-apps-script/GmailPipelineV2.gs", "utf8").replace(
       "var GMAIL_V2_BROADENED_SEARCH_ENABLED_V2 = true;",
       "var GMAIL_V2_BROADENED_SEARCH_ENABLED_V2 = false;",
@@ -61,6 +63,6 @@ describe("gmailV2Queries_ broadened search", () => {
     const context = vm.createContext({ console });
     vm.runInContext(`${code}\n;globalThis.__gq = { gmailV2Queries_ };`, context);
     const queries = (context.__gq as GmailQueryHelpers).gmailV2Queries_();
-    expect(queries).toHaveLength(2);
+    expect(queries).toHaveLength(3);
   });
 });

@@ -11,15 +11,90 @@
  */
 
 var WMS_TRUCKING_IMPORT_MIN_DATE = "2026-08-01";
-var WMS_TRUCKING_SYNC_ENABLED = true;
-// Re-enabled 2026-08-23 after fixing the customer-canonicalization bug that
-// caused the 2026-08-12 KORHEIM wrong-merge incident (canonicalWmsCustomer_
-// in Code.gs used an unanchored prefix match, not the word-boundary check it
-// has now). Ships in dry-run first: real scans run and log exactly what they
-// would insert/update to PIPELINE LOG without touching WH Trucking Request,
-// so the fix can be validated against live data before trusting it with
-// writes again. Flip to false only after reviewing several dry-run cycles.
+// EMERGENCY DISABLE (2026-08-25): live imports produced ~87 duplicate rows
+// for one KORHEIM (CANOGA PARK) shipment on WH Trucking Request. Disabled
+// at the owner's request until the duplicate-insert root cause is found and
+// fixed. Do not re-enable without confirming the fix and reviewing a dry-run
+// cycle first.
+var WMS_TRUCKING_SYNC_ENABLED = false;
+// Live writes use exact customer + ship-date grouping and preserve terminal
+// workflow states. Fulfillment dimensions enrich the same canonical rows.
 var WMS_TRUCKING_DRY_RUN = true;
+var FULFILLMENT_DATA_URL = "https://script.google.com/macros/s/AKfycbykK9DWjem9ORHxfR_mpdZl5DVh-en0D6JpCdIuel305QmfqxoNU_NqSnjkhFk401hI/exec";
+var WMS_FULFILLMENT_DETAIL_LIMIT = 80;
+
+function nmfcClassFromDensityV2_(density) {
+  var d = Number(density || 0);
+  if (!(d > 0)) return "";
+  if (d >= 50) return "50";
+  if (d >= 35) return "55";
+  if (d >= 30) return "60";
+  if (d >= 22.5) return "65";
+  if (d >= 15) return "70";
+  if (d >= 13.5) return "77.5";
+  if (d >= 12) return "85";
+  if (d >= 10.5) return "92.5";
+  if (d >= 9) return "100";
+  if (d >= 8) return "110";
+  if (d >= 7) return "125";
+  if (d >= 6) return "150";
+  if (d >= 5) return "175";
+  if (d >= 4) return "200";
+  if (d >= 3) return "250";
+  if (d >= 2) return "300";
+  if (d >= 1) return "400";
+  return "500";
+}
+
+function fulfillmentFreightSummaryV2_(details) {
+  var dims = [];
+  (details || []).forEach(function (detail) {
+    (detail && (detail.dims || detail.dimensions) || []).forEach(function (dim) {
+      var l = Number(dim.l || dim.length || 0), w = Number(dim.w || dim.width || 0);
+      var h = Number(dim.h || dim.height || 0), wt = Number(dim.wt || dim.weight || 0);
+      if (l > 0 && w > 0 && h > 0) dims.push({ l: l, w: w, h: h, wt: wt });
+    });
+  });
+  var cubicInches = dims.reduce(function (sum, dim) { return sum + dim.l * dim.w * dim.h; }, 0);
+  var weight = dims.reduce(function (sum, dim) { return sum + dim.wt; }, 0);
+  var cubicFeet = cubicInches / 1728;
+  var density = cubicFeet > 0 && weight > 0 ? weight / cubicFeet : 0;
+  var uniqueDims = uniqueTextV2_(dims.map(function (dim) { return dim.l + "x" + dim.w + "x" + dim.h + " @ " + dim.wt + " lb"; }));
+  return {
+    pallets: dims.length,
+    length: dims.length === 1 ? dims[0].l : "",
+    width: dims.length === 1 ? dims[0].w : "",
+    height: dims.length === 1 ? dims[0].h : "",
+    weight: weight || "",
+    cubicInches: cubicInches || "",
+    cubicFeet: cubicFeet || "",
+    density: density || "",
+    freightClass: nmfcClassFromDensityV2_(density),
+    note: uniqueDims.length ? "FULFILLMENT DIMS (" + dims.length + " pallet" + (dims.length === 1 ? "" : "s") + "): " + uniqueDims.join("; ") : ""
+  };
+}
+
+function fetchFulfillmentDetailsV2_(invoices) {
+  var wanted = (invoices || []).slice(-WMS_FULFILLMENT_DETAIL_LIMIT);
+  if (!wanted.length) return {};
+  var requests = wanted.map(function (invoice) {
+    return { url: FULFILLMENT_DATA_URL + "?op=getSalesInvoiceDetail&invoice=" + encodeURIComponent(invoice), muteHttpExceptions: true };
+  });
+  var responses = UrlFetchApp.fetchAll(requests);
+  var result = {};
+  responses.forEach(function (response, index) {
+    try {
+      var parsed = JSON.parse(response.getContentText());
+      if (parsed && parsed.ok) result[wanted[index]] = parsed;
+    } catch (e) { logPipeline_("FULFILLMENT DETAIL ERROR", wanted[index], String(e)); }
+  });
+  return result;
+}
+
+function writeFulfillmentMappedValueV2_(sheet, rowNumber, map, header, value) {
+  if (value === "" || value === undefined || value === null) return false;
+  return writeMappedValue_(sheet, rowNumber, map, header, value);
+}
 
 function wmsImportEligible_(dateInfo) {
   var key = String(dateInfo && dateInfo.key || "").trim();
@@ -34,19 +109,24 @@ function chooseWmsTargetRow_(groupKey, invoices, rows) {
   var wanted = new Set((invoices || []).map(function (invoice) {
     return String(invoice || "").trim().toUpperCase();
   }).filter(Boolean));
+  var customerKey = String(groupKey || "").split("___")[0];
+  var best = null;
 
   for (var i = 0; i < rows.length; i++) {
     var row = rows[i];
-    if (row.key !== groupKey) continue;
+    var rowCustomerKey = String(row.key || "").split("___")[0];
+    if (rowCustomerKey !== customerKey) continue;
     for (var j = 0; j < row.invoices.length; j++) {
-      if (wanted.has(String(row.invoices[j] || "").trim().toUpperCase())) return row;
+      // User-defined shipment identity: an exact normalized customer and an
+      // exact invoice are sufficient to identify a duplicate. Ship date,
+      // quantity, carrier, and tracking remain updateable shipment details.
+      if (wanted.has(String(row.invoices[j] || "").trim().toUpperCase())) {
+        if (!best || row.invoices.length > best.invoices.length) best = row;
+        break;
+      }
     }
   }
-
-  for (var k = 0; k < rows.length; k++) {
-    if (rows[k].key === groupKey && rows[k].active) return rows[k];
-  }
-  return null;
+  return best;
 }
 
 function filterWmsInvoicesForGroup_(invoices, groupKey, sourceByInvoice) {
@@ -56,6 +136,47 @@ function filterWmsInvoicesForGroup_(invoices, groupKey, sourceByInvoice) {
     var source = sourceByInvoice.get(clean);
     return !source || source.key === groupKey;
   });
+}
+
+function collapseRedundantWhQuantityRowsV2_(sheet) {
+  var data = sheet.getDataRange().getDisplayValues();
+  var header = findWhTruckingHeader_(data);
+  var map = header.map;
+  var groups = new Map();
+
+  for (var r = header.rowIndex + 1; r < data.length; r++) {
+    var row = data[r];
+    var customer = normalizeWmsCustomerKey_(exactVal_(row, map, ["CUSTOMER"]));
+    var shipDate = String(exactVal_(row, map, ["SHIP DATE"]) || "").trim();
+    var quantity = String(exactVal_(row, map, ["LENGTH (IN)"]) || "").trim().toUpperCase().replace(/\s+/g, " ");
+    if (!customer || !shipDate || !/\b(PLT|PLTS|PALLET|PALLETS|CTN|CTNS|CARTON|CARTONS)\b/.test(quantity)) continue;
+    var key = customer + "___" + shipDate + "___" + quantity;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ rowNumber: r + 1, values: row, invoice: exactVal_(row, map, ["INVOICE NO.", "INVOICE #", "INVOICE"]) });
+  }
+
+  var deleteRows = [];
+  groups.forEach(function (rows) {
+    if (rows.length < 2) return;
+    var invoiceRows = rows.filter(function (row) { return String(row.invoice || "").trim(); });
+    if (invoiceRows.length !== 1) return;
+    var keeper = invoiceRows[0];
+    rows.forEach(function (candidate) {
+      if (candidate.rowNumber === keeper.rowNumber || String(candidate.invoice || "").trim()) return;
+      var hasUniqueDetail = candidate.values.some(function (value, column) {
+        if (column === map["INVOICE NO."]) return false;
+        var clean = String(value || "").trim();
+        var keeperValue = String(keeper.values[column] || "").trim();
+        return clean && clean !== keeperValue;
+      });
+      if (!hasUniqueDetail) deleteRows.push(candidate.rowNumber);
+    });
+  });
+
+  deleteRows.sort(function (a, b) { return b - a; }).forEach(function (rowNumber) {
+    sheet.deleteRow(rowNumber);
+  });
+  return deleteRows.length;
 }
 
 function scanAndImportWmsTruckingOrdersV2() {
@@ -73,6 +194,7 @@ function scanAndImportWmsTruckingOrdersV2() {
     var sourceSheet = sourceSpreadsheet.getSheetByName("Stylekorean");
     var targetSheet = targetSpreadsheet.getSheetByName("WH Trucking Request");
     if (!sourceSheet || !targetSheet) throw new Error("Required source or target sheet is missing.");
+    var collapsedQuantityRows = collapseRedundantWhQuantityRowsV2_(targetSheet);
 
     var sourceData = sourceSheet.getDataRange().getDisplayValues();
     var sourceHeader = findWmsTruckingHeader_(sourceData);
@@ -130,6 +252,20 @@ function scanAndImportWmsTruckingOrdersV2() {
       group.sourceRows.push(r + 1);
     }
 
+    var fulfillmentDetails = fetchFulfillmentDetailsV2_(Array.from(sourceByInvoice.keys()));
+    var customerDbSheet = targetSpreadsheet.getSheetByName(CUSTOMER_DB_SHEET_NAME);
+    var customerRecords = [];
+    if (customerDbSheet) {
+      var customerRows = customerDbSheet.getDataRange().getDisplayValues();
+      customerRecords = buildCustomerRecords_(customerRows, findCustomerDbHeader_(customerRows));
+    }
+    groups.forEach(function (group) {
+      group.fulfillmentDetails = group.invoices.map(function (invoice) { return fulfillmentDetails[invoice]; }).filter(Boolean);
+      group.freight = fulfillmentFreightSummaryV2_(group.fulfillmentDetails);
+      var customerRecord = matchCustomerRecord_(group.customer, customerRecords);
+      group.address = customerRecord ? customerRecord.address : "";
+    });
+
     var targetLastRow = Math.max(targetSheet.getLastRow(), 5);
     var targetLastColumn = Math.max(targetSheet.getLastColumn(), 24);
     var targetData = targetSheet.getRange(1, 1, targetLastRow, targetLastColumn).getDisplayValues();
@@ -179,7 +315,6 @@ function scanAndImportWmsTruckingOrdersV2() {
       if (match) {
         if (!match.active) {
           skippedTerminal++;
-          return;
         }
 
         var current = targetSheet.getRange(match.rowNumber, 1, 1, width).getValues()[0];
@@ -200,6 +335,24 @@ function scanAndImportWmsTruckingOrdersV2() {
           changed = writeMappedValue_(targetSheet, match.rowNumber, targetMap, "CUSTOMER", group.customer) || changed;
           changed = writeMappedValue_(targetSheet, match.rowNumber, targetMap, "INVOICE NO.", mergedInvoices.join("\n")) || changed;
           changed = writeMappedValue_(targetSheet, match.rowNumber, targetMap, "SHIP DATE", group.shipDate) || changed;
+          changed = writeFulfillmentMappedValueV2_(targetSheet, match.rowNumber, targetMap, "ADDRESS", group.address) || changed;
+          if (group.freight) {
+            changed = writeFulfillmentMappedValueV2_(targetSheet, match.rowNumber, targetMap, "LENGTH (IN)", group.freight.length) || changed;
+            changed = writeFulfillmentMappedValueV2_(targetSheet, match.rowNumber, targetMap, "WIDTH (IN)", group.freight.width) || changed;
+            changed = writeFulfillmentMappedValueV2_(targetSheet, match.rowNumber, targetMap, "HEIGHT (IN)", group.freight.height) || changed;
+            changed = writeFulfillmentMappedValueV2_(targetSheet, match.rowNumber, targetMap, "WEIGHT (LBS)", group.freight.weight) || changed;
+            changed = writeFulfillmentMappedValueV2_(targetSheet, match.rowNumber, targetMap, "VOLUME (INCHES)", group.freight.cubicInches) || changed;
+            changed = writeFulfillmentMappedValueV2_(targetSheet, match.rowNumber, targetMap, "CFT", group.freight.cubicFeet) || changed;
+            changed = writeFulfillmentMappedValueV2_(targetSheet, match.rowNumber, targetMap, "PCF", group.freight.density) || changed;
+            changed = writeFulfillmentMappedValueV2_(targetSheet, match.rowNumber, targetMap, "FREIGHT CLASS", group.freight.freightClass) || changed;
+            if (group.freight.note) {
+              var priorNote = exactVal_(current, targetMap, ["NOTE"]);
+              var nextNote = priorNote.indexOf("FULFILLMENT DIMS") === -1
+                ? (priorNote ? priorNote + "\n" : "") + group.freight.note
+                : priorNote.replace(/FULFILLMENT DIMS[^\n]*/i, group.freight.note);
+              changed = writeMappedValue_(targetSheet, match.rowNumber, targetMap, "NOTE", nextNote) || changed;
+            }
+          }
 
           if (totalAmount > 0 && targetMap["VALUE"] !== undefined && !current[targetMap["VALUE"]]) {
             targetSheet.getRange(match.rowNumber, targetMap["VALUE"] + 1).setValue(totalAmount);
@@ -222,7 +375,19 @@ function scanAndImportWmsTruckingOrdersV2() {
       newRow[targetMap["CUSTOMER"]] = group.customer;
       newRow[targetMap["INVOICE NO."]] = group.invoices.join("\n");
       newRow[targetMap["SHIP DATE"]] = group.shipDate;
+      if (targetMap["ADDRESS"] !== undefined) newRow[targetMap["ADDRESS"]] = group.address;
       if (targetMap["VALUE"] !== undefined && totalAmount > 0) newRow[targetMap["VALUE"]] = totalAmount;
+      if (group.freight) {
+        if (targetMap["LENGTH (IN)"] !== undefined) newRow[targetMap["LENGTH (IN)"]] = group.freight.length;
+        if (targetMap["WIDTH (IN)"] !== undefined) newRow[targetMap["WIDTH (IN)"]] = group.freight.width;
+        if (targetMap["HEIGHT (IN)"] !== undefined) newRow[targetMap["HEIGHT (IN)"]] = group.freight.height;
+        if (targetMap["WEIGHT (LBS)"] !== undefined) newRow[targetMap["WEIGHT (LBS)"]] = group.freight.weight;
+        if (targetMap["VOLUME (INCHES)"] !== undefined) newRow[targetMap["VOLUME (INCHES)"]] = group.freight.cubicInches;
+        if (targetMap["CFT"] !== undefined) newRow[targetMap["CFT"]] = group.freight.cubicFeet;
+        if (targetMap["PCF"] !== undefined) newRow[targetMap["PCF"]] = group.freight.density;
+        if (targetMap["FREIGHT CLASS"] !== undefined) newRow[targetMap["FREIGHT CLASS"]] = group.freight.freightClass;
+        if (targetMap["NOTE"] !== undefined) newRow[targetMap["NOTE"]] = group.freight.note;
+      }
       if (targetMap["STATUS"] !== undefined) newRow[targetMap["STATUS"]] = "WORK IN PROGRESS";
       if (WMS_TRUCKING_DRY_RUN) {
         logWmsDryRun_("insert", null, group, group.invoices, totalAmount);
@@ -262,6 +427,7 @@ function scanAndImportWmsTruckingOrdersV2() {
       ", updated=" + updated +
       ", repaired=" + repaired +
       ", skippedTerminal=" + skippedTerminal +
+      ", collapsedQuantityRows=" + collapsedQuantityRows +
       ", skippedBeforeCutoff=" + skippedBeforeCutoff
     );
 
@@ -273,6 +439,7 @@ function scanAndImportWmsTruckingOrdersV2() {
       updated: updated,
       repaired: repaired,
       skippedTerminal: skippedTerminal,
+      collapsedQuantityRows: collapsedQuantityRows,
       skippedBeforeCutoff: skippedBeforeCutoff,
       nextRow: lastBusinessRow + pendingRows.length + 1
     };

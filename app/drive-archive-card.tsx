@@ -43,11 +43,6 @@ const DEFAULT_LINKS: DriveLink[] = [
     label: "Inbound Shipments",
     url: "https://drive.google.com/drive/folders/1yLstLWGf-wx_qxw0rzthdMzlhKmAZ9gZ",
   },
-  {
-    label: "SK Logistics Email Archive",
-    url: "https://drive.google.com/drive/search?q=SK%20Logistics%20Email%20Archive",
-    hint: "Legacy archive folders — auto-filed by year / month / category",
-  },
 ];
 
 /**
@@ -63,6 +58,11 @@ export function isDriveFolderLink(url: string): boolean {
 // Keyword → color/emoji so a folder's icon actually reflects its title,
 // rather than every folder getting the same generic glyph.
 const FOLDER_ICON_RULES: Array<{ pattern: RegExp; emoji: string; className: string }> = [
+  { pattern: /^shipping documents$/i, emoji: "📑", className: "bg-sky-100 text-sky-700" },
+  { pattern: /^bill of ladings$/i, emoji: "🚢", className: "bg-cyan-100 text-cyan-700" },
+  { pattern: /^pod$/i, emoji: "✅", className: "bg-green-100 text-green-700" },
+  { pattern: /^entry summaries$/i, emoji: "🛃", className: "bg-purple-100 text-purple-700" },
+  { pattern: /^supplies purchase$/i, emoji: "🛒", className: "bg-pink-100 text-pink-700" },
   { pattern: /import|shipment|inbound/i, emoji: "📦", className: "bg-blue-100 text-blue-700" },
   { pattern: /warehouse|stock|inventory/i, emoji: "🏭", className: "bg-amber-100 text-amber-700" },
   { pattern: /archive|email/i, emoji: "🗄️", className: "bg-violet-100 text-violet-700" },

@@ -218,7 +218,8 @@ function gmailV2Queries_() {
   var base = "newer_than:" + GMAIL_V2_LOOKBACK_DAYS + "d -in:spam -in:trash ";
   var queries = [
     base + '{subject:출고 subject:해상 subject:해운 subject:항공 subject:선적 subject:입고 subject:"AIR SHIPMENT" subject:"OCEAN SHIPMENT" subject:"SILICON2 LIST" subject:"arrival notice" subject:"bill of lading" subject:BOL subject:"entry summary" subject:"shipping documents" subject:ISF subject:"delivery order" subject:POD subject:MAWB subject:HAWB}',
-    base + '{from:info@cargomatic.com from:mcinfo@ups.com from:ups.com from:fedex.com from:usps.com from:dhl.com} {subject:shipment subject:delivery subject:delivered subject:completed subject:rescheduled subject:pickup}'
+    base + '{from:info@cargomatic.com from:mcinfo@ups.com from:ups.com from:fedex.com from:usps.com from:dhl.com} {subject:shipment subject:delivery subject:delivered subject:completed subject:rescheduled subject:pickup}',
+    base + 'from:xpo.com subject:"Pickup Request Created"'
   ];
   if (GMAIL_V2_BROADENED_SEARCH_ENABLED_V2) {
     queries.push(base + '{' + gmailV2GenericLogisticsSubjectClauseV2_() + '}');
@@ -390,6 +391,9 @@ function processLogisticsMessageV2_(message, isBroadenedOnly) {
     var parsed = extractAttachmentRecordsV2_(attachment, name, context, meta);
     if (parsed.supported) supportedSeen = true;
     parsed.records.forEach(function (record) { records.push(record); });
+  });
+  meta.documentNames = documentAttachments.map(function (attachment) {
+    return String(attachment.getName() || "attachment").replace(/[\\/:*?\"<>|]+/g, "_");
   });
 
   if (!records.length && hasStrongLogisticsContextV2_(context)) {
@@ -583,6 +587,14 @@ function extractEmailContextV2_(subject, body) {
     var vesselCandidate = cleanVesselV2_(vessel[1]);
     if (isPlausibleVesselV2_(vesselCandidate)) context.vessel = vesselCandidate;
   }
+  // KCC air notices frequently render AIRLINE as a table header and the
+  // flight (for example OZ-204) later in the flattened body, so it is not
+  // adjacent enough for the VSL/VESSEL label parser above.  A flight number
+  // is safe to use as the inbound transport name only when a MAWB is present.
+  if (!context.vessel && mawb) {
+    var flight = text.match(/\b([A-Z]{2})[- ]?(\d{2,4})\b/);
+    if (flight) context.vessel = flight[1] + "-" + flight[2];
+  }
 
   context.status = explicitEmailStatusV2_(subject, body);
 
@@ -636,7 +648,11 @@ function explicitEmailStatusV2_(subject, body) {
   if (/FDA[^\n]{0,40}\b(?:HOLD|DETAINED?|REVIEW)\b|FDA[^\n]{0,30}보류/i.test(signal)) return "FDA Review / Hold";
   if (/FWS[^\n]{0,40}\b(?:HOLD|REVIEW|EXAM)\b|USFWS[^\n]{0,40}\b(?:HOLD|REVIEW|EXAM)\b/i.test(signal)) return "FWS Review / Hold";
   if (/CUSTOMS[^\n]{0,40}\b(?:HOLD|CLEARANCE PENDING|UNDER REVIEW)\b|통관[^\n]{0,30}(?:보류|검사|대기)/i.test(signal)) return "Customs Clearance";
-  if (/\b(?:STATUS\s*[:=-]?\s*)?(?:IN TRANSIT|SHIPPED)\b|\bSHIPMENT\b[^\n]{0,40}\b(?:PICKED UP|SHIPPED)\b/i.test(signal)) return "Shipping";
+  if (/\b(?:PICKUP|PICK UP)\b[^\n]{0,50}\b(?:REQUESTED|CONFIRMED|SCHEDULED)\b|\bPICKUP CONFIRMATION\b/i.test(signal)) return "Schedule Requested";
+  if (/\bARRIVED AT INTERIM\b/i.test(signal)) return "In Transit/Stopover";
+  if (/\bSTATUS\s*[:=-]?\s*IN TRANSIT\b|\bSHIPMENT\b[^\n]{0,40}\bIN TRANSIT\b/i.test(signal)) return "In Transit";
+  if (/\bSHIPMENT\b[^\n]{0,40}\bPICKED UP\b|\bSTATUS\s*[:=-]?\s*PICKED UP\b/i.test(signal)) return "Picked Up/Shipped";
+  if (/\b(?:STATUS\s*[:=-]?\s*)?SHIPPED\b|\bSHIPMENT\b[^\n]{0,40}\bSHIPPED\b/i.test(signal)) return "Shipping";
   if (/\b(?:DELIVERY|ETA|SHIPMENT)\b[^\n]{0,60}\b(?:RESCHEDULED|DELAYED)\b|\bRESCHEDULED DELIVERY\b/i.test(signal)) return "Delayed";
   return "";
 }
@@ -937,11 +953,30 @@ function archiveEmailAttachmentsV2_(attachments, records, direction, customerNam
     var existing = direction === "inbound" ? findExistingInboundDocsFolderV2_(records) : null;
     var folder = existing || getOrCreateShipmentDocsFolderV2_(direction, customerName, records, context, meta);
     attachments.forEach(function (attachment) { createAttachmentIfMissingV2_(folder, attachment); });
+    meta.archiveFolderPath = shipmentArchiveFolderPathV2_("Import Shipments", folder, meta);
     return folder.getUrl();
   } catch (err) {
     writeLog_("GMAIL V2 ARCHIVE", meta.messageId, String(err));
     return "";
   }
+}
+
+function archiveOutboundEmailAttachmentsV2_(attachments, records, context, meta) {
+  try {
+    var root = DriveApp.getFolderById(GMAIL_PIPELINE.outboundShipmentsFolderId);
+    var folder = getOrCreateShipmentDocsFolderV2_(root, records, context, meta);
+    attachments.forEach(function (attachment) { createAttachmentIfMissingV2_(folder, attachment); });
+    meta.archiveFolderPath = shipmentArchiveFolderPathV2_("Outbound Shipments", folder, meta);
+    return folder.getUrl();
+  } catch (err) {
+    writeLog_("GMAIL V2 OUTBOUND ARCHIVE", meta.messageId, String(err));
+    return "";
+  }
+}
+
+function shipmentArchiveFolderPathV2_(category, folder, meta) {
+  var year = Utilities.formatDate(meta.date || new Date(), "America/Los_Angeles", "yyyy");
+  return "Warehouse Documents / " + category + " / " + year + " / " + folder.getName();
 }
 
 function findExistingInboundDocsFolderV2_(records) {
@@ -1152,6 +1187,17 @@ function upsertOutboundEmailV2_(record, allowInsert) {
   // else in that file. OUTBOUND_INSERT_DRY_RUN_V2 only ever gates the
   // automatic-ingestion path in processLogisticsMessageV2_.
   return upsertOutboundEmailAcrossSheetsV2_(record, allowInsert, ["WH Trucking Request"], false);
+}
+
+function setOutboundDocsLinkV2_(sheet, rowNumber, label, folderUrl) {
+  if (!folderUrl) return false;
+  var cell = sheet.getRange(rowNumber, 2);
+  var text = String(cell.getDisplayValue() || label || "DOCS").trim();
+  var prior = cell.getRichTextValue();
+  var priorUrl = prior && prior.getLinkUrl ? prior.getLinkUrl() : "";
+  if (priorUrl === folderUrl) return false;
+  cell.setRichTextValue(SpreadsheetApp.newRichTextValue().setText(text).setLinkUrl(folderUrl).build());
+  return true;
 }
 
 function sameEmailIdV2_(a, b) {
