@@ -324,4 +324,145 @@ describe("Apps Script production integrity", () => {
     // left over from testing an earlier revision of this PR.
     expect(triggers).toContain('"customerLookupOnEdit"');
   });
+
+  it("ships the broadened Gmail search and both new customer/store resolvers enabled, but not yet wired into live ingestion", () => {
+    const pipeline = read("google-apps-script/GmailPipelineV2.gs");
+    const customerResolver = read("google-apps-script/GmailCustomerResolverV2.gs");
+    const storeResolver = read("google-apps-script/GmailStoreResolverV2.gs");
+    expect(pipeline).toContain("var GMAIL_V2_BROADENED_SEARCH_ENABLED_V2 = true;");
+    expect(customerResolver).toContain("var GMAIL_CUSTOMER_RESOLVER_ENABLED_V2 = true;");
+    expect(storeResolver).toContain("var GMAIL_STORE_RESOLVER_ENABLED_V2 = true;");
+    // Both resolvers are reviewed/tested standalone first — wiring them into
+    // processLogisticsMessageV2_ lands in a follow-up PR together with the
+    // insert-row helper and its own dry-run gate, since a resolved
+    // record.customer would otherwise be able to reach
+    // upsertOutboundEmailV2_'s existing (already-live, ungated) insert
+    // branch immediately.
+    expect(pipeline).not.toContain("resolveCustomerFromEmailV2_(");
+    expect(pipeline).not.toContain("resolveUltaDcFromEmailV2_(");
+    expect(pipeline).not.toContain("resolveTjxDcFromEmailV2_(");
+  });
+
+  it("reserves each Gmail search query its own thread-discovery share instead of a flat post-hoc slice", () => {
+    const pipeline = read("google-apps-script/GmailPipelineV2.gs");
+    // Codex review on PR #102: filling threadsById in query order and then
+    // slicing the combined set to GMAIL_V2_MAX_THREADS let the broadened
+    // query's results (always inserted last) get silently discarded
+    // whenever the first two queries alone already filled every slot.
+    expect(pipeline).toContain("var perQueryThreadCap = Math.ceil(GMAIL_V2_MAX_THREADS / queries.length);");
+    expect(pipeline).not.toMatch(/Object\.keys\(threadsById\)\.slice\(/);
+    // Round 2 of the same review: attribution (which quer(y/ies) matched a
+    // thread, for the broadenedMatches metric) must be computed from the
+    // full, uncapped search results — not from which threads happened to
+    // win a slot under the per-query cap — or a thread that overflowed one
+    // query's share could get admitted under another's and miscounted.
+    expect(pipeline).toContain("var matchedByQueryIndex = {};");
+    expect(pipeline).toContain("perQueryResults.forEach(function (threads, queryIndex) {");
+    // And: a thread with no unprocessed message left must not consume its
+    // query's admission share either, or a query that stably returns the
+    // same already-fully-handled threads can permanently starve a
+    // genuinely new thread ranked just below the cap. Round 6 of the same
+    // review: filtering this at admission time wasn't enough either — a
+    // query with more matches than fit in one page would keep re-fetching
+    // the same already-processed top results forever, since Gmail search
+    // has no built-in "exclude already-handled" filter. Paging past them at
+    // search time (before admission) is what actually lets threads ranked
+    // behind the fully-processed ones surface.
+    expect(pipeline).toContain("function gmailV2AdmissibleThreadsForQueryV2_(query, deadline, offsetKey) {");
+    expect(pipeline).toContain("var evaluation = gmailV2EvaluateThreadV2_(page[i]);");
+    expect(pipeline).toContain(
+      "return gmailV2AdmissibleThreadsForQueryV2_(query, queryDeadline, GMAIL_V2_DISCOVERY_OFFSET_PREFIX + index);",
+    );
+    // Round 10 of the same review: a deadline hit mid-page previously
+    // abandoned the rest of that page with no memory of where it stopped —
+    // every trigger invocation restarted the same query at offset 0, so a
+    // stable backlog of already-seen/retry-deferred threads at the front of
+    // the results could permanently starve an unseen thread ranked behind
+    // it. The search offset now persists per query across runs and only
+    // resets once that query's results are genuinely exhausted.
+    expect(pipeline).toContain('var GMAIL_V2_DISCOVERY_OFFSET_PREFIX = "GMAIL_V2_DISCOVERY_OFFSET_";');
+    expect(pipeline).toContain("var start = props ? Number(props.getProperty(offsetKey) || 0) : 0;");
+    expect(pipeline).toContain("if (exhausted) props.deleteProperty(offsetKey);");
+    expect(pipeline).toContain("else props.setProperty(offsetKey, String(start));");
+    // A short/near-exhausted page combined with a tight deadline must not
+    // be misread as "nothing left" — only a page fully evaluated before
+    // deciding it's shorter than a full page counts as real exhaustion.
+    expect(pipeline).toContain("if (i < page.length) break;");
+    // Round 10, a second finding on the same review: "not matched by an
+    // established query" is only trustworthy when that query's discovery
+    // actually reached its true end-of-results this run — otherwise a
+    // thread the broadened query also found could be misclassified as
+    // broadened-only and forced into PENDING VERIFICATION instead of that
+    // established query's normal upsert path.
+    expect(pipeline).toContain("return { admissible: admissible, deferredCounts: deferredCounts, truncated: !exhausted };");
+    expect(pipeline).toContain("var anyEstablishedQueryTruncated = perQueryDiscovery.some(function (discovery, queryIndex) {");
+    expect(pipeline).toContain("if (broadenedQueryIndex !== -1 && !anyEstablishedQueryTruncated) {");
+    expect(pipeline).toContain("function gmailV2ThreadHasUnprocessedMessageV2_(thread) {");
+    expect(pipeline).toContain("return gmailV2EvaluateThreadV2_(thread).admissible;");
+    // Round 7 of the same review: discovery itself must respect the run's
+    // overall time budget — with 4 queries each potentially scanning up to
+    // GMAIL_V2_MAX_SEARCH_SCAN already-processed threads, an unbounded
+    // discovery phase could exhaust the whole run before a single message
+    // is processed or the run log is written.
+    expect(pipeline).toContain("var GMAIL_V2_DISCOVERY_BUDGET_MS = 60000;");
+    expect(pipeline).toContain("var discoveryDeadline = runStarted + GMAIL_V2_DISCOVERY_BUDGET_MS;");
+    expect(pipeline).toContain("if (Date.now() >= deadline) break;");
+    // Round 8 of the same review: a shared deadline alone still let a
+    // first query with a large processed/retry-deferred backlog consume
+    // the ENTIRE discovery budget before any later query got a single page
+    // fetched (Array.map runs each query's discovery to completion before
+    // starting the next) — each query now gets its own reserved slice.
+    expect(pipeline).toContain("var perQueryDiscoveryBudgetMs = Math.floor(GMAIL_V2_DISCOVERY_BUDGET_MS / queries.length);");
+    expect(pipeline).toContain("var queryDeadline = Math.min(discoveryDeadline, Date.now() + perQueryDiscoveryBudgetMs);");
+    // Also round 7: a thread admission rejects solely for being
+    // retry-deferred (never fully seen, never past the lookback window)
+    // must still surface in stats.retryDeferred — it is never admitted, so
+    // the main per-message loop's own retryDeferred++ never sees it.
+    expect(pipeline).toContain("function gmailV2EvaluateThreadV2_(thread) {");
+    expect(pipeline).toContain("deferredCountByThreadId[id] = discovery.deferredCounts[id];");
+    expect(pipeline).toContain("retryDeferred: discoveredRetryDeferred");
+    // Round 5 of the same review: a per-query cap can go unused when that
+    // query simply has fewer than its share of hits (e.g. only one of
+    // three queries has any matches), leaving global budget idle while
+    // that query's own overflow ages past the lookback window instead of
+    // being processed. A second fill pass spends the leftover global
+    // budget on overflow from every query.
+    expect(pipeline).toContain("var overflowByQuery = [];");
+    expect(pipeline).toContain("var remainingGlobalBudget = GMAIL_V2_MAX_THREADS - Object.keys(threadsById).length;");
+    expect(pipeline).toContain("overflowByQuery.forEach(function (overflow) {");
+  });
+
+  it("forces every broadened-only-matched record through PENDING VERIFICATION until explicitly trusted", () => {
+    const pipeline = read("google-apps-script/GmailPipelineV2.gs");
+    // Codex review on PR #102: query 0 was already fully sender-agnostic
+    // before this file's changes, but the broadened query's generic terms
+    // ("commercial invoice", "delivery order", ...) measurably widen how
+    // much untrusted-sender traffic reaches match/insert logic that can
+    // mutate a live sheet with no human review at all for a matched
+    // update. Starting disabled forces every broadened-only find through
+    // PENDING VERIFICATION for an observation period, the same rollout
+    // discipline as every other new-automation flag in this codebase.
+    expect(pipeline).toContain("var GMAIL_V2_BROADENED_AUTOCOMMIT_ENABLED_V2 = false;");
+    expect(pipeline).toContain("if (isBroadenedOnly && !GMAIL_V2_BROADENED_AUTOCOMMIT_ENABLED_V2) {");
+    expect(pipeline).toContain("function processLogisticsMessageV2_(message, isBroadenedOnly) {");
+    expect(pipeline).toContain("processLogisticsMessageV2_(message, isBroadenedOnly)");
+  });
+
+  it("only skips archiving Gmail attachments for a weak broadened-only match with zero extracted records", () => {
+    const pipeline = read("google-apps-script/GmailPipelineV2.gs");
+    // Codex review round 1 on PR #102: the broadened search query is
+    // generic enough that an unrelated email can match with zero
+    // extractable records — gating purely on documentAttachments.length
+    // would still create a permanent Drive folder for a shipment that was
+    // never matched or inserted anywhere.
+    //
+    // Codex review round 3 on PR #102: that fix over-reached — gating on
+    // records.length unconditionally also stopped archiving attachments
+    // for the two ORIGINAL, already-trusted queries whenever extraction
+    // failed, losing the exact artifact a human needs to debug why
+    // extraction failed. The zero-records skip must apply only to threads
+    // found ONLY by the broadened query.
+    expect(pipeline).toContain("var isWeakBroadenedMatch = isBroadenedOnly && !records.length;");
+    expect(pipeline).toContain("if (documentAttachments.length && !isWeakBroadenedMatch) {");
+  });
 });
