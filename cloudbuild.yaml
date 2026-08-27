@@ -1,0 +1,200 @@
+# ============================================================
+# Google Cloud Build — StyleKorean Logistics Hub
+# ============================================================
+#
+# Builds the Next.js static export and deploys to one of three
+# GCP targets. Set the _DEPLOY_TARGET substitution to choose:
+#
+#   firebase        → Firebase Hosting (default, recommended)
+#   cloud-storage   → GCS bucket behind Cloud CDN
+#   cloud-run       → Cloud Run container (nginx serving static)
+#
+# Required setup per target:
+#   firebase:       gcloud builds submit --substitutions=_DEPLOY_TARGET=firebase
+#                   Needs: firebase.json, .firebaserc, Firebase Hosting site
+#   cloud-storage:  gcloud builds submit --substitutions=_DEPLOY_TARGET=cloud-storage,_GCS_BUCKET=your-bucket
+#                   Needs: GCS bucket with website config
+#   cloud-run:      gcloud builds submit --substitutions=_DEPLOY_TARGET=cloud-run
+#                   Needs: Artifact Registry repo, Cloud Run service
+#
+# Usage:
+#   gcloud builds submit . --config=cloudbuild.yaml
+#   gcloud builds submit . --config=cloudbuild.yaml --substitutions=_DEPLOY_TARGET=cloud-run
+#
+# Trigger (automatic):
+#   gcloud builds triggers create github \
+#     --repo-name=logistics --repo-owner=bobo61480 \
+#     --branch-pattern='^main$' \
+#     --build-config=cloudbuild.yaml
+# ============================================================
+
+substitutions:
+  _DEPLOY_TARGET: "firebase"
+  _GCS_BUCKET: "stylekorean-logistics-static"
+  _REGION: "us-central1"
+  _SERVICE_NAME: "stylekorean-logistics"
+  _AR_REPO: "stylekorean"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+
+# ──────────────────────────────────────────────
+# Step 1: Install dependencies
+# ──────────────────────────────────────────────
+steps:
+  - id: install
+    name: "node:22.13.0"
+    entrypoint: npm
+    args: ["ci"]
+
+  # ──────────────────────────────────────────
+  # Step 2a: Typecheck (parallel with tests)
+  # ──────────────────────────────────────────
+  - id: typecheck
+    name: "node:22.13.0"
+    entrypoint: npm
+    args: ["run", "typecheck"]
+    waitFor: ["install"]
+
+  # ──────────────────────────────────────────
+  # Step 2b: Unit tests (parallel with typecheck)
+  # ──────────────────────────────────────────
+  - id: test
+    name: "node:22.13.0"
+    entrypoint: npm
+    args: ["test"]
+    waitFor: ["install"]
+
+  # ──────────────────────────────────────────
+  # Step 3: Build static export
+  # ──────────────────────────────────────────
+  - id: build
+    name: "node:22.13.0"
+    entrypoint: npm
+    args: ["run", "build"]
+    waitFor: ["typecheck", "test"]
+
+  # ──────────────────────────────────────────
+  # Step 4: Verify static export structure
+  # ──────────────────────────────────────────
+  - id: verify-export
+    name: "bash"
+    entrypoint: bash
+    args:
+      - "-euo"
+      - "pipefail"
+      - "-c"
+      - |
+        echo "Verifying static export..."
+        test -f out/index.html
+        test -d out/_next
+        test -f out/light/index.html
+        test -f out/light-skin/index.html
+        test -f out/light-full/index.html
+        test -f out/fulfillment-style/index.html
+        echo "Static export verified: all appearance routes present."
+
+        # Copy the importable template into the export
+        if [ -f templates/stylekorean-template.html ]; then
+          cp templates/stylekorean-template.html out/template.html
+          echo "Template artifact copied to out/template.html"
+        fi
+    waitFor: ["build"]
+
+  # ──────────────────────────────────────────
+  # Step 5a: Deploy to Firebase Hosting
+  # ──────────────────────────────────────────
+  - id: deploy-firebase
+    name: "node:22.13.0"
+    entrypoint: bash
+    args:
+      - "-euo"
+      - "pipefail"
+      - "-c"
+      - |
+        if [ "${_DEPLOY_TARGET}" != "firebase" ]; then
+          echo "Skipping Firebase deploy (_DEPLOY_TARGET=${_DEPLOY_TARGET})"
+          exit 0
+        fi
+        npm install -g firebase-tools
+        firebase deploy --only hosting --project $PROJECT_ID
+    waitFor: ["verify-export"]
+
+  # ──────────────────────────────────────────
+  # Step 5b: Deploy to Cloud Storage
+  # ──────────────────────────────────────────
+  - id: deploy-gcs
+    name: "gcr.io/cloud-builders/gsutil"
+    entrypoint: bash
+    args:
+      - "-euo"
+      - "pipefail"
+      - "-c"
+      - |
+        if [ "${_DEPLOY_TARGET}" != "cloud-storage" ]; then
+          echo "Skipping GCS deploy (_DEPLOY_TARGET=${_DEPLOY_TARGET})"
+          exit 0
+        fi
+        echo "Syncing out/ to gs://${_GCS_BUCKET}..."
+        gsutil -m rsync -r -d -c out/ gs://${_GCS_BUCKET}/
+        gsutil -m setmeta \
+          -h "Cache-Control:public, max-age=3600" \
+          "gs://${_GCS_BUCKET}/**/*.html"
+        gsutil -m setmeta \
+          -h "Cache-Control:public, max-age=31536000, immutable" \
+          "gs://${_GCS_BUCKET}/_next/**"
+        echo "GCS deploy complete: gs://${_GCS_BUCKET}"
+    waitFor: ["verify-export"]
+
+  # ──────────────────────────────────────────
+  # Step 5c: Deploy to Cloud Run (containerized)
+  # ──────────────────────────────────────────
+  - id: deploy-cloud-run
+    name: "gcr.io/cloud-builders/docker"
+    entrypoint: bash
+    args:
+      - "-euo"
+      - "pipefail"
+      - "-c"
+      - |
+        if [ "${_DEPLOY_TARGET}" != "cloud-run" ]; then
+          echo "Skipping Cloud Run deploy (_DEPLOY_TARGET=${_DEPLOY_TARGET})"
+          exit 0
+        fi
+        IMAGE="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/${_SERVICE_NAME}:${SHORT_SHA}"
+        docker build -t "$IMAGE" -f Dockerfile.cloudrun .
+        docker push "$IMAGE"
+        echo "Image pushed: $IMAGE"
+    waitFor: ["verify-export"]
+
+  - id: run-deploy
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: bash
+    args:
+      - "-euo"
+      - "pipefail"
+      - "-c"
+      - |
+        if [ "${_DEPLOY_TARGET}" != "cloud-run" ]; then
+          echo "Skipping Cloud Run service deploy"
+          exit 0
+        fi
+        IMAGE="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/${_SERVICE_NAME}:${SHORT_SHA}"
+        gcloud run deploy ${_SERVICE_NAME} \
+          --image "$IMAGE" \
+          --region ${_REGION} \
+          --platform managed \
+          --allow-unauthenticated \
+          --port 8080 \
+          --cpu 1 \
+          --memory 256Mi \
+          --min-instances 0 \
+          --max-instances 10 \
+          --set-env-vars "NODE_ENV=production"
+        echo "Cloud Run service deployed: ${_SERVICE_NAME}"
+    waitFor: ["deploy-cloud-run"]
+
+images: []
+
+timeout: "1200s"
