@@ -304,4 +304,68 @@ describe("resolveCustomerFromEmailV2_", () => {
     );
     expect(result).toBeNull();
   });
+
+  it("rejects a brand-wide domain match against a location-qualified row (Tier A)", () => {
+    // Regression for a Codex review finding: if only "MEGA MART (PALO ALTO)"
+    // has megamart.com on file, mail from that domain about a DIFFERENT,
+    // not-yet-on-file location (e.g. Fremont) must not resolve to Palo Alto
+    // just because the domain matches — the same class of cross-location
+    // mismatch that caused the 2026-08-12 KORHEIM incident.
+    const dbRows = [HEADER, ["MEGA MART (PALO ALTO)", "1 Palo Alto Way", "Jane", "megamart.com"]];
+    const { helpers } = loadResolverHelpers(dbRows);
+    const result = helpers.resolveCustomerFromEmailV2_(
+      { from: "ops@megamart.com", subject: "Shipment for our Fremont store", body: "", messageId: "m11" },
+      {},
+      {},
+    );
+    expect(result).toBeNull();
+  });
+
+  it("still trusts an EXACT address match against a location-qualified row (Tier A)", () => {
+    const dbRows = [HEADER, ["MEGA MART (PALO ALTO)", "1 Palo Alto Way", "Jane", "paloalto@megamart.com"]];
+    const { helpers } = loadResolverHelpers(dbRows);
+    const result = helpers.resolveCustomerFromEmailV2_(
+      { from: "paloalto@megamart.com", subject: "New PO", body: "", messageId: "m12" },
+      {},
+      {},
+    );
+    expect(result).toEqual({ customer: "MEGA MART (PALO ALTO)", method: "sender", confidence: "high" });
+  });
+
+  it("ignores a quoted reply's old shipment when resolving by text (Tier B)", () => {
+    // Regression for a Codex review finding: a reply chain that quotes an
+    // older message about a different, already-known customer must not
+    // let that quoted text resolve the CURRENT message's customer.
+    const dbRows = [HEADER, ["TOKTOK BEAUTY", "456 Oak Ave", "John", ""]];
+    const { helpers } = loadResolverHelpers(dbRows);
+    const body = [
+      "Please see the new packing list attached for this shipment.",
+      "",
+      "On Mon, Aug 24, 2026 at 9:00 AM, ops@toktokbeauty.com wrote:",
+      "> Here is the TokTok Beauty invoice from last week.",
+    ].join("\n");
+    const result = helpers.resolveCustomerFromEmailV2_(
+      { from: "random@unrelated.com", subject: "New shipment", body, messageId: "m13" },
+      {},
+      {},
+    );
+    expect(result).toBeNull();
+  });
+
+  it("still resolves via text when the customer is named above the quoted history", () => {
+    const dbRows = [HEADER, ["TOKTOK BEAUTY", "456 Oak Ave", "John", ""]];
+    const { helpers } = loadResolverHelpers(dbRows);
+    const body = [
+      "New PO for TokTok Beauty attached.",
+      "",
+      "On Mon, Aug 24, 2026 at 9:00 AM, ops@example.com wrote:",
+      "> unrelated older content",
+    ].join("\n");
+    const result = helpers.resolveCustomerFromEmailV2_(
+      { from: "random@unrelated.com", subject: "New shipment", body, messageId: "m14" },
+      {},
+      {},
+    );
+    expect(result).toEqual({ customer: "TOKTOK BEAUTY", method: "text-exact", confidence: "high" });
+  });
 });

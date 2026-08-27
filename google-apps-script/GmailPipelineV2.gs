@@ -28,6 +28,13 @@ var GMAIL_V2_SEARCH_PAGE_SIZE = 50;
 // ranked 13+ until they aged out of the lookback window.
 var GMAIL_V2_MAX_SEARCH_SCAN = 200;
 var GMAIL_V2_RUNTIME_BUDGET_MS = 210000;
+// Reserves a slice of the overall runtime budget for search discovery
+// (paging past already-processed threads across every query) so it can
+// never itself consume the whole run: with 4 queries each potentially
+// scanning up to GMAIL_V2_MAX_SEARCH_SCAN threads, discovery alone could
+// otherwise run past GMAIL_V2_RUNTIME_BUDGET_MS before a single message is
+// processed or the run log is written (Codex review round 7 on PR #102).
+var GMAIL_V2_DISCOVERY_BUDGET_MS = 60000;
 var GMAIL_V2_SEEN_PREFIX = "GMAIL_V2_SEEN_";
 var GMAIL_V2_ATTEMPT_PREFIX = "GMAIL_V2_ATTEMPT_";
 var GMAIL_V2_RETRY_AT_PREFIX = "GMAIL_V2_RETRY_AT_";
@@ -53,9 +60,29 @@ function processLogisticsEmailsV2() {
     // are excluded here rather than merely being skipped at admission time,
     // so a query with more matches than fit in one page doesn't get stuck
     // re-fetching the same fully-handled top results forever.
-    var perQueryResults = queries.map(function (query) {
-      return gmailV2AdmissibleThreadsForQueryV2_(query);
+    var discoveryDeadline = runStarted + GMAIL_V2_DISCOVERY_BUDGET_MS;
+    var perQueryDiscovery = queries.map(function (query) {
+      return gmailV2AdmissibleThreadsForQueryV2_(query, discoveryDeadline);
     });
+    var perQueryResults = perQueryDiscovery.map(function (discovery) {
+      return discovery.admissible;
+    });
+    // A thread whose only eligible message(s) are retry-deferred is never
+    // admitted (see gmailV2ThreadHasUnprocessedMessageV2_'s anti-starvation
+    // contract), so it would otherwise never reach the main per-message
+    // loop's own stats.retryDeferred++ — silently under-reporting the exact
+    // backoff volume run-stats monitoring exists to surface (Codex review
+    // round 7 on PR #102). Merged by thread id first so a thread scanned by
+    // more than one query is still counted once.
+    var deferredCountByThreadId = {};
+    perQueryDiscovery.forEach(function (discovery) {
+      Object.keys(discovery.deferredCounts).forEach(function (id) {
+        deferredCountByThreadId[id] = discovery.deferredCounts[id];
+      });
+    });
+    var discoveredRetryDeferred = Object.keys(deferredCountByThreadId).reduce(function (sum, id) {
+      return sum + deferredCountByThreadId[id];
+    }, 0);
 
     // Pass 1: record which quer(y/ies) matched each thread, with NO
     // per-query cap applied yet (only the admissibility pre-filter above).
@@ -138,7 +165,7 @@ function processLogisticsEmailsV2() {
 
     var stats = {
       threads: 0, messages: 0, inserted: 0, updated: 0, noop: 0,
-      pending: 0, errors: 0, deferredThreads: 0, retryDeferred: 0, budgetHit: false,
+      pending: 0, errors: 0, deferredThreads: 0, retryDeferred: discoveredRetryDeferred, budgetHit: false,
       broadenedMatches: Object.keys(matchedOnlyByBroadenedQuery).length
     };
     var threadIds = Object.keys(threadsById);
@@ -285,35 +312,74 @@ function gmailV2RetryDeferred_(messageId) {
  * total threads have been scanned (quota guard against a query whose first
  * several hundred matches are all already fully processed).
  */
-function gmailV2AdmissibleThreadsForQueryV2_(query) {
+/**
+ * Returns { admissible: [...], deferredCounts: {threadId: count} } — the
+ * latter records, for each thread this query's scan rejected SOLELY
+ * because its only remaining eligible message(s) are retry-deferred (not
+ * fully seen, not past the lookback window), how many such messages it has.
+ * A thread never admitted (per gmailV2ThreadHasUnprocessedMessageV2_'s
+ * anti-starvation contract — see tests/gmail-thread-admission.test.ts)
+ * would otherwise never reach the main per-message loop's own
+ * stats.retryDeferred++ , silently under-reporting the exact backoff
+ * volume that run-stats monitoring exists to surface (Codex review round 7
+ * on PR #102). The caller merges this across queries, keyed by thread id,
+ * so a thread scanned by more than one query is still counted once.
+ */
+function gmailV2AdmissibleThreadsForQueryV2_(query, deadline) {
   var admissible = [];
+  var deferredCounts = {};
   var start = 0;
   var scanned = 0;
   while (admissible.length < GMAIL_V2_MAX_THREADS && scanned < GMAIL_V2_MAX_SEARCH_SCAN) {
+    if (Date.now() >= deadline) break;
     var page = GmailApp.search(query, start, GMAIL_V2_SEARCH_PAGE_SIZE);
     if (!page.length) break;
     for (var i = 0; i < page.length; i++) {
       scanned++;
-      if (gmailV2ThreadHasUnprocessedMessageV2_(page[i])) admissible.push(page[i]);
+      var evaluation = gmailV2EvaluateThreadV2_(page[i]);
+      if (evaluation.admissible) {
+        admissible.push(page[i]);
+      } else if (evaluation.deferredCount > 0) {
+        deferredCounts[page[i].getId()] = evaluation.deferredCount;
+      }
       if (admissible.length >= GMAIL_V2_MAX_THREADS || scanned >= GMAIL_V2_MAX_SEARCH_SCAN) break;
+      // Checked per-thread, not just per-page: each getMessages() call plus
+      // its PropertiesService reads is itself real time against the
+      // discovery budget, and a page can hold up to GMAIL_V2_SEARCH_PAGE_SIZE
+      // of them (Codex review round 7 on PR #102).
+      if (Date.now() >= deadline) break;
     }
     if (page.length < GMAIL_V2_SEARCH_PAGE_SIZE) break;
     start += GMAIL_V2_SEARCH_PAGE_SIZE;
   }
-  return admissible;
+  return { admissible: admissible, deferredCounts: deferredCounts };
 }
 
 function gmailV2ThreadHasUnprocessedMessageV2_(thread) {
+  return gmailV2EvaluateThreadV2_(thread).admissible;
+}
+
+/**
+ * One getMessages() pass classifying a thread for BOTH admission and
+ * retry-deferred accounting, so discovery doesn't walk a thread's messages
+ * twice (each walk being real quota/runtime cost the discovery budget must
+ * account for). Message order and the seen/retryDeferred/lookback
+ * precedence exactly match the original gmailV2ThreadHasUnprocessedMessageV2_
+ * contract (see tests/gmail-thread-admission.test.ts) — only retry-deferred
+ * messages are additionally tallied rather than merely skipped.
+ */
+function gmailV2EvaluateThreadV2_(thread) {
   var messages = thread.getMessages();
+  var deferredCount = 0;
   for (var i = 0; i < messages.length; i++) {
     var message = messages[i];
     var messageId = message.getId();
     if (gmailV2Seen_(messageId)) continue;
-    if (gmailV2RetryDeferred_(messageId)) continue;
+    if (gmailV2RetryDeferred_(messageId)) { deferredCount++; continue; }
     if (Date.now() - message.getDate().getTime() > GMAIL_V2_LOOKBACK_DAYS * 86400000) continue;
-    return true;
+    return { admissible: true, deferredCount: deferredCount };
   }
-  return false;
+  return { admissible: false, deferredCount: deferredCount };
 }
 
 function gmailV2ClearRetry_(messageId) {

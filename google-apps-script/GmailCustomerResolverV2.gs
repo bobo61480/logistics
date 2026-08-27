@@ -79,6 +79,16 @@ function resolveCustomerFromEmailV2_(meta, context, record) {
  * Tier A: exact address or domain-suffix match against every non-blank
  * "EMAIL SENDERS" cell on the TRUCKING tab. Requires exactly one customer to
  * match — 0 or 2+ senders sharing the same domain both resolve to null.
+ *
+ * A location-qualified row (e.g. "MEGA MART (PALO ALTO)") only accepts an
+ * EXACT address configured for it, never a bare-domain match: the brand's
+ * whole domain could just as easily send mail about a different, not-yet-
+ * on-file location of the same brand, and a domain-wide trust would
+ * silently route that shipment to this row's address anyway — the same
+ * class of cross-location mismatch Tier B's own brand-tier guard exists to
+ * prevent (Codex review round 7 on PR #102, see hasCustomerLocationQualifierV2_
+ * below). An unqualified row (bare "MEGA MART") has no such ambiguity — it
+ * IS the one location on file for that brand — so a domain match is safe.
  */
 function matchCustomerBySenderV2_(fromHeader, dbValues, dbHeader) {
   var sendersCol = dbHeader.map[CUSTOMER_EMAIL_SENDERS_HEADER_V2];
@@ -92,12 +102,14 @@ function matchCustomerBySenderV2_(fromHeader, dbValues, dbHeader) {
     var row = dbValues[r];
     var name = String(row[dbHeader.map["CUSTOMER NAME"]] || "").trim();
     if (!name) continue;
+    var qualified = hasCustomerLocationQualifierV2_(name);
     var senders = String(row[sendersCol] || "")
       .split(/[\n,;]+/)
       .map(function (s) { return s.trim().toLowerCase(); })
       .filter(Boolean);
     var isMatch = senders.some(function (sender) {
       if (sender.indexOf("@") !== -1) return sender === address;
+      if (qualified) return false;
       return Boolean(domain) && (domain === sender || domain.slice(-(sender.length + 1)) === "." + sender);
     });
     if (isMatch) matches.push({ rowNumber: r + 1, name: name });
@@ -276,8 +288,39 @@ function customerKeyAppearsV2_(paddedHaystack, key) {
 }
 
 function gmailCustomerResolutionTextV2_(meta, context, record) {
-  var parts = [meta && meta.subject, meta && meta.body, record && record.note, context && context.note];
+  var parts = [
+    meta && meta.subject,
+    meta && gmailStripQuotedReplyHistoryV2_(meta.body),
+    record && record.note,
+    context && context.note
+  ];
   return parts.filter(Boolean).join("\n");
+}
+
+/**
+ * Truncates a plain-text body at the first reply-quote marker (Gmail/most
+ * clients' "On <date>, <sender> wrote:" header, an Outlook-style
+ * "-----Original Message-----" separator, or a classic "> " quote-prefixed
+ * line), so an older, possibly different shipment quoted below a reply
+ * can't be scanned as if it were part of the current message (Codex review
+ * round 7 on PR #102: if the current message names a new/unmatched
+ * customer while the quoted history below names exactly one known
+ * customer, the text tier would otherwise confidently return the OLD
+ * customer). Deliberately does NOT strip a "------ Forwarded message
+ * ------" block — a forward is frequently the actual content of interest
+ * in this pipeline's real traffic (a shipment notice forwarded along),
+ * not stale history to discard.
+ */
+function gmailStripQuotedReplyHistoryV2_(body) {
+  var text = String(body || "");
+  var lines = text.split(/\r\n|\r|\n/);
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim();
+    if (/^>/.test(line)) return lines.slice(0, i).join("\n");
+    if (/^-{2,}\s*Original Message\s*-{2,}$/i.test(line)) return lines.slice(0, i).join("\n");
+    if (/^On .+ wrote:$/.test(line)) return lines.slice(0, i).join("\n");
+  }
+  return text;
 }
 
 function emailAddressFromFromHeaderV2_(from) {
