@@ -92,10 +92,11 @@ describe("Apps Script production integrity", () => {
     expect(triggers).toContain('"processLogisticsEmailsV2"');
     expect(triggers).toContain('"scanAndImportWmsTruckingOrders"');
     expect(triggers).toContain('"scanAndImportWmsTruckingOrdersV2"');
-    // Re-enabled 2026-08-23 (see the "re-enables the hardened WMS trucking
-    // importer" test below) — the V2 handler IS provisioned now, unlike the
-    // legacy alias and the obsolete requestSiteRedeploy handler.
-    expect(triggers).toContain('{ handler: "scanAndImportWmsTruckingOrdersV2", minutes: 15 }');
+    // Emergency-disabled 2026-08-25 after the duplicate-row incident (see
+    // the "emergency-disabled" test below) — scanAndImportWmsTruckingOrdersV2
+    // is a cleanup-only target now, not scheduled, same as its legacy alias
+    // and the obsolete requestSiteRedeploy handler.
+    expect(triggers).not.toContain('{ handler: "scanAndImportWmsTruckingOrdersV2"');
     expect(triggers).not.toContain('{ handler: "scanAndImportWmsTruckingOrders",');
     expect(triggers).not.toContain('{ handler: "requestSiteRedeploy"');
   });
@@ -405,6 +406,6 @@ describe("Apps Script production integrity", () => {
     // extraction failed. The zero-records skip must apply only to threads
     // found ONLY by the broadened query.
     expect(pipeline).toContain("var isWeakBroadenedMatch = isBroadenedOnly && !records.length;");
-    expect(pipeline).toContain('if (documentAttachments.length && !isWeakBroadenedMatch && context.kind !== "outbound") {');
+    expect(pipeline).toContain("if (documentAttachments.length && !isWeakBroadenedMatch) {");
   });
 });
