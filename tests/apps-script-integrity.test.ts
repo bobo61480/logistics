@@ -368,10 +368,26 @@ describe("Apps Script production integrity", () => {
     // has no built-in "exclude already-handled" filter. Paging past them at
     // search time (before admission) is what actually lets threads ranked
     // behind the fully-processed ones surface.
-    expect(pipeline).toContain("function gmailV2AdmissibleThreadsForQueryV2_(query) {");
-    expect(pipeline).toContain("if (gmailV2ThreadHasUnprocessedMessageV2_(page[i])) admissible.push(page[i]);");
-    expect(pipeline).toContain("return gmailV2AdmissibleThreadsForQueryV2_(query);");
+    expect(pipeline).toContain("function gmailV2AdmissibleThreadsForQueryV2_(query, deadline) {");
+    expect(pipeline).toContain("var evaluation = gmailV2EvaluateThreadV2_(page[i]);");
+    expect(pipeline).toContain("return gmailV2AdmissibleThreadsForQueryV2_(query, discoveryDeadline);");
     expect(pipeline).toContain("function gmailV2ThreadHasUnprocessedMessageV2_(thread) {");
+    expect(pipeline).toContain("return gmailV2EvaluateThreadV2_(thread).admissible;");
+    // Round 7 of the same review: discovery itself must respect the run's
+    // overall time budget — with 4 queries each potentially scanning up to
+    // GMAIL_V2_MAX_SEARCH_SCAN already-processed threads, an unbounded
+    // discovery phase could exhaust the whole run before a single message
+    // is processed or the run log is written.
+    expect(pipeline).toContain("var GMAIL_V2_DISCOVERY_BUDGET_MS = 60000;");
+    expect(pipeline).toContain("var discoveryDeadline = runStarted + GMAIL_V2_DISCOVERY_BUDGET_MS;");
+    expect(pipeline).toContain("if (Date.now() >= deadline) break;");
+    // Also round 7: a thread admission rejects solely for being
+    // retry-deferred (never fully seen, never past the lookback window)
+    // must still surface in stats.retryDeferred — it is never admitted, so
+    // the main per-message loop's own retryDeferred++ never sees it.
+    expect(pipeline).toContain("function gmailV2EvaluateThreadV2_(thread) {");
+    expect(pipeline).toContain("deferredCountByThreadId[id] = discovery.deferredCounts[id];");
+    expect(pipeline).toContain("retryDeferred: discoveredRetryDeferred");
     // Round 5 of the same review: a per-query cap can go unused when that
     // query simply has fewer than its share of hits (e.g. only one of
     // three queries has any matches), leaving global budget idle while
