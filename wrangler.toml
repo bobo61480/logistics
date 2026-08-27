@@ -4,6 +4,9 @@ compatibility_date = "2026-08-12"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = false
 
+[build]
+command = "npm ci && npm run build"
+
 [[routes]]
 pattern = "stylekorean.dpdns.org/*"
 zone_id = "5d128576939145a0274370efd693dafe"
