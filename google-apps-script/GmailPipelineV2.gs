@@ -515,7 +515,7 @@ function gmailV2FailureDisposition_(message, error) {
 // before trusting it" rollout this codebase already uses elsewhere
 // (WMS_TRUCKING_DRY_RUN, OUTBOUND_INSERT_DRY_RUN_V2). Flip only after
 // reviewing real PENDING VERIFICATION rows this produces.
-var GMAIL_V2_BROADENED_AUTOCOMMIT_ENABLED_V2 = true;
+var GMAIL_V2_BROADENED_AUTOCOMMIT_ENABLED_V2 = false;
 
 function processLogisticsMessageV2_(message, isBroadenedOnly) {
   var subject = String(message.getSubject() || "").trim();
