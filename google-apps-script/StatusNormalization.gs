@@ -36,7 +36,8 @@ var LOGISTICS_STATUS_ALIASES_ = {
   "FWS REVIEW/HOLD": "FWS Review / Hold",
   "FWS REVIEW / HOLD": "FWS Review / Hold",
   "AQI EXAMINATION": "AQI Examination",
-  "DELAYED": "Delayed"
+  "DELAYED": "Delayed",
+  "N/A": "N/A"
 };
 
 function canonicalLogisticsStatus_(value) {

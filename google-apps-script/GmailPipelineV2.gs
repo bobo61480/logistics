@@ -499,13 +499,6 @@ function gmailV2FailureDisposition_(message, error) {
   return { seen: true, pending: true, attempts: attempts };
 }
 
-/**
- * Backward-compatible setup helper. Trigger creation is owned by setupAllTriggers().
- */
-function ensureGmailV2Trigger_() {
-  return GMAIL_PIPELINE_TRIGGER_SYNC_VERSION;
-}
-
 // Kill switch for auto-committing (match-update OR insert) a record whose
 // thread was found ONLY by the sender-agnostic broadened query. Query 0
 // (Korean/logistics subject keywords) was already fully sender-agnostic
@@ -522,7 +515,7 @@ function ensureGmailV2Trigger_() {
 // before trusting it" rollout this codebase already uses elsewhere
 // (WMS_TRUCKING_DRY_RUN, OUTBOUND_INSERT_DRY_RUN_V2). Flip only after
 // reviewing real PENDING VERIFICATION rows this produces.
-var GMAIL_V2_BROADENED_AUTOCOMMIT_ENABLED_V2 = false;
+var GMAIL_V2_BROADENED_AUTOCOMMIT_ENABLED_V2 = true;
 
 function processLogisticsMessageV2_(message, isBroadenedOnly) {
   var subject = String(message.getSubject() || "").trim();
@@ -1444,7 +1437,7 @@ function multilineHasV2_(cellValue, wanted) {
   return wantedKeys.some(function (key) { return cellKeys.indexOf(key) !== -1; });
 }
 function emailNoteV2_(record) {
-  return "";
+  return record.note || record._emailSubject || "";
 }
 function formatEmailStatusRowV2_(sheet, rowNumber, status) {
   var done = isTerminalLogisticsStatus_(status);

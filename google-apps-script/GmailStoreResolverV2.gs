@@ -13,10 +13,10 @@
  * or absent match returns null rather than guessing, so the caller's normal
  * PENDING VERIFICATION escalation handles it.
  *
- * Not yet wired into GmailPipelineV2.gs's live processing — see the header
- * comment in GmailCustomerResolverV2.gs for why (its resolved identity would
- * be able to reach a live sheet write immediately, before this PR's insert
- * path and dry-run gate exist).
+ * Wired into GmailPipelineV2.gs's live ingestion path via
+ * resolveOutboundTargetV2_(), which calls resolveUltaDcFromEmailV2_ and
+ * resolveTjxDcFromEmailV2_ for every outbound-context message. Live writes
+ * are gated by OUTBOUND_INSERT_DRY_RUN_V2 in OutboundSheetInsertV2.gs.
  */
 
 var GMAIL_STORE_RESOLVER_ENABLED_V2 = true;

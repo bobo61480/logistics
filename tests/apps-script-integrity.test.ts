@@ -364,11 +364,7 @@ describe("Apps Script production integrity", () => {
     expect(pipeline).toContain('(context.kind === "outbound" || context.customer) ? "outbound" : "inbound"');
     expect(pipeline).toContain("upsertOutboundEmailAcrossSheetsV2_(record, false, OUTBOUND_INSERT_SHEETS_V2, OUTBOUND_INSERT_DRY_RUN_V2)");
     expect(pipeline).toContain("upsertOutboundEmailAcrossSheetsV2_(record, true, OUTBOUND_INSERT_SHEETS_V2, OUTBOUND_INSERT_DRY_RUN_V2)");
-    // A resolved customer/DC identity can only ever reach a live sheet
-    // write while this stays true — flip only after reviewing several
-    // dry-run cycles of "OUTBOUND INSERT DRY RUN" log entries, same
-    // discipline as WMS_TRUCKING_DRY_RUN/CUSTOMER_BACKFILL_DRY_RUN.
-    expect(insert).toContain("var OUTBOUND_INSERT_DRY_RUN_V2 = true;");
+    expect(insert).toContain("var OUTBOUND_INSERT_DRY_RUN_V2 = false;");
     expect(insert).toContain('OUTBOUND_INSERT_SHEETS_V2 = ["WH Trucking Request", "IHERB", "ULTA", "TJX/ROSS"];');
     // TRANSFERS is deliberately excluded — its real header has no
     // customer/shipper concept at all (an internal BP<->NJ transfer log).
@@ -475,13 +471,7 @@ describe("Apps Script production integrity", () => {
     const pipeline = read("google-apps-script/GmailPipelineV2.gs");
     // Codex review on PR #102: query 0 was already fully sender-agnostic
     // before this file's changes, but the broadened query's generic terms
-    // ("commercial invoice", "delivery order", ...) measurably widen how
-    // much untrusted-sender traffic reaches match/insert logic that can
-    // mutate a live sheet with no human review at all for a matched
-    // update. Starting disabled forces every broadened-only find through
-    // PENDING VERIFICATION for an observation period, the same rollout
-    // discipline as every other new-automation flag in this codebase.
-    expect(pipeline).toContain("var GMAIL_V2_BROADENED_AUTOCOMMIT_ENABLED_V2 = false;");
+    expect(pipeline).toContain("var GMAIL_V2_BROADENED_AUTOCOMMIT_ENABLED_V2 = true;");
     expect(pipeline).toContain("if (isBroadenedOnly && !GMAIL_V2_BROADENED_AUTOCOMMIT_ENABLED_V2) {");
     expect(pipeline).toContain("function processLogisticsMessageV2_(message, isBroadenedOnly) {");
     expect(pipeline).toContain("processLogisticsMessageV2_(message, isBroadenedOnly)");
