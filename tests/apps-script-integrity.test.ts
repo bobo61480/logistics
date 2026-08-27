@@ -361,8 +361,16 @@ describe("Apps Script production integrity", () => {
     // And: a thread with no unprocessed message left must not consume its
     // query's admission share either, or a query that stably returns the
     // same already-fully-handled threads can permanently starve a
-    // genuinely new thread ranked just below the cap.
-    expect(pipeline).toContain("if (!gmailV2ThreadHasUnprocessedMessageV2_(thread)) return;");
+    // genuinely new thread ranked just below the cap. Round 6 of the same
+    // review: filtering this at admission time wasn't enough either — a
+    // query with more matches than fit in one page would keep re-fetching
+    // the same already-processed top results forever, since Gmail search
+    // has no built-in "exclude already-handled" filter. Paging past them at
+    // search time (before admission) is what actually lets threads ranked
+    // behind the fully-processed ones surface.
+    expect(pipeline).toContain("function gmailV2AdmissibleThreadsForQueryV2_(query) {");
+    expect(pipeline).toContain("if (gmailV2ThreadHasUnprocessedMessageV2_(page[i])) admissible.push(page[i]);");
+    expect(pipeline).toContain("return gmailV2AdmissibleThreadsForQueryV2_(query);");
     expect(pipeline).toContain("function gmailV2ThreadHasUnprocessedMessageV2_(thread) {");
     // Round 5 of the same review: a per-query cap can go unused when that
     // query simply has fewer than its share of hits (e.g. only one of

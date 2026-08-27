@@ -17,6 +17,16 @@
 var GMAIL_PIPELINE_V2_VERSION = "2026-08-12-v4-status-retry-stabilization";
 var GMAIL_V2_LOOKBACK_DAYS = 4;
 var GMAIL_V2_MAX_THREADS = 12;
+var GMAIL_V2_SEARCH_PAGE_SIZE = 50;
+// Bounds total per-query search quota when a query's top results are all
+// already fully processed (Codex review round 6 on PR #102): without a
+// page-until-enough-unprocessed strategy, a query with >12 total matches
+// would return the SAME top 12 threads on every run (Gmail search has no
+// built-in "exclude already-handled" filter here), and once those 12 are
+// fully processed they'd be filtered out at admission on every subsequent
+// run with nothing behind them ever surfacing — permanently hiding threads
+// ranked 13+ until they aged out of the lookback window.
+var GMAIL_V2_MAX_SEARCH_SCAN = 200;
 var GMAIL_V2_RUNTIME_BUDGET_MS = 210000;
 var GMAIL_V2_SEEN_PREFIX = "GMAIL_V2_SEEN_";
 var GMAIL_V2_ATTEMPT_PREFIX = "GMAIL_V2_ATTEMPT_";
@@ -36,18 +46,28 @@ function processLogisticsEmailsV2() {
     var broadenedQueryIndex = GMAIL_V2_BROADENED_SEARCH_ENABLED_V2 ? queries.length - 1 : -1;
     var perQueryThreadCap = Math.ceil(GMAIL_V2_MAX_THREADS / queries.length);
 
-    // One GmailApp.search call per query (never repeated — API quota),
-    // cached locally so both passes below read from the same results.
+    // Search each query, paging past already-fully-processed threads until
+    // enough admissible (unprocessed) ones are found or the scan cap is hit
+    // (Codex review round 6 on PR #102) — cached locally so both passes
+    // below read from the same admissible pool. Already-processed threads
+    // are excluded here rather than merely being skipped at admission time,
+    // so a query with more matches than fit in one page doesn't get stuck
+    // re-fetching the same fully-handled top results forever.
     var perQueryResults = queries.map(function (query) {
-      return GmailApp.search(query, 0, GMAIL_V2_MAX_THREADS);
+      return gmailV2AdmissibleThreadsForQueryV2_(query);
     });
 
-    // Pass 1: record which quer(y/ies) matched each thread, with NO cap
-    // applied yet. Codex review on PR #102: computing attribution only
-    // among admitted threads let a thread that overflowed query 0's own
-    // share get admitted instead under the broadened query's share and
-    // counted as "broadened-only" even though query 0 found it too —
-    // inflating the metric this counter exists to keep honest.
+    // Pass 1: record which quer(y/ies) matched each thread, with NO
+    // per-query cap applied yet (only the admissibility pre-filter above).
+    // Codex review on PR #102: computing attribution only among admitted
+    // threads let a thread that overflowed query 0's own share get admitted
+    // instead under the broadened query's share and counted as
+    // "broadened-only" even though query 0 found it too — inflating the
+    // metric this counter exists to keep honest. Codex review round 6:
+    // restricting the search itself to admissible threads also stops an
+    // already-processed thread that keeps re-matching the broadened query
+    // from inflating broadenedMatches on every run even though it produces
+    // no actual work.
     var matchedByQueryIndex = {};
     perQueryResults.forEach(function (threads, queryIndex) {
       threads.forEach(function (thread) {
@@ -74,13 +94,12 @@ function processLogisticsEmailsV2() {
     // discard every result the new broadened query found, since its
     // matches were always inserted last (Codex review on PR #102). A
     // thread already admitted by an earlier query costs nothing against a
-    // later query's own share. A thread with no unprocessed message left
-    // (every message already seen, retry-deferred, or past the lookback
-    // window) is skipped WITHOUT consuming its query's share — otherwise a
-    // query that stably returns the same already-fully-handled threads on
-    // every run can permanently starve a genuinely new thread ranked just
-    // below the cap in that same query's results (Codex review on PR #102,
-    // a failure mode this per-query cap made newly reachable).
+    // later query's own share. perQueryResults is already restricted to
+    // admissible (unprocessed) threads by gmailV2AdmissibleThreadsForQueryV2_,
+    // so nothing here needs to re-check that — the whole point of that
+    // paging helper is that a query stably returning the same already-
+    // fully-handled top results can no longer starve a genuinely new
+    // thread ranked below them (Codex reviews on PR #102, rounds 1 and 6).
     // A query's reserved share can go unused when it simply has fewer than
     // perQueryThreadCap unprocessed matches — e.g. only one of three
     // queries has any hits, so 8 of 12 global slots would otherwise sit
@@ -97,7 +116,6 @@ function processLogisticsEmailsV2() {
       threads.forEach(function (thread) {
         var id = thread.getId();
         if (id in threadsById) return;
-        if (!gmailV2ThreadHasUnprocessedMessageV2_(thread)) return;
         if (addedForThisQuery < perQueryThreadCap) {
           threadsById[id] = thread;
           addedForThisQuery++;
@@ -257,6 +275,34 @@ function gmailV2RetryDeferred_(messageId) {
  * left to do doesn't consume its query's share of the per-query thread
  * cap (Codex review on PR #102).
  */
+/**
+ * Pages GmailApp.search(query, start, GMAIL_V2_SEARCH_PAGE_SIZE) with an
+ * increasing start offset, keeping only admissible (unprocessed) threads,
+ * until either GMAIL_V2_MAX_THREADS admissible threads are found (the most
+ * a single query could ever consume in one run — see perQueryThreadCap +
+ * overflow reallocation in processLogisticsEmailsV2), a page returns fewer
+ * results than requested (no more matches exist), or GMAIL_V2_MAX_SEARCH_SCAN
+ * total threads have been scanned (quota guard against a query whose first
+ * several hundred matches are all already fully processed).
+ */
+function gmailV2AdmissibleThreadsForQueryV2_(query) {
+  var admissible = [];
+  var start = 0;
+  var scanned = 0;
+  while (admissible.length < GMAIL_V2_MAX_THREADS && scanned < GMAIL_V2_MAX_SEARCH_SCAN) {
+    var page = GmailApp.search(query, start, GMAIL_V2_SEARCH_PAGE_SIZE);
+    if (!page.length) break;
+    for (var i = 0; i < page.length; i++) {
+      scanned++;
+      if (gmailV2ThreadHasUnprocessedMessageV2_(page[i])) admissible.push(page[i]);
+      if (admissible.length >= GMAIL_V2_MAX_THREADS || scanned >= GMAIL_V2_MAX_SEARCH_SCAN) break;
+    }
+    if (page.length < GMAIL_V2_SEARCH_PAGE_SIZE) break;
+    start += GMAIL_V2_SEARCH_PAGE_SIZE;
+  }
+  return admissible;
+}
+
 function gmailV2ThreadHasUnprocessedMessageV2_(thread) {
   var messages = thread.getMessages();
   for (var i = 0; i < messages.length; i++) {
