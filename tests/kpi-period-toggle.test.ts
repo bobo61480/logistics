@@ -3,12 +3,20 @@ import { describe, expect, it } from "vitest";
 
 const page = readFileSync("app/page.tsx", "utf8");
 
-describe("KPI Control Tower: MTD/YTD toggle and honest placeholders", () => {
-  it("drives the simple KPI tiles from a single period toggle state", () => {
-    expect(page).toContain('const [period, setPeriod] = useState<"mtd" | "ytd">("mtd")');
-    expect(page).toContain('onClick={() => setPeriod("mtd")}');
-    expect(page).toContain('onClick={() => setPeriod("ytd")}');
-    expect(page).toContain('period === "mtd" ? kpis.shippingMtd : kpis.shippingYtd');
+describe("KPI Control Tower: combined periods and Summary/Details", () => {
+  it("shows MTD and YTD together in every primary KPI tile", () => {
+    expect(page).toContain("function KpiPeriodValues");
+    expect(page).toContain('<div><small>MTD</small><strong>{format(mtd)}</strong></div>');
+    expect(page).toContain('<div><small>YTD</small><strong>{format(ytd)}</strong></div>');
+    expect(page).toContain('<KpiPeriodValues mtd={kpis.shippingMtd} ytd={kpis.shippingYtd} />');
+    expect(page).not.toContain('period === "mtd" ? kpis.shippingMtd : kpis.shippingYtd');
+  });
+
+  it("uses Summary/Details to reveal supporting KPI breakdowns", () => {
+    expect(page).toContain('const [kpiView, setKpiView] = useState<"summary" | "details">("summary")');
+    expect(page).toContain('onClick={() => setKpiView("summary")}');
+    expect(page).toContain('onClick={() => setKpiView("details")}');
+    expect(page).toContain('kpiView === "details" && <article className="kpi-card kpi-carrier">');
   });
 
   it("labels the carrier and truckload-mix cards as YTD-only, since computeLiveKpis has no MTD variant for them", () => {

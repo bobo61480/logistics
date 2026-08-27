@@ -161,6 +161,15 @@ function DimensionEditor({ detail, onSaved }: { detail: OrderDetail; onSaved: ()
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [errorFading, setErrorFading] = useState(false);
+
+  useEffect(() => {
+    if (!error) return;
+    setErrorFading(false);
+    const fadeTimer = window.setTimeout(() => setErrorFading(true), 2400);
+    const clearTimer = window.setTimeout(() => setError(""), 3000);
+    return () => { window.clearTimeout(fadeTimer); window.clearTimeout(clearTimer); };
+  }, [error]);
 
   const setField = (index: number, field: keyof Dimension, raw: string) => {
     setRows((current) => current.map((row, i) => i === index ? { ...row, [field]: raw === "" ? null : Number(raw) } : row));
@@ -206,7 +215,7 @@ function DimensionEditor({ detail, onSaved }: { detail: OrderDetail; onSaved: ()
             </div>
           ))}
           <button className={styles.addDimButton} onClick={() => setRows((current) => [...current, { l: null, w: null, h: null, wt: null }])}>+ Add pallet</button>
-          {error && <div className={styles.errorBox}>{error}</div>}
+          {error && <div className={`${styles.errorBox} transient-error-message${errorFading ? " transient-error-fade" : ""}`}>{error}</div>}
           <div className={styles.dimActions}>
             <button className={styles.primaryButton} disabled={saving} onClick={save}>{saving ? "Saving…" : "Save dimensions"}</button>
             <button className={styles.secondaryButton} onClick={() => { setRows(initial.length ? initial : [{ l: null, w: null, h: null, wt: null }]); setEditing(false); setError(""); }}>Cancel</button>
@@ -221,6 +230,15 @@ function DetailModal({ invoice, onClose, onChanged }: { invoice: string; onClose
   const [detail, setDetail] = useState<OrderDetail | null>(null);
   const [error, setError] = useState("");
   const [savingMove, setSavingMove] = useState(false);
+  const [errorFading, setErrorFading] = useState(false);
+
+  useEffect(() => {
+    if (!error) return;
+    setErrorFading(false);
+    const fadeTimer = window.setTimeout(() => setErrorFading(true), 2400);
+    const clearTimer = window.setTimeout(() => setError(""), 3000);
+    return () => { window.clearTimeout(fadeTimer); window.clearTimeout(clearTimer); };
+  }, [error]);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const modalRef = useRef<HTMLDivElement>(null);
 
@@ -274,7 +292,7 @@ function DetailModal({ invoice, onClose, onChanged }: { invoice: string; onClose
     const result = await gasPost("setManualPackingMoved", { invoice: detail.invoice, moved: next, by: "Packing (StyleKorean Control Tower)" });
     setSavingMove(false);
     if (!result.ok) {
-      window.alert(`Save failed: ${result.error || "Unknown error"}`);
+      setError(`Save failed: ${result.error || "Unknown error"}`);
       return;
     }
     await load();
@@ -291,7 +309,7 @@ function DetailModal({ invoice, onClose, onChanged }: { invoice: string; onClose
       <div ref={modalRef} className={styles.modal} role="dialog" aria-modal="true" aria-label={`Fulfillment details ${invoice}`}>
         <button ref={closeButtonRef} aria-label={`Close fulfillment details for ${invoice}`} className={styles.closeButton} onClick={onClose}>×</button>
         {!detail && !error && <div className={styles.modalLoading}>Loading {invoice}…</div>}
-        {error && <div className={styles.errorBox}>{error}</div>}
+        {error && <div className={`${styles.errorBox} transient-error-message${errorFading ? " transient-error-fade" : ""}`}>{error}</div>}
         {detail && (
           <>
             <header className={styles.modalHeader}>

@@ -13,9 +13,6 @@ type TrackedShipmentEvent = {
   updateNote: string;
 };
 
-const MASTER_SHEET =
-  "https://docs.google.com/spreadsheets/d/1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc/edit";
-
 // This card is a manually-curated snapshot, not a live read of the Worker snapshot — it does not
 // reconcile itself on the 30-minute auto-refresh. Past REVIEWED_THROUGH, treat every fact below as
 // unverified rather than silently keep reporting Aug 21-22 exceptions as still current.
@@ -194,16 +191,10 @@ const PRIORITY_LABEL: Record<EventPriority, string> = {
 };
 
 const STATE_LABEL: Record<SyncState, string> = {
-  missing: "Missing from sheet",
-  stale: "Sheet is stale",
+  missing: "Not synchronized",
+  stale: "Update pending",
   pending: "Review pending",
 };
-
-function sheetUrl(event: TrackedShipmentEvent) {
-  if (!event.row) return MASTER_SHEET;
-  const gid = event.sheet === "IMPORTS" ? 1497250700 : 1418033635;
-  return `${MASTER_SHEET}?gid=${gid}&range=A${event.row}#gid=${gid}&range=A${event.row}`;
-}
 
 export default function ShipmentEventTrackerCard() {
   const urgent = TRACKED_EVENTS.filter((event) => event.priority === "urgent").length;
@@ -236,8 +227,6 @@ export default function ShipmentEventTrackerCard() {
         .shipment-event-note { margin: 0; color: #6c6b65; font-size: 10px; line-height: 1.45; }
         .shipment-event-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; }
         .shipment-event-state { color: #9a3c28; font: 700 8px "IBM Plex Mono", monospace; text-transform: uppercase; }
-        .shipment-event-link { color: #086673; font: 700 9px "IBM Plex Mono", monospace; text-decoration: none; }
-        .shipment-event-link:hover { text-decoration: underline; }
         @media (max-width: 760px) {
           .shipment-event-head { flex-direction: column; }
           .shipment-event-counts { justify-content: flex-start; }
@@ -256,12 +245,11 @@ export default function ShipmentEventTrackerCard() {
         [data-theme="dark"] .shipment-event-detail { color: var(--text-soft); }
         [data-theme="dark"] .shipment-event-note { color: var(--text-faint); }
         [data-theme="dark"] .shipment-event-state { color: #ff9a95; }
-        [data-theme="dark"] .shipment-event-link { color: #8fb4ff; }
       `}</style>
 
       <header className="shipment-event-head">
         <div>
-          <div className="shipment-event-eyebrow">Email ↔ canonical sheet reconciliation</div>
+          <div className="shipment-event-eyebrow">Tracked logistics exceptions</div>
           <h2 id="shipment-event-title">Tracked Shipment Updates</h2>
           <p>Latest unmatched or stale events reviewed through 08/22/26. Resolve the urgent items first.</p>
         </div>
@@ -275,8 +263,7 @@ export default function ShipmentEventTrackerCard() {
       {expired && (
         <p className="shipment-event-expired">
           This list was hand-reviewed through 08/22/26 and hasn&rsquo;t reconciled against the live
-          workbook since — some of these may already be resolved. Re-check each row against the{" "}
-          <a href={MASTER_SHEET} target="_blank" rel="noreferrer">source sheet</a> before acting on it.
+          workbook since — some of these may already be resolved. Re-check the shipment status before acting on it.
         </p>
       )}
 
@@ -293,9 +280,6 @@ export default function ShipmentEventTrackerCard() {
             <p className="shipment-event-note">{event.updateNote}</p>
             <div className="shipment-event-foot">
               <span className="shipment-event-state">{expired ? "Needs re-verification" : STATE_LABEL[event.syncState]}</span>
-              <a className="shipment-event-link" href={sheetUrl(event)} target="_blank" rel="noreferrer">
-                {event.sheet}{event.row ? ` · row ${event.row}` : ""} ↗
-              </a>
             </div>
           </li>
         ))}

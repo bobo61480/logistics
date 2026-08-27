@@ -5,6 +5,10 @@ import { LOGISTICS_STATUS_OPTIONS } from "../lib/domain/status";
 describe("statusClass: 5-bucket pill classification", () => {
   const EXPECTED: Record<string, string> = {
     Scheduled: "status neutral",
+    "Schedule Requested": "status neutral",
+    "Picked Up/Shipped": "status good",
+    "In Transit": "status neutral",
+    "In Transit/Stopover": "status neutral",
     "Work in Progress": "status neutral",
     Pending: "status warn",
     Shipping: "status neutral",
@@ -23,7 +27,7 @@ describe("statusClass: 5-bucket pill classification", () => {
   };
 
   it("maps every canonical LOGISTICS_STATUS_OPTIONS value to exactly one of the 5 pill buckets, with no gaps", () => {
-    expect(LOGISTICS_STATUS_OPTIONS.length).toBe(16);
+    expect(LOGISTICS_STATUS_OPTIONS.length).toBe(20);
     for (const status of LOGISTICS_STATUS_OPTIONS) {
       expect(EXPECTED).toHaveProperty(status);
       expect(statusClass(status)).toBe(EXPECTED[status]);

@@ -20,14 +20,15 @@ describe("production hardening", () => {
     expect(workflow).toContain("sourceHealth");
     expect(workflow).toContain("worker-v8-public-guardrails");
     expect(workflow).toContain("d1 migrations apply");
-    // The versions-based release flow was replaced by a canonical
-    // `wrangler deploy` (see "Restore Cloudflare production route during
-    // deploy"): a version-only deployment cannot recover a detached zone
-    // route, so the deploy validates and restores the route, assets, D1
-    // binding, and Worker code together — and files a GitHub issue when
-    // route recovery fails.
+    // Canonical deploy remains the primary path because it can restore a
+    // detached route. The narrowly scoped authentication-error fallback
+    // publishes a Worker version while preserving the already-attached
+    // production route when the token lacks zone-route permissions.
     expect(workflow).toContain("wrangler deploy --keep-vars");
-    expect(workflow).not.toContain("wrangler versions upload");
+    expect(workflow).toContain("wrangler versions upload");
+    expect(workflow).toContain("wrangler versions deploy");
+    expect(workflow).toContain("Authentication error [code: 10000]");
+    expect(workflow).toContain('deploy_status=0');
     expect(workflow).toContain("A version-only deployment cannot recover a detached zone route.");
     expect(workflow).toContain("Production route recovery failed");
     expect(workflow).toContain("gh issue create");

@@ -13,7 +13,8 @@ import { LiveMapPanel, useParcelTracking, type MilestoneShipment, type Trackable
 import { ThemeToggle } from "./theme-toggle";
 import { DataGrids } from "./data-grids";
 import { IngestionRoadmapCard } from "./ingestion-roadmap-card";
-import { LOGISTICS_STATUS_OPTIONS } from "../lib/domain/status";
+import { LOGISTICS_STATUS_OPTIONS, normalizeLogisticsStatus } from "../lib/domain/status";
+import { inboundScheduleDateSource } from "../lib/domain/inbound-schedule";
 
 const SHEET_ID =
   process.env.NEXT_PUBLIC_LOGISTICS_MASTER_SHEET_ID ??
@@ -38,8 +39,6 @@ const DATA_ENDPOINT =
   process.env.NEXT_PUBLIC_LOGISTICS_SNAPSHOT_URL ?? "/api/logistics/snapshot";
 const STATUS_ENDPOINT =
   process.env.NEXT_PUBLIC_LOGISTICS_STATUS_URL ?? "/api/logistics/status";
-const PENDING_REVIEW_ENDPOINT =
-  process.env.NEXT_PUBLIC_LOGISTICS_PENDING_REVIEW_URL ?? "/api/logistics/pending-review";
 const LEGACY_WRITE_ENDPOINT =
   process.env.NEXT_PUBLIC_APPS_SCRIPT_WRITE_URL ?? "";
 const AUTO_REFRESH_MS = 30 * 60 * 1000;
@@ -176,26 +175,16 @@ const DEPARTMENT_LEGEND: OutboundDepartment[] = [
   "NJ",
 ];
 
-const STATUS_OPTIONS = [
-  "Scheduled",
-  "Work in Progress",
-  "Pending",
-  "Shipping",
-  "Shipped",
-  "Delivered",
-  "Received",
-  "Cancelled",
-  "Completed",
-];
-
-const INBOUND_STATUS_OPTIONS = [
-  ...STATUS_OPTIONS,
+const INBOUND_ONLY_STATUSES = new Set([
   "N/A",
   "Customs Clearance",
-  "FDA Review/Hold",
-  "FWS Review/Hold",
-  "Delayed",
-];
+  "FDA Review / Hold",
+  "FWS Review / Hold",
+  "FDA Detained",
+  "AQI Examination",
+]);
+const STATUS_OPTIONS: string[] = LOGISTICS_STATUS_OPTIONS.filter((status) => !INBOUND_ONLY_STATUSES.has(status));
+const INBOUND_STATUS_OPTIONS: string[] = LOGISTICS_STATUS_OPTIONS;
 
 const finished = new Set(["shipped", "delivered", "received", "cancelled", "completed"]);
 const finishedImports = new Set(["delivered", "received", "cancelled", "completed"]);
@@ -323,6 +312,15 @@ function moneyWithCents(value: number) {
   }).format(value);
 }
 
+function KpiPeriodValues({ mtd, ytd, format = money }: { mtd: number; ytd: number; format?: (value: number) => string }) {
+  return (
+    <>
+      <div><small>MTD</small><strong>{format(mtd)}</strong></div>
+      <div><small>YTD</small><strong>{format(ytd)}</strong></div>
+    </>
+  );
+}
+
 function dayKey(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(
     date.getDate(),
@@ -342,7 +340,7 @@ function startOfToday() {
 
 // Five-bucket classification covering every value in LOGISTICS_STATUS_OPTIONS
 // (lib/domain/status.ts) with no gaps — see tests/status-pills.test.ts, which
-// asserts each of the 16 canonical statuses maps to exactly one bucket.
+// asserts every canonical status maps to exactly one bucket.
 // Regex-based (not an exact lookup) so it still classifies reasonably for
 // free-text status variants real sheet data can contain beyond the
 // canonical list.
@@ -478,13 +476,14 @@ function carrierFromTrackingNumber(value: string) {
   return "";
 }
 
-// The live-map tracking backend only integrates UPS/FedEx/USPS (carrier-tracking.ts) —
-// DHL and Amazon don't have a server-side lookup, so they're intentionally excluded here.
-function trackableCarrier(value?: string): "ups" | "fedex" | "usps" | null {
+// Amazon tracking remains excluded because it has no supported server-side
+// shipment API; UPS/FedEx/USPS/DHL use official carrier integrations.
+function trackableCarrier(value?: string): "ups" | "fedex" | "usps" | "dhl" | null {
   const normalized = clean(value).toLowerCase();
   if (normalized.includes("ups")) return "ups";
   if (normalized.includes("fedex")) return "fedex";
   if (normalized.includes("usps")) return "usps";
+  if (normalized.includes("dhl")) return "dhl";
   return null;
 }
 
@@ -1215,7 +1214,7 @@ async function fetchSheetSnapshot() {
     fetchCsvRows(SHEET_ID, OUTBOUND_GID),
     fetchCsvRows(SHEET_ID, TRUCKING_GID),
     fetchTable(NATIONAL_SHEET_ID, NATIONAL_GID, "A1:U3500", 1),
-    fetchTable(SALES_SHEET_ID, SALES_GID, "A2:AF4200", 1),
+    fetchTable(SALES_SHEET_ID, SALES_GID, "A2:AG4200", 1),
     fetchLiveKpis(),
     fetchOptionalSheet("INVENTORY", "A1:O6500"),
     fetchOptionalSheet("SKW_Inbound", "A1:R2500"),
@@ -1291,6 +1290,8 @@ async function fetchOperationalSnapshot() {
 type ConnectionState = Awaited<ReturnType<typeof fetchOperationalSnapshot>>["connection"];
 
 function normalizeStatus(value: string) {
+  const canonical = normalizeLogisticsStatus(value);
+  if (canonical) return canonical;
   const normalized = clean(value).toLowerCase();
   if (!normalized) return "Scheduled";
   if (normalized === "wip") return "Work in Progress";
@@ -1938,7 +1939,7 @@ function nationalOutboundItems(table: any): ScheduleItem[] {
         sourceSheet: "NATIONAL ORDER PROGRESS",
         sourceRow,
         sourceUrl: NATIONAL_SHEET_URL,
-        editable: false,
+        editable: true,
         customer: channel,
         customerNo: channel,
         po,
@@ -1966,8 +1967,11 @@ function salesOutboundItems(table: any): ScheduleItem[] {
     if (!date || !customer || (!isSmallParcel && !isTrucking)) return [];
     const sourceRow = index + 3;
     const issue = cell(row, 7);
-    const autoTrackedStatus = issue.match(/\[AUTO TRACK[^\]]*·\s*(Delivered|Received|Shipping|Shipped|Delayed|Customs Clearance|FDA Review\/Hold|Scheduled)\b/i)?.[1];
-    const status = autoTrackedStatus
+    const websiteStatus = cell(row, 32);
+    const autoTrackedStatus = issue.match(/\[AUTO TRACK[^\]]*·\s*(Delivered|Received|Shipping|Shipped|Delayed|Customs Clearance|FDA Review\s*\/\s*Hold|Scheduled)\b/i)?.[1];
+    const status = websiteStatus
+      ? normalizeStatus(websiteStatus)
+      : autoTrackedStatus
       ? normalizeStatus(autoTrackedStatus)
       : /yes|issue|hold|pending/i.test(issue) ? "Pending" : "Scheduled";
     const trackingNumber = isSmallParcel
@@ -1988,7 +1992,7 @@ function salesOutboundItems(table: any): ScheduleItem[] {
         sourceSheet: "Stylekorean",
         sourceRow,
         sourceUrl: SALES_SHEET_URL,
-        editable: false,
+        editable: true,
         customer,
         customerNo: customer,
         invoice: cell(row, 1),
@@ -2088,10 +2092,9 @@ function consolidateTruckingItems(records: ScheduleItem[]) {
       reference: invoice || primary.reference,
       secondary,
       status: statusSource.status,
-      // The status dropdown and "source row" link act on primary's row — if a different
-      // constituent supplied the displayed status, editing here would silently write to the
-      // wrong shipment, so fall back to that constituent's own source and make it read-only.
-      editable: statusSource === primary ? primary.editable : false,
+      // The status dropdown and source link follow the exact constituent row
+      // that supplied the displayed status, even when that row is not primary.
+      editable: statusSource.editable,
       sourceSheet: statusSource.sourceSheet,
       sourceRow: statusSource.sourceRow,
     };
@@ -2163,31 +2166,6 @@ async function postStatus(item: ScheduleItem, status: string) {
     });
     return await parseConfirmation(response);
   }
-}
-
-/**
- * Approve or reject one Gmail-ingestion review row. No legacy-endpoint
- * fallback (unlike postStatus) — this is a brand-new action with no prior
- * static-host caller to stay compatible with.
- */
-async function postPendingReview(event: GmailIngestionEvent, decision: "approve" | "reject") {
-  if (!event.reviewKey) {
-    throw new Error(
-      "This row has no unique customer, invoice, BL/PRO, or container identifier. Review actions are disabled to prevent resolving the wrong shipment — edit it directly in the PENDING VERIFICATION sheet.",
-    );
-  }
-  const response = await fetch(PENDING_REVIEW_ENDPOINT, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ reviewKey: event.reviewKey, decision, shipmentId: event.shipmentId || undefined }),
-  });
-  const result = (await response.json().catch(() => null)) as
-    | { ok?: boolean; error?: string; action?: string; status?: string }
-    | null;
-  if (!response.ok || result?.ok !== true) {
-    throw new Error(result?.error || `Review action failed (${response.status}).`);
-  }
-  return result;
 }
 
 function ScheduleCard({
@@ -2734,10 +2712,10 @@ export default function Home() {
   const [nextRefreshAt, setNextRefreshAt] = useState<Date | null>(null);
   const [query, setQuery] = useState("");
   const [includeFinished, setIncludeFinished] = useState(false);
-  const [period, setPeriod] = useState<"mtd" | "ytd">("mtd");
+  const [kpiView, setKpiView] = useState<"summary" | "details">("summary");
   const [savingId, setSavingId] = useState("");
-  const [reviewingKey, setReviewingKey] = useState("");
   const [notice, setNotice] = useState("");
+  const [noticeFading, setNoticeFading] = useState(false);
   const [kpis, setKpis] = useState<KpiSnapshot>(EMPTY_KPIS);
   const [inboundInventory, setInboundInventory] = useState<InventoryItem[]>([]);
   const [warehouseStock, setWarehouseStock] = useState<InventoryItem[]>([]);
@@ -2755,6 +2733,20 @@ export default function Home() {
       return date;
     });
   }, []);
+
+  useEffect(() => {
+    if (!notice) {
+      setNoticeFading(false);
+      return;
+    }
+    setNoticeFading(false);
+    const fadeTimer = window.setTimeout(() => setNoticeFading(true), 2400);
+    const clearTimer = window.setTimeout(() => setNotice(""), 3000);
+    return () => {
+      window.clearTimeout(fadeTimer);
+      window.clearTimeout(clearTimer);
+    };
+  }, [notice]);
 
   const load = useCallback(async () => {
     if (loadInFlight.current) return;
@@ -2884,9 +2876,12 @@ export default function Home() {
     const needle = query.trim().toLowerCase();
     return items.flatMap((item) => {
       if (item.direction !== "inbound" || item.isSmallParcel) return [];
-      // Warehouse receiving appointments use IMPORTS column Q (Delivery Expected);
-      // the Import Schedule table independently uses column O (ETA).
-      const scheduled = firstDatedValue(item.deliveryExpected ?? "");
+      // Use the warehouse receiving appointment when one exists. Before an
+      // appointment is assigned, keep the shipment visible on its ETA instead
+      // of dropping the live IMPORTS row from the Inbound Schedule entirely.
+      const scheduled = firstDatedValue(
+        inboundScheduleDateSource(item.deliveryExpected, item.eta),
+      );
       if (!scheduled) return [];
       const stamp = new Date(
         scheduled.date.getFullYear(),
@@ -3041,7 +3036,6 @@ export default function Home() {
         current.map((record) => (record.id === item.id ? { ...record, status } : record)),
       );
       setNotice(`${item.title} updated to ${status}.`);
-      window.setTimeout(() => setNotice(""), 4500);
     } catch (statusError) {
       setNotice(
         statusError instanceof Error
@@ -3050,32 +3044,6 @@ export default function Home() {
       );
     } finally {
       setSavingId("");
-    }
-  };
-
-  const handleReview = async (event: GmailIngestionEvent, decision: "approve" | "reject") => {
-    const key = event.reviewKey ?? "";
-    setReviewingKey(key);
-    setNotice(decision === "approve" ? `Approving ${event.shipmentId || "review row"}…` : `Rejecting ${event.shipmentId || "review row"}…`);
-    try {
-      await postPendingReview(event, decision);
-      setGmailIngestion((current) =>
-        (current ?? []).map((row) =>
-          row.reviewKey && row.reviewKey === key
-            ? { ...row, status: decision === "approve" ? "committed" : "rejected", reviewKey: undefined }
-            : row,
-        ),
-      );
-      setNotice(
-        decision === "approve"
-          ? `${event.shipmentId || "Row"} approved and committed to the live schedule.`
-          : `${event.shipmentId || "Row"} rejected.`,
-      );
-      window.setTimeout(() => setNotice(""), 4500);
-    } catch (reviewError) {
-      setNotice(reviewError instanceof Error ? reviewError.message : "Review action failed. Try again.");
-    } finally {
-      setReviewingKey("");
     }
   };
 
@@ -3213,35 +3181,35 @@ export default function Home() {
             <p className="eyebrow">2026 ACTUALS · INVOICE FIRST / RATE FALLBACK</p>
             <h2 id="kpi-heading">KPI Control Tower</h2>
           </div>
-          <div className="period-toggle" role="group" aria-label="KPI period">
-            <button type="button" className={period === "mtd" ? "active" : ""} onClick={() => setPeriod("mtd")}>
-              MTD
+          <div className="period-toggle" role="group" aria-label="KPI view">
+            <button type="button" className={kpiView === "summary" ? "active" : ""} onClick={() => setKpiView("summary")}>
+              Summary
             </button>
-            <button type="button" className={period === "ytd" ? "active" : ""} onClick={() => setPeriod("ytd")}>
-              YTD
+            <button type="button" className={kpiView === "details" ? "active" : ""} onClick={() => setKpiView("details")}>
+              Details
             </button>
           </div>
         </div>
         <div className="kpi-grid">
           <article className="kpi-card">
             <span>SHIPPING COSTS</span>
-            <div><small>{period.toUpperCase()}</small><strong>{money(period === "mtd" ? kpis.shippingMtd : kpis.shippingYtd)}</strong></div>
+            <KpiPeriodValues mtd={kpis.shippingMtd} ytd={kpis.shippingYtd} />
           </article>
           <article className="kpi-card">
             <span>TRANSFER SHIPPING</span>
-            <div><small>{period.toUpperCase()}</small><strong>{money(period === "mtd" ? kpis.transfersMtd : kpis.transfersYtd)}</strong></div>
+            <KpiPeriodValues mtd={kpis.transfersMtd} ytd={kpis.transfersYtd} />
           </article>
           <article className="kpi-card">
             <span>TRUCKING TRANSFERS TO NJ</span>
-            <div><small>{period.toUpperCase()}</small><strong>{money(period === "mtd" ? kpis.njTransferMtd : kpis.njTransferYtd)}</strong></div>
+            <KpiPeriodValues mtd={kpis.njTransferMtd} ytd={kpis.njTransferYtd} />
           </article>
           <article className="kpi-card">
             <span>SALES · NATIONALS</span>
-            <div><small>{period.toUpperCase()}</small><strong>{moneyWithCents(period === "mtd" ? kpis.nationalsSalesMtd : kpis.nationalsSalesYtd)}</strong></div>
+            <KpiPeriodValues mtd={kpis.nationalsSalesMtd} ytd={kpis.nationalsSalesYtd} format={moneyWithCents} />
           </article>
           <article className="kpi-card">
             <span>SALES · WMS WHOLESALE</span>
-            <div><small>{period.toUpperCase()}</small><strong>{moneyWithCents(period === "mtd" ? kpis.wmsSalesMtd : kpis.wmsSalesYtd)}</strong></div>
+            <KpiPeriodValues mtd={kpis.wmsSalesMtd} ytd={kpis.wmsSalesYtd} format={moneyWithCents} />
           </article>
           <article className="kpi-card kpi-placeholder-card">
             <span>NET MARGIN</span>
@@ -3250,7 +3218,7 @@ export default function Home() {
               <small>No cost/margin data source yet</small>
             </div>
           </article>
-          <article className="kpi-card kpi-carrier">
+          {kpiView === "details" && <article className="kpi-card kpi-carrier">
             <span>TOP 3 CARRIERS · YTD (always YTD)</span>
             <div className="carrier-table-head" aria-hidden="true">
               <small>Carrier</small><small>Freight Spend</small><small>Shipments</small>
@@ -3265,21 +3233,21 @@ export default function Home() {
               ))}
               {kpis.topCarriers.length === 0 && <li className="carrier-empty">Carrier data unavailable</li>}
             </ol>
-          </article>
-          <article className="kpi-card kpi-split">
+          </article>}
+          {kpiView === "details" && <article className="kpi-card kpi-split">
             <span>TRUCKLOAD MIX · YTD (always YTD)</span>
             <div><small>LTL</small><strong>{kpis.ltlPercent}%</strong></div>
             <div><small>FTL</small><strong>{kpis.ftlPercent}%</strong></div>
-          </article>
-          <article className="kpi-card kpi-average">
+          </article>}
+          {kpiView === "details" && <article className="kpi-card kpi-average">
             <span>AVG TRUCKING COST · MTD / YTD</span>
             <div className="average-head" aria-hidden="true"><small>Lane</small><small>MTD</small><small>YTD</small></div>
             <div><small>LOCAL / REGIONAL HEURISTIC</small><strong>{money(kpis.avgLocalMtd)}</strong><strong>{money(kpis.avgLocal)}</strong></div>
             <div><small>CALIFORNIA</small><strong>{money(kpis.avgCaliforniaMtd)}</strong><strong>{money(kpis.avgCalifornia)}</strong></div>
             <div><small>OUT OF STATE</small><strong>{money(kpis.avgOutOfStateMtd)}</strong><strong>{money(kpis.avgOutOfState)}</strong></div>
-          </article>
+          </article>}
         </div>
-        <details className="kpi-method">
+        {kpiView === "details" && <details className="kpi-method" open>
           <summary>Methodology notes</summary>
           <p>
             All rows, including hidden/completed entries. Shipping costs use freight Invoice first,
@@ -3301,7 +3269,7 @@ export default function Home() {
             </a>
             .
           </p>
-        </details>
+        </details>}
       </section>
 
       <section className="ct-row" aria-label="Active carrier and freight mode rollups">
@@ -3444,11 +3412,11 @@ export default function Home() {
       {/* .ingestion-archive-row keeps this row ordered above the footer on the
           flex-reordered /light, /light-full, and /fulfillment-style variants. */}
       <div className="ingestion-archive-row mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2" aria-label="Email ingestion and document archive">
-        <GmailIngestionCard events={gmailIngestion} loading={loading} onReview={handleReview} reviewingKey={reviewingKey} sheetUrl={SHEET_URL} />
+        <GmailIngestionCard events={gmailIngestion} loading={loading} />
         <DriveArchiveCard />
       </div>
 
-      <IngestionRoadmapCard />
+      <IngestionRoadmapCard events={gmailIngestion} />
 
       <StatusLegend />
 
@@ -3459,7 +3427,7 @@ export default function Home() {
         <p className="mono">AUTO-REFRESH 30 MIN · STATUS EDITS SYNC TO SOURCE ROWS</p>
       </footer>
 
-      {notice && <div className="toast" role="status">{notice}</div>}
+      {notice && <div className={`toast${noticeFading ? " fade-out" : ""}`} role="status">{notice}</div>}
     </main>
   );
 }

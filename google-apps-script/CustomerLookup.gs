@@ -59,6 +59,60 @@ var CUSTOMER_SERVICE_FLAGS = [
   ["APPOINTMENT", "Appointment required"]
 ];
 
+var CUSTOMER_PROFILE_FIELDS = [
+  ["LOCATION / STORE", "LOCATION / STORE"],
+  ["RECEIVING HOURS", "RECEIVING HOURS"],
+  ["DELIVERY CONTACT", "CONTACT"],
+  ["CONTACT PHONE", "PHONE"],
+  ["CONTACT EMAIL", "EMAIL"],
+  ["DOCK HIGH ONLY", "DOCK HIGH ONLY"],
+  ["RESTRICTED AREA", "RESTRICTED AREA"],
+  ["DEPALLETIZE", "DEPALLETIZE"],
+  ["LUMPER", "LUMPER"],
+  ["DEBRIS / PALLET REMOVAL", "DEBRIS / PALLET REMOVAL"],
+  ["OTHER DELIVERY INSTRUCTIONS", "OTHER DELIVERY INSTRUCTIONS"]
+];
+
+function ensureHeaderColumns_(sheet, header, names) {
+  var rowNumber = header.rowIndex + 1;
+  names.forEach(function (name) {
+    if (header.map[name] !== undefined) return;
+    var nextColumn = sheet.getLastColumn() + 1;
+    sheet.getRange(rowNumber, nextColumn).setValue(name);
+    header.map[name] = nextColumn - 1;
+  });
+  return header;
+}
+
+function profileFromWhRow_(sheet, rowNumber, whHeader) {
+  var result = {};
+  CUSTOMER_PROFILE_FIELDS.forEach(function (pair) {
+    var index = whHeader.map[pair[0]];
+    if (index !== undefined) result[pair[1]] = String(sheet.getRange(rowNumber, index + 1).getDisplayValue() || "").trim();
+  });
+  CUSTOMER_SERVICE_FLAGS.forEach(function (flag) {
+    var index = whHeader.map[flag[0]];
+    if (index !== undefined) result[flag[0]] = String(sheet.getRange(rowNumber, index + 1).getDisplayValue() || "").trim();
+  });
+  return result;
+}
+
+function fillWhProfileBlanks_(sheet, rowNumber, whHeader, record) {
+  CUSTOMER_PROFILE_FIELDS.forEach(function (pair) {
+    var whIndex = whHeader.map[pair[0]];
+    var value = record.profile && record.profile[pair[1]];
+    if (whIndex === undefined || !value) return;
+    var range = sheet.getRange(rowNumber, whIndex + 1);
+    if (!String(range.getDisplayValue() || "").trim()) range.setValue(value);
+  });
+  CUSTOMER_SERVICE_FLAGS.forEach(function (flag) {
+    var whIndex = whHeader.map[flag[0]];
+    if (whIndex === undefined || !record.profile || !record.profile[flag[0]]) return;
+    var range = sheet.getRange(rowNumber, whIndex + 1);
+    if (!String(range.getDisplayValue() || "").trim()) range.setValue(record.profile[flag[0]]);
+  });
+}
+
 function onEdit(e) {
   try {
     handleWhTruckingCustomerEdit_(e);
@@ -107,6 +161,16 @@ function shouldProcessCustomerLookupEdit_(customerCol, addressCol, editedColStar
   return touchesCustomerCol || touchesAddressCol;
 }
 
+function touchesCustomerProfileColumn_(whHeader, editedColStart, editedColEnd) {
+  var names = ["CUSTOMER", "ADDRESS"].concat(CUSTOMER_PROFILE_FIELDS.map(function (pair) { return pair[0]; }))
+    .concat(CUSTOMER_SERVICE_FLAGS.map(function (flag) { return flag[0]; }));
+  return names.some(function (name) {
+    var index = whHeader.map[name];
+    var column = index === undefined ? -1 : index + 1;
+    return column >= editedColStart && column <= editedColEnd;
+  });
+}
+
 function handleWhTruckingCustomerEdit_(e) {
   if (!CUSTOMER_LOOKUP_ENABLED || !e || !e.range) return;
   var sheet = e.range.getSheet();
@@ -114,6 +178,9 @@ function handleWhTruckingCustomerEdit_(e) {
 
   var headerScan = sheet.getRange(1, 1, Math.min(sheet.getLastRow(), 10), sheet.getLastColumn()).getDisplayValues();
   var whHeader = findWhTruckingHeader_(headerScan);
+  whHeader = ensureHeaderColumns_(sheet, whHeader,
+    CUSTOMER_PROFILE_FIELDS.map(function (pair) { return pair[0]; })
+      .concat(CUSTOMER_SERVICE_FLAGS.map(function (flag) { return flag[0]; })));
   var customerCol = whHeader.map["CUSTOMER"] + 1;
   if (whHeader.map["NOTE"] === undefined) return;
   var noteCol = whHeader.map["NOTE"] + 1;
@@ -121,7 +188,7 @@ function handleWhTruckingCustomerEdit_(e) {
 
   var editedColStart = e.range.getColumn();
   var editedColEnd = editedColStart + e.range.getNumColumns() - 1;
-  if (!shouldProcessCustomerLookupEdit_(customerCol, addressCol, editedColStart, editedColEnd)) return;
+  if (!touchesCustomerProfileColumn_(whHeader, editedColStart, editedColEnd)) return;
 
   var startRow = e.range.getRow();
   var numRows = e.range.getNumRows();
@@ -151,6 +218,9 @@ function handleWhTruckingCustomerEdit_(e) {
     if (!dbSheet) return;
     var dbValues = dbSheet.getDataRange().getDisplayValues();
     var dbHeader = findCustomerDbHeader_(dbValues);
+    dbHeader = ensureHeaderColumns_(dbSheet, dbHeader,
+      CUSTOMER_PROFILE_FIELDS.map(function (pair) { return pair[1]; })
+        .concat(CUSTOMER_SERVICE_FLAGS.map(function (flag) { return flag[0]; })));
     // Mutable — a single edit event can cover several pasted rows, and both
     // the insertion row and the in-memory record list must stay in sync as
     // each row in the batch is processed, or the same never-seen-before
@@ -165,6 +235,7 @@ function handleWhTruckingCustomerEdit_(e) {
       if (!customerValue) continue;
 
       var seedAddress = addressCol ? String(sheet.getRange(rowNumber, addressCol).getDisplayValue() || "").trim() : "";
+      var seedProfile = profileFromWhRow_(sheet, rowNumber, whHeader);
       var record = matchCustomerRecord_(customerValue, records);
       if (record) {
         // A canonical-only match (matchCustomerRecord_'s fallback path, not
@@ -180,6 +251,7 @@ function handleWhTruckingCustomerEdit_(e) {
         // CustomerBackfill.gs's canonical-match-needs-review classification
         // already uses: log for a human, never write anything.
         if (!matchedByExactName_(customerValue, record)) {
+          appendCustomerReviewFlag_(sheet, rowNumber, noteCol, "CUSTOMER LOCATION NEEDS REVIEW: possible match " + record.name);
           logCanonicalMatchNeedsReview_(e.source, customerValue, rowNumber, record);
         } else if (customerAddressConflicts_(record, seedAddress)) {
           // A record matched here can be one created earlier in this SAME
@@ -199,17 +271,22 @@ function handleWhTruckingCustomerEdit_(e) {
             fillCustomerAddress_(dbSheet, dbHeader, record, seedAddress);
             record.address = seedAddress;
           }
+          fillWhProfileBlanks_(sheet, rowNumber, whHeader, record);
+          updateCustomerProfileFromManualEntry_(dbSheet, dbHeader, record, seedProfile);
           appendCustomerNote_(sheet, rowNumber, noteCol, record);
         }
       } else if (isAmbiguousLocationFamily_(customerValue, records)) {
         // Multiple existing TRUCKING rows already share this base name
         // (distinct locations) — never guess which one, and never pile a
         // new blank duplicate on top. Log for a human, write nothing.
+        appendCustomerReviewFlag_(sheet, rowNumber, noteCol, "CUSTOMER LOCATION NEEDS REVIEW: multiple locations found");
         logAmbiguousCustomerFamily_(e.source, customerValue, rowNumber);
       } else {
-        proposeNewCustomer_(e.source, customerValue, seedAddress, rowNumber, dbSheet, dbHeader, nextDbRow);
+        proposeNewCustomer_(e.source, customerValue, seedAddress, seedProfile, rowNumber, dbSheet, dbHeader, nextDbRow);
         if (!CUSTOMER_CREATE_DRY_RUN) {
-          records.push(makeCustomerRecord_(nextDbRow, customerValue, seedAddress));
+          var createdRecord = makeCustomerRecord_(nextDbRow, customerValue, seedAddress);
+          createdRecord.profile = seedProfile;
+          records.push(createdRecord);
           nextDbRow += 1;
         }
       }
@@ -240,6 +317,15 @@ function buildCustomerRecords_(rows, header) {
       var col = header.map[flag[0]];
       if (col !== undefined && /^\s*yes/i.test(String(row[col] || ""))) services.push(flag[1]);
     });
+    var profile = {};
+    CUSTOMER_PROFILE_FIELDS.forEach(function (pair) {
+      var col = header.map[pair[1]];
+      profile[pair[1]] = col !== undefined ? String(row[col] || "").trim() : "";
+    });
+    CUSTOMER_SERVICE_FLAGS.forEach(function (flag) {
+      var col = header.map[flag[0]];
+      profile[flag[0]] = col !== undefined ? String(row[col] || "").trim() : "";
+    });
     records.push({
       rowNumber: r + 1,
       name: name,
@@ -247,7 +333,8 @@ function buildCustomerRecords_(rows, header) {
       canonicalKey: normalizeWmsCustomerKey_(canonicalWmsCustomer_(name)),
       address: header.map["ADDRESS"] !== undefined ? String(row[header.map["ADDRESS"]] || "").trim() : "",
       contact: header.map["CONTACT"] !== undefined ? String(row[header.map["CONTACT"]] || "").trim() : "",
-      services: services
+      services: services,
+      profile: profile
     });
   }
   return records;
@@ -324,8 +411,31 @@ function makeCustomerRecord_(rowNumber, name, address) {
     canonicalKey: normalizeWmsCustomerKey_(canonicalWmsCustomer_(name)),
     address: address || "",
     contact: "",
-    services: []
+    services: [],
+    profile: {}
   };
+}
+
+function appendCustomerReviewFlag_(sheet, rowNumber, noteCol, message) {
+  var range = sheet.getRange(rowNumber, noteCol);
+  var existing = String(range.getDisplayValue() || "").trim();
+  if (existing.indexOf(message) !== -1) return;
+  range.setValue(existing ? existing + "\n" + message : message);
+}
+
+function updateCustomerProfileFromManualEntry_(dbSheet, dbHeader, record, seedProfile) {
+  if (!record || !seedProfile) return;
+  record.profile = record.profile || {};
+  Object.keys(seedProfile).forEach(function (name) {
+    var value = String(seedProfile[name] || "").trim();
+    var index = dbHeader.map[name];
+    if (!value || index === undefined) return;
+    var current = String(dbSheet.getRange(record.rowNumber, index + 1).getDisplayValue() || "").trim();
+    if (!current) {
+      dbSheet.getRange(record.rowNumber, index + 1).setValue(value);
+      record.profile[name] = value;
+    }
+  });
 }
 
 /**
@@ -473,12 +583,13 @@ function appendCustomerNote_(sheet, rowNumber, noteCol, record) {
  * CUSTOMER_CREATE_DRY_RUN is set back to true, in which case it only logs
  * the proposal to PIPELINE LOG ("CUSTOMER DB DRY RUN") for review instead.
  */
-function proposeNewCustomer_(spreadsheet, customerValue, seedAddress, whTruckingRow, dbSheet, dbHeader, targetDbRow) {
+function proposeNewCustomer_(spreadsheet, customerValue, seedAddress, seedProfile, whTruckingRow, dbSheet, dbHeader, targetDbRow) {
   if (CUSTOMER_CREATE_DRY_RUN) {
     logPipelineFromBoundSpreadsheet_(spreadsheet, "CUSTOMER DB DRY RUN", customerValue, JSON.stringify({
       action: "would-create",
       customer: customerValue,
       seedAddress: seedAddress,
+      seedProfile: seedProfile,
       whTruckingRow: whTruckingRow
     }));
     return;
@@ -488,5 +599,8 @@ function proposeNewCustomer_(spreadsheet, customerValue, seedAddress, whTrucking
   var newRow = new Array(width).fill("");
   newRow[dbHeader.map["CUSTOMER NAME"]] = customerValue;
   if (seedAddress && dbHeader.map["ADDRESS"] !== undefined) newRow[dbHeader.map["ADDRESS"]] = seedAddress;
+  Object.keys(seedProfile || {}).forEach(function (name) {
+    if (seedProfile[name] && dbHeader.map[name] !== undefined) newRow[dbHeader.map[name]] = seedProfile[name];
+  });
   dbSheet.getRange(targetDbRow, 1, 1, width).setValues([newRow]);
 }

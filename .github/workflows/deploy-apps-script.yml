@@ -44,6 +44,13 @@ jobs:
         # after verifying 3.x accepts this project's manifest/config.
         run: npm install --global @google/clasp@2.4.2
 
+      - name: Force WMS trucking importer off
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed -i 's/var WMS_TRUCKING_SYNC_ENABLED = true;/var WMS_TRUCKING_SYNC_ENABLED = false;/' google-apps-script/WmsTruckingSyncV2.gs
+          grep -F 'var WMS_TRUCKING_SYNC_ENABLED = false;' google-apps-script/WmsTruckingSyncV2.gs
+
       - name: Push canonical Apps Script source
         run: clasp push --force
 

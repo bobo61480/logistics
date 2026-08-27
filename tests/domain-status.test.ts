@@ -16,6 +16,15 @@ describe("logistics status normalization", () => {
     expect(isTerminalLogisticsStatus("received")).toBe(true);
     expect(canAutoTransitionStatus("Received", "Shipping")).toBe(false);
     expect(canAutoTransitionStatus("Shipping", "Delivered")).toBe(true);
+    expect(canAutoTransitionStatus("Shipped", "Delivered")).toBe(true);
+    expect(canAutoTransitionStatus("Delivered", "Received")).toBe(true);
+  });
+
+  it("preserves the operational pickup and transit milestones", () => {
+    expect(normalizeLogisticsStatus("pickup requested")).toBe("");
+    expect(normalizeLogisticsStatus("SCHEDULE REQUESTED")).toBe("Schedule Requested");
+    expect(normalizeLogisticsStatus("PICKED UP/SHIPPED")).toBe("Picked Up/Shipped");
+    expect(normalizeLogisticsStatus("ARRIVED AT INTERIM")).toBe("In Transit/Stopover");
   });
 
   it("rejects unknown free text", () => {

@@ -4,6 +4,36 @@ import { describe, expect, it } from "vitest";
 const read = (path: string) => readFileSync(path, "utf8");
 
 describe("Apps Script production integrity", () => {
+  it("resolves duplicate open shipment notices against the newest matching email", () => {
+    const validation = read("google-apps-script/Validation.gs");
+
+    expect(validation).toContain("var r0 = matches[matches.length - 1]");
+    expect(validation).toContain("matchedRows: matches.length");
+    expect(validation).not.toContain("More than one open review row matches");
+    expect(validation).not.toContain("refusing to guess");
+  });
+
+  it("records received document names and their exact Drive folder path", () => {
+    const pipeline = read("google-apps-script/GmailPipelineV2.gs");
+    const validation = read("google-apps-script/Validation.gs");
+
+    expect(pipeline).toContain("meta.documentNames = documentAttachments.map");
+    expect(pipeline).toContain('shipmentArchiveFolderPathV2_("Import Shipments"');
+    expect(pipeline).toContain('shipmentArchiveFolderPathV2_("Outbound Shipments"');
+    expect(validation).toContain("_documentNames:");
+    expect(validation).toContain("_archiveFolderPath:");
+    expect(validation).toContain('"Sender", "Documents", "Archive Folder"');
+  });
+
+  it("keeps Raw JSON private while publishing safe ingestion metadata", () => {
+    const code = read("google-apps-script/Code.gs");
+    const sources = read("worker/sources.ts");
+
+    expect(code).toContain("const safeColumns = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17]");
+    expect(sources).toContain("select A,B,C,D,E,F,G,H,I,J,K,L,M,N,P,Q,R");
+    expect(sources).not.toContain('tq: "select * order by A desc limit 2000"');
+  });
+
   it("serves an owner-authorized read snapshot for the private production workbooks", () => {
     const code = read("google-apps-script/Code.gs");
     expect(code).toContain("function doGet(e)");
@@ -14,6 +44,11 @@ describe("Apps Script production integrity", () => {
     expect(code).toContain("const master = SpreadsheetApp.openById(SPREADSHEET_ID);");
     expect(code).not.toContain("readSnapshotRows_(SPREADSHEET_ID,");
     expect(code).toContain("function readSnapshotRows_(spreadsheet,");
+    expect(code).toContain("salesOutbound: readSnapshotRows_(wms, null, 0, 2, 4199, 33)");
+    expect(code).toContain("function statusSpreadsheetForSource_(sourceSheet)");
+    expect(code).toContain("function ensureWmsWebsiteStatusColumn_(sheet)");
+    expect(code).toContain("sheet.insertColumnsAfter(sheet.getMaxColumns(), column - sheet.getMaxColumns())");
+    expect(code).toContain('header.setValue("WEBSITE STATUS")');
   });
 
   it("deploys the snapshot as an anonymous owner-authorized web app and smoke-tests it", () => {
@@ -65,11 +100,15 @@ describe("Apps Script production integrity", () => {
     expect(triggers).not.toContain('{ handler: "requestSiteRedeploy"');
   });
 
-  it("re-enables the hardened WMS trucking importer in dry-run mode with the customer-canonicalization fix", () => {
+  it("keeps the WMS trucking importer emergency-disabled after the duplicate-row incident", () => {
     const importer = read("google-apps-script/WmsTruckingSyncV2.gs");
     const code = read("google-apps-script/Code.gs");
 
-    expect(importer).toContain("var WMS_TRUCKING_SYNC_ENABLED = true;");
+    // Emergency-disabled 2026-08-25: live imports produced ~87 duplicate
+    // rows for one KORHEIM (CANOGA PARK) shipment on WH Trucking Request.
+    // Do not flip these back without confirming the duplicate-insert root
+    // cause is fixed and reviewing a dry-run cycle first.
+    expect(importer).toContain("var WMS_TRUCKING_SYNC_ENABLED = false;");
     expect(importer).toContain("var WMS_TRUCKING_DRY_RUN = true;");
     expect(importer).toContain("function logWmsDryRun_(");
     expect(importer).toContain("function wouldChangeMappedValue_(");
@@ -137,7 +176,7 @@ describe("Apps Script production integrity", () => {
     expect(lookup).toContain("function logCanonicalMatchNeedsReview_(");
     expect(lookup).toContain('"canonical-match-needs-review"');
     expect(lookup).toMatch(
-      /if\s*\(\s*!matchedByExactName_\(customerValue,\s*record\)\s*\)\s*\{\s*logCanonicalMatchNeedsReview_\(/,
+      /if\s*\(\s*!matchedByExactName_\(customerValue,\s*record\)\s*\)\s*\{[\s\S]*?logCanonicalMatchNeedsReview_\(/,
     );
     // Round 9 of the same review: staff typing the customer name and its
     // address as two separate edits (round 6) matches the same record
@@ -258,6 +297,12 @@ describe("Apps Script production integrity", () => {
     expect(backfill).toMatch(
       /literalBackfillBaseKey_\(r\.name\) === literalBackfillBaseKey_\(matchedRecord\.name\)/,
     );
+  });
+
+  it("captures flattened KCC air-notice flight numbers as the inbound transport name", () => {
+    const gmail = read("google-apps-script/GmailPipelineV2.gs");
+    expect(gmail).toContain("if (!context.vessel && mawb)");
+    expect(gmail).toContain('context.vessel = flight[1] + "-" + flight[2]');
   });
 
   it("does not provision an installable onEdit trigger for customer lookup (deploy-apps-script.yml never runs setupAllTriggers)", () => {
