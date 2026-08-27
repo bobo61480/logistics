@@ -39,6 +39,17 @@ var GMAIL_V2_SEEN_PREFIX = "GMAIL_V2_SEEN_";
 var GMAIL_V2_ATTEMPT_PREFIX = "GMAIL_V2_ATTEMPT_";
 var GMAIL_V2_RETRY_AT_PREFIX = "GMAIL_V2_RETRY_AT_";
 var GMAIL_V2_MAX_TRANSIENT_ATTEMPTS = 4;
+// Keyed by each query's fixed position in gmailV2Queries_()'s returned array
+// (stable across runs regardless of GMAIL_V2_BROADENED_SEARCH_ENABLED_V2,
+// since the broadened query is always appended last) so a query's search
+// offset survives between trigger invocations (Codex review round 10 on PR
+// #102): without this, every run re-called GmailApp.search(query, 0, ...)
+// from scratch, so a stable backlog of already-seen/retry-deferred threads
+// occupying a query's first page(s) meant discovery hit its per-run
+// deadline scanning that same prefix on every single run, and an unseen
+// thread ranked behind it could never be reached until it aged past the
+// lookback window.
+var GMAIL_V2_DISCOVERY_OFFSET_PREFIX = "GMAIL_V2_DISCOVERY_OFFSET_";
 
 function processLogisticsEmailsV2() {
   var lock = LockService.getScriptLock();
@@ -70,9 +81,9 @@ function processLogisticsEmailsV2() {
     // (Codex review round 8 on PR #102).
     var discoveryDeadline = runStarted + GMAIL_V2_DISCOVERY_BUDGET_MS;
     var perQueryDiscoveryBudgetMs = Math.floor(GMAIL_V2_DISCOVERY_BUDGET_MS / queries.length);
-    var perQueryDiscovery = queries.map(function (query) {
+    var perQueryDiscovery = queries.map(function (query, index) {
       var queryDeadline = Math.min(discoveryDeadline, Date.now() + perQueryDiscoveryBudgetMs);
-      return gmailV2AdmissibleThreadsForQueryV2_(query, queryDeadline);
+      return gmailV2AdmissibleThreadsForQueryV2_(query, queryDeadline, GMAIL_V2_DISCOVERY_OFFSET_PREFIX + index);
     });
     var perQueryResults = perQueryDiscovery.map(function (discovery) {
       return discovery.admissible;
@@ -113,8 +124,23 @@ function processLogisticsEmailsV2() {
         matchedByQueryIndex[id][queryIndex] = true;
       });
     });
+    // "Not matched by an established query" is only trustworthy when every
+    // established query's discovery actually reached its true end-of-
+    // results this run — a query that stopped early (its own
+    // GMAIL_V2_MAX_THREADS cap, GMAIL_V2_MAX_SEARCH_SCAN, or the deadline)
+    // never got far enough to say whether a given thread matches it too, so
+    // a thread the broadened query happened to also find could be
+    // misclassified as broadened-only and forced into PENDING VERIFICATION
+    // instead of that established query's normal upsert path (Codex review
+    // round 10 on PR #102). When any established query truncated this run,
+    // skip broadened-only attribution entirely for this run rather than
+    // guess — every thread just falls through the normal (non-broadened)
+    // path, which is always safe even for a genuinely broadened-only one.
+    var anyEstablishedQueryTruncated = perQueryDiscovery.some(function (discovery, queryIndex) {
+      return queryIndex !== broadenedQueryIndex && discovery.truncated;
+    });
     var matchedOnlyByBroadenedQuery = {};
-    if (broadenedQueryIndex !== -1) {
+    if (broadenedQueryIndex !== -1 && !anyEstablishedQueryTruncated) {
       Object.keys(matchedByQueryIndex).forEach(function (id) {
         var membership = matchedByQueryIndex[id];
         if (membership[broadenedQueryIndex] && Object.keys(membership).length === 1) {
@@ -335,15 +361,20 @@ function gmailV2RetryDeferred_(messageId) {
  * on PR #102). The caller merges this across queries, keyed by thread id,
  * so a thread scanned by more than one query is still counted once.
  */
-function gmailV2AdmissibleThreadsForQueryV2_(query, deadline) {
+function gmailV2AdmissibleThreadsForQueryV2_(query, deadline, offsetKey) {
+  var props = offsetKey ? PropertiesService.getScriptProperties() : null;
   var admissible = [];
   var deferredCounts = {};
-  var start = 0;
+  // Resumes from wherever the LAST run left off (see GMAIL_V2_DISCOVERY_OFFSET_PREFIX
+  // above), not always 0, so a stable backlog at the front of this query's
+  // results can't perpetually starve everything ranked behind it.
+  var start = props ? Number(props.getProperty(offsetKey) || 0) : 0;
   var scanned = 0;
+  var exhausted = false;
   while (admissible.length < GMAIL_V2_MAX_THREADS && scanned < GMAIL_V2_MAX_SEARCH_SCAN) {
     if (Date.now() >= deadline) break;
     var page = GmailApp.search(query, start, GMAIL_V2_SEARCH_PAGE_SIZE);
-    if (!page.length) break;
+    if (!page.length) { exhausted = true; break; }
     for (var i = 0; i < page.length; i++) {
       scanned++;
       var evaluation = gmailV2EvaluateThreadV2_(page[i]);
@@ -352,6 +383,11 @@ function gmailV2AdmissibleThreadsForQueryV2_(query, deadline) {
       } else if (evaluation.deferredCount > 0) {
         deferredCounts[page[i].getId()] = evaluation.deferredCount;
       }
+      // Advances one position per thread actually evaluated (not one full
+      // page at a time) — so a deadline hit mid-page persists a resume
+      // point exactly where evaluation stopped, rather than skipping the
+      // rest of that page unevaluated (Codex review round 10 on PR #102).
+      start++;
       if (admissible.length >= GMAIL_V2_MAX_THREADS || scanned >= GMAIL_V2_MAX_SEARCH_SCAN) break;
       // Checked per-thread, not just per-page: each getMessages() call plus
       // its PropertiesService reads is itself real time against the
@@ -359,10 +395,33 @@ function gmailV2AdmissibleThreadsForQueryV2_(query, deadline) {
       // of them (Codex review round 7 on PR #102).
       if (Date.now() >= deadline) break;
     }
-    if (page.length < GMAIL_V2_SEARCH_PAGE_SIZE) break;
-    start += GMAIL_V2_SEARCH_PAGE_SIZE;
+    // i < page.length means the for-loop above broke out early (deadline or
+    // a cap), leaving part of this page unevaluated — that is NOT the same
+    // as this query's results being exhausted, even if the page itself
+    // happened to be shorter than a full page (Codex review round 10 on PR
+    // #102: a small/near-exhausted result set combined with a tight
+    // deadline must not be misread as "nothing left", which would reset the
+    // offset and repeat the same partial scan next run instead of resuming
+    // past it).
+    if (i < page.length) break;
+    if (page.length < GMAIL_V2_SEARCH_PAGE_SIZE) { exhausted = true; break; }
   }
-  return { admissible: admissible, deferredCounts: deferredCounts };
+  if (props) {
+    // A fully exhausted query (reached Gmail's true end-of-results) resets
+    // to 0 so the next run starts from the top again and catches newly
+    // arrived mail there; anything else (deadline/cap hit mid-scan) persists
+    // the resume point so the next run continues past it instead of
+    // re-scanning the same stuck prefix.
+    if (exhausted) props.deleteProperty(offsetKey);
+    else props.setProperty(offsetKey, String(start));
+  }
+  // truncated=true means this call did NOT reach this query's true
+  // end-of-results (capped by GMAIL_V2_MAX_THREADS, GMAIL_V2_MAX_SEARCH_SCAN,
+  // or the deadline) — the caller uses this to know when "this thread
+  // wasn't found by this query" can't be trusted, since a truncated query
+  // simply never looked far enough to say either way (Codex review round
+  // 10 on PR #102).
+  return { admissible: admissible, deferredCounts: deferredCounts, truncated: !exhausted };
 }
 
 function gmailV2ThreadHasUnprocessedMessageV2_(thread) {
