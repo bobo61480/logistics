@@ -164,4 +164,17 @@ describe("resolveTjxDcFromEmailV2_", () => {
     const helpers = loadStoreResolverHelpers([], tjxRows);
     expect(helpers.resolveTjxDcFromEmailV2_("Split load: DC# 1234 and DC# 9999")).toBeNull();
   });
+
+  it("does not treat ordinary postal text (Washington DC + ZIP) as a DC-number mention", () => {
+    // Regression for a Codex review finding: the previous regex made both
+    // "#" and ":" optional, so "Washington DC 20001" matched as a bare
+    // DC-number mention — if that ZIP also happened to be a real directory
+    // entry, it would confidently (and wrongly) resolve there.
+    const zipRows = [
+      ["Order Received", "Order Name", "DC#"],
+      ["", "Ross Load", "20001"],
+    ];
+    const helpers = loadStoreResolverHelpers([], zipRows);
+    expect(helpers.resolveTjxDcFromEmailV2_("Deliver to our Washington DC 20001 store.")).toBeNull();
+  });
 });

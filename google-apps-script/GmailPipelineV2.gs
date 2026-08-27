@@ -60,9 +60,19 @@ function processLogisticsEmailsV2() {
     // are excluded here rather than merely being skipped at admission time,
     // so a query with more matches than fit in one page doesn't get stuck
     // re-fetching the same fully-handled top results forever.
+    // Each query gets its own reserved slice of the shared discovery
+    // budget, not one deadline all queries race against sequentially — a
+    // Array.map here runs one query fully before starting the next, so a
+    // first query with a large processed/retry-deferred backlog could
+    // otherwise burn the entire shared deadline before any later query
+    // (including the broadened one) got a single page fetched, aging their
+    // matches past the lookback window with no discovery attempt at all
+    // (Codex review round 8 on PR #102).
     var discoveryDeadline = runStarted + GMAIL_V2_DISCOVERY_BUDGET_MS;
+    var perQueryDiscoveryBudgetMs = Math.floor(GMAIL_V2_DISCOVERY_BUDGET_MS / queries.length);
     var perQueryDiscovery = queries.map(function (query) {
-      return gmailV2AdmissibleThreadsForQueryV2_(query, discoveryDeadline);
+      var queryDeadline = Math.min(discoveryDeadline, Date.now() + perQueryDiscoveryBudgetMs);
+      return gmailV2AdmissibleThreadsForQueryV2_(query, queryDeadline);
     });
     var perQueryResults = perQueryDiscovery.map(function (discovery) {
       return discovery.admissible;
