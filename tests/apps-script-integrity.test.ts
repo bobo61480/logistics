@@ -370,7 +370,7 @@ describe("Apps Script production integrity", () => {
     // behind the fully-processed ones surface.
     expect(pipeline).toContain("function gmailV2AdmissibleThreadsForQueryV2_(query, deadline) {");
     expect(pipeline).toContain("var evaluation = gmailV2EvaluateThreadV2_(page[i]);");
-    expect(pipeline).toContain("return gmailV2AdmissibleThreadsForQueryV2_(query, discoveryDeadline);");
+    expect(pipeline).toContain("return gmailV2AdmissibleThreadsForQueryV2_(query, queryDeadline);");
     expect(pipeline).toContain("function gmailV2ThreadHasUnprocessedMessageV2_(thread) {");
     expect(pipeline).toContain("return gmailV2EvaluateThreadV2_(thread).admissible;");
     // Round 7 of the same review: discovery itself must respect the run's
@@ -381,6 +381,13 @@ describe("Apps Script production integrity", () => {
     expect(pipeline).toContain("var GMAIL_V2_DISCOVERY_BUDGET_MS = 60000;");
     expect(pipeline).toContain("var discoveryDeadline = runStarted + GMAIL_V2_DISCOVERY_BUDGET_MS;");
     expect(pipeline).toContain("if (Date.now() >= deadline) break;");
+    // Round 8 of the same review: a shared deadline alone still let a
+    // first query with a large processed/retry-deferred backlog consume
+    // the ENTIRE discovery budget before any later query got a single page
+    // fetched (Array.map runs each query's discovery to completion before
+    // starting the next) — each query now gets its own reserved slice.
+    expect(pipeline).toContain("var perQueryDiscoveryBudgetMs = Math.floor(GMAIL_V2_DISCOVERY_BUDGET_MS / queries.length);");
+    expect(pipeline).toContain("var queryDeadline = Math.min(discoveryDeadline, Date.now() + perQueryDiscoveryBudgetMs);");
     // Also round 7: a thread admission rejects solely for being
     // retry-deferred (never fully seen, never past the lookback window)
     // must still surface in stats.retryDeferred — it is never admitted, so

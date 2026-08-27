@@ -183,7 +183,13 @@ function resolveTjxDcFromEmailV2_(text) {
   try {
     var directory = buildTjxDcDirectory_();
     var haystack = String(text || "");
-    var found = haystack.match(/\bDC\s*#?\s*[:#]?\s*(\d{3,6})\b/gi) || [];
+    // Requires an explicit "#" or ":" marker between "DC" and the number —
+    // both were previously optional, so ordinary postal text like "Deliver
+    // to Washington DC 20001" matched as a DC-number mention; if that ZIP
+    // also happened to be a real TJX/ROSS directory entry, it confidently
+    // (and wrongly) resolved the shipment there (Codex review round 8 on
+    // PR #102).
+    var found = haystack.match(/\bDC\s*[:#]\s*(\d{3,6})\b/gi) || [];
     var seen = {};
     var distinct = [];
     // Collect every distinct mention BEFORE checking directory membership —
