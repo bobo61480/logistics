@@ -356,6 +356,9 @@ test("renders live schedules and KPI cards computed from the workbooks", async (
   await expect(kpiCard("SALES · NATIONALS")).toContainText("$1,500.00");
   await expect(kpiCard("SALES · WMS WHOLESALE")).toContainText("$2,000.00");
 
+  // Detailed KPI panels are intentionally hidden in the default Summary view.
+  await page.getByRole("button", { name: "Details", exact: true }).click();
+
   // Carrier ranking: 3 named carriers with one move each → 33.3% share.
   const carriers = page.locator(".carrier-ranking li");
   await expect(carriers).toHaveCount(3);
