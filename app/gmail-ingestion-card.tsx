@@ -37,9 +37,18 @@ export interface GmailIngestionEvent {
 export function GmailIngestionCard({
   events,
   loading = false,
+  onReview,
+  reviewingKey = "",
+  sheetUrl,
 }: {
   events: GmailIngestionEvent[] | null;
   loading?: boolean;
+  /** Omit to render the feed read-only (no Approve/Reject buttons). */
+  onReview?: (event: GmailIngestionEvent, decision: "approve" | "reject") => void;
+  /** reviewKey of the row currently mid-request, so only that row disables. */
+  reviewingKey?: string;
+  /** Master workbook URL — links the ambiguous-match shortcut to the PENDING VERIFICATION tab. */
+  sheetUrl?: string;
 }) {
   const unavailable = !loading && events === null;
 
@@ -78,10 +87,59 @@ export function GmailIngestionCard({
                 <dt className="text-xs font-semibold uppercase tracking-wide text-neutral-400">Shipment</dt>
                 <dd className="font-medium text-neutral-900">
                   {event.shipmentId || event.customer || "Shipment reference unavailable"}
+                  {event.status === "needsReview" && (
+                    <span className="ml-2 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-amber-200">
+                      Needs review
+                    </span>
+                  )}
                 </dd>
                 <dt className="text-xs font-semibold uppercase tracking-wide text-neutral-400">Main point</dt>
                 <dd className="text-neutral-700">{event.note || "Shipment notice received"}</dd>
+                {event.issues && (
+                  <>
+                    <dt className="text-xs font-semibold uppercase tracking-wide text-neutral-400">Issue</dt>
+                    <dd className="text-amber-700">{event.issues}</dd>
+                  </>
+                )}
               </dl>
+
+              {onReview && event.status === "needsReview" && (
+                <div className="mt-2 flex items-center gap-2">
+                  {event.reviewKey ? (
+                    <>
+                      <button
+                        type="button"
+                        disabled={reviewingKey === event.reviewKey}
+                        onClick={() => onReview(event, "approve")}
+                        className="rounded-md bg-green-600 px-2.5 py-1 text-xs font-medium text-white transition hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {reviewingKey === event.reviewKey ? "Working…" : "Approve"}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={reviewingKey === event.reviewKey}
+                        onClick={() => onReview(event, "reject")}
+                        className="rounded-md bg-white px-2.5 py-1 text-xs font-medium text-red-700 ring-1 ring-red-200 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Reject
+                      </button>
+                    </>
+                  ) : sheetUrl ? (
+                    <a
+                      href={sheetUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs font-medium text-amber-700 hover:underline"
+                    >
+                      No unique identifier — resolve directly in the PENDING VERIFICATION sheet ↗
+                    </a>
+                  ) : (
+                    <span className="text-xs text-neutral-400">
+                      No unique identifier — resolve directly in the PENDING VERIFICATION sheet.
+                    </span>
+                  )}
+                </div>
+              )}
             </li>
           ))}
         </ul>

@@ -35,11 +35,23 @@ describe("Gmail Shipping-Doc Ingestion production explanation", () => {
     expect(page).toContain("<IngestionRoadmapCard events={gmailIngestion} />");
   });
 
-  it("keeps Shipment Notices limited to sender, shipment, and main point", () => {
+  it("shows sender, shipment, and main point for every notice", () => {
     expect(noticesCard).toContain("Sender");
     expect(noticesCard).toContain("Shipment");
     expect(noticesCard).toContain("Main point");
-    expect(noticesCard).not.toContain("No unique identifier");
-    expect(noticesCard).not.toContain("event.issues");
+  });
+
+  it("wires Approve/Reject review controls into the card, not just the handler", () => {
+    // Regression for a Codex review finding: page.tsx defined
+    // handleReview/postPendingReview but never passed them to
+    // GmailIngestionCard, and the card itself rendered no review controls
+    // at all — the whole approval workflow was unreachable from the
+    // dashboard.
+    expect(page).toMatch(/<GmailIngestionCard[\s\S]*?onReview=\{handleReview\}/);
+    expect(page).toMatch(/<GmailIngestionCard[\s\S]*?reviewingKey=\{reviewingKey\}/);
+    expect(noticesCard).toContain("onReview?: (event: GmailIngestionEvent, decision:");
+    expect(noticesCard).toContain('onReview && event.status === "needsReview"');
+    expect(noticesCard).toContain("No unique identifier");
+    expect(noticesCard).toContain("event.issues");
   });
 });

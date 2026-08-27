@@ -39,6 +39,8 @@ const DATA_ENDPOINT =
   process.env.NEXT_PUBLIC_LOGISTICS_SNAPSHOT_URL ?? "/api/logistics/snapshot";
 const STATUS_ENDPOINT =
   process.env.NEXT_PUBLIC_LOGISTICS_STATUS_URL ?? "/api/logistics/status";
+const PENDING_REVIEW_ENDPOINT =
+  process.env.NEXT_PUBLIC_LOGISTICS_PENDING_REVIEW_URL ?? "/api/logistics/pending-review";
 const LEGACY_WRITE_ENDPOINT =
   process.env.NEXT_PUBLIC_APPS_SCRIPT_WRITE_URL ?? "";
 const AUTO_REFRESH_MS = 30 * 60 * 1000;
@@ -2168,6 +2170,31 @@ async function postStatus(item: ScheduleItem, status: string) {
   }
 }
 
+/**
+ * Approve or reject one Gmail-ingestion review row. No legacy-endpoint
+ * fallback (unlike postStatus) — this is a brand-new action with no prior
+ * static-host caller to stay compatible with.
+ */
+async function postPendingReview(event: GmailIngestionEvent, decision: "approve" | "reject") {
+  if (!event.reviewKey) {
+    throw new Error(
+      "This row has no unique customer, invoice, BL/PRO, or container identifier. Review actions are disabled to prevent resolving the wrong shipment — edit it directly in the PENDING VERIFICATION sheet.",
+    );
+  }
+  const response = await fetch(PENDING_REVIEW_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reviewKey: event.reviewKey, decision, shipmentId: event.shipmentId || undefined }),
+  });
+  const result = (await response.json().catch(() => null)) as
+    | { ok?: boolean; error?: string; action?: string; status?: string; warning?: string }
+    | null;
+  if (!response.ok || result?.ok !== true) {
+    throw new Error(result?.error || `Review action failed (${response.status}).`);
+  }
+  return result;
+}
+
 function ScheduleCard({
   item,
   saving,
@@ -2714,6 +2741,7 @@ export default function Home() {
   const [includeFinished, setIncludeFinished] = useState(false);
   const [kpiView, setKpiView] = useState<"summary" | "details">("summary");
   const [savingId, setSavingId] = useState("");
+  const [reviewingKey, setReviewingKey] = useState("");
   const [notice, setNotice] = useState("");
   const [noticeFading, setNoticeFading] = useState(false);
   const [kpis, setKpis] = useState<KpiSnapshot>(EMPTY_KPIS);
@@ -3044,6 +3072,49 @@ export default function Home() {
       );
     } finally {
       setSavingId("");
+    }
+  };
+
+  const handleReview = async (event: GmailIngestionEvent, decision: "approve" | "reject") => {
+    const key = event.reviewKey ?? "";
+    setReviewingKey(key);
+    setNotice(decision === "approve" ? `Approving ${event.shipmentId || "review row"}…` : `Rejecting ${event.shipmentId || "review row"}…`);
+    try {
+      const result = await postPendingReview(event, decision);
+      // An "approve" that couldn't actually be matched/inserted yet (a tie,
+      // an ambiguous identifier) comes back ok:true but status:"APPROVED",
+      // not "COMMITTED" — the row is left open on the sheet for automatic
+      // retry. Treating that the same as a real commit would clear the
+      // review controls and tell the operator it's live when it isn't
+      // (Codex review round 5 on PR #103).
+      const stillPending = decision === "approve" && result.status !== "COMMITTED";
+      // Refetch rather than optimistically patching every event sharing
+      // this reviewKey: reviewKeyForRow_ is a composite of shipment
+      // identifiers, not a per-row token, so repeated emails for the same
+      // shipment can leave 2+ open rows sharing one key. The server only
+      // ever resolves the newest matching row (reviewPendingRow_), so a
+      // client-side update-by-key would incorrectly mark an older,
+      // still-open row as resolved too (Codex review round 8 on PR #103).
+      // Also refetches on a deferred approval (stillPending), not just a
+      // real commit/reject: the server already moved that row out of its
+      // original "open" state even though it isn't COMMITTED yet, so
+      // skipping the refresh left the local event stuck showing active
+      // Approve/Reject buttons for a row that either rejects a second click
+      // outright or, worse, could act on a different older row sharing the
+      // same reviewKey (Codex review round 10 on PR #103).
+      void load();
+      setNotice(
+        stillPending
+          ? `${event.shipmentId || "Row"} approved, but ${result.warning || "could not be committed yet — it will retry automatically."}`
+          : decision === "approve"
+            ? `${event.shipmentId || "Row"} approved and committed to the live schedule.`
+            : `${event.shipmentId || "Row"} rejected.`,
+      );
+      window.setTimeout(() => setNotice(""), 4500);
+    } catch (reviewError) {
+      setNotice(reviewError instanceof Error ? reviewError.message : "Review action failed. Try again.");
+    } finally {
+      setReviewingKey("");
     }
   };
 
@@ -3412,7 +3483,13 @@ export default function Home() {
       {/* .ingestion-archive-row keeps this row ordered above the footer on the
           flex-reordered /light, /light-full, and /fulfillment-style variants. */}
       <div className="ingestion-archive-row mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2" aria-label="Email ingestion and document archive">
-        <GmailIngestionCard events={gmailIngestion} loading={loading} />
+        <GmailIngestionCard
+          events={gmailIngestion}
+          loading={loading}
+          onReview={handleReview}
+          reviewingKey={reviewingKey}
+          sheetUrl={SHEET_URL}
+        />
         <DriveArchiveCard />
       </div>
 
