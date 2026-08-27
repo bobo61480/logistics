@@ -20,12 +20,10 @@
  *  - The two tiers disagreeing on different customers is also treated as
  *    no-match, logged for a human, never guessed.
  *
- * Not yet wired into GmailPipelineV2.gs's live processing — this file is
- * reviewed/tested standalone first. Wiring, the insert-row path, and its own
- * dry-run gate land together in a follow-up PR, since that is the point
- * where a resolved customer would first be able to affect a live sheet
- * (upsertOutboundEmailV2_'s existing insert branch already requires
- * record.customer, so it must not go live until that gate exists).
+ * Wired into GmailPipelineV2.gs's live ingestion path via
+ * resolveOutboundTargetV2_(), which calls matchCustomerBySenderV2_ and
+ * matchCustomerByTextV2_ for every outbound-context message. Live writes
+ * are gated by OUTBOUND_INSERT_DRY_RUN_V2 in OutboundSheetInsertV2.gs.
  */
 
 var GMAIL_CUSTOMER_RESOLVER_ENABLED_V2 = true;
@@ -280,11 +278,6 @@ function normalizedCustomerHaystackV2_(text) {
     .replace(/[^A-Z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim() + " ";
-}
-
-function customerKeyAppearsV2_(paddedHaystack, key) {
-  if (!key) return false;
-  return paddedHaystack.indexOf(" " + key + " ") !== -1;
 }
 
 function gmailCustomerResolutionTextV2_(meta, context, record) {

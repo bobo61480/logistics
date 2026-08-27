@@ -499,13 +499,6 @@ function gmailV2FailureDisposition_(message, error) {
   return { seen: true, pending: true, attempts: attempts };
 }
 
-/**
- * Backward-compatible setup helper. Trigger creation is owned by setupAllTriggers().
- */
-function ensureGmailV2Trigger_() {
-  return GMAIL_PIPELINE_TRIGGER_SYNC_VERSION;
-}
-
 // Kill switch for auto-committing (match-update OR insert) a record whose
 // thread was found ONLY by the sender-agnostic broadened query. Query 0
 // (Korean/logistics subject keywords) was already fully sender-agnostic
@@ -1039,6 +1032,7 @@ function normalizeEmailStatusV2_(value) {
   if (/custom/i.test(s)) return "Customs Clearance";
   if (/delay|resched/i.test(s)) return "Delayed";
   if (/ship|transit/i.test(s)) return "Shipping";
+  if (/^N\/?A$/i.test(s)) return "N/A";
   return "";
 }
 
@@ -1444,7 +1438,13 @@ function multilineHasV2_(cellValue, wanted) {
   return wantedKeys.some(function (key) { return cellKeys.indexOf(key) !== -1; });
 }
 function emailNoteV2_(record) {
-  return "";
+  var raw = record.note || record._emailSubject || "";
+  return sanitizeSheetTextV2_(raw);
+}
+function sanitizeSheetTextV2_(value) {
+  var s = String(value || "");
+  if (/^[=+\-@]/.test(s)) return "'" + s;
+  return s;
 }
 function formatEmailStatusRowV2_(sheet, rowNumber, status) {
   var done = isTerminalLogisticsStatus_(status);

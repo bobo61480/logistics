@@ -40,7 +40,7 @@
  * message committed for a write that never happened.
  */
 
-var OUTBOUND_INSERT_DRY_RUN_V2 = true;
+var OUTBOUND_INSERT_DRY_RUN_V2 = false;
 var OUTBOUND_INSERT_SHEETS_V2 = ["WH Trucking Request", "IHERB", "ULTA", "TJX/ROSS"];
 
 function findIherbHeader_(rows) {
