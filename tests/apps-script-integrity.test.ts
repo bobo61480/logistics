@@ -18,8 +18,15 @@ describe("Apps Script production integrity", () => {
     const validation = read("google-apps-script/Validation.gs");
 
     expect(pipeline).toContain("meta.documentNames = documentAttachments.map");
-    expect(pipeline).toContain('shipmentArchiveFolderPathV2_("Import Shipments"');
-    expect(pipeline).toContain('shipmentArchiveFolderPathV2_("Outbound Shipments"');
+    // Reflects the real Root -> Inbound|Outbound -> <bucket> -> <shipment-id>
+    // nesting rather than a stale flat path (Codex review round 8 on PR
+    // #103) — see also tests/gmail-folder-hierarchy.test.ts.
+    expect(pipeline).toContain("function shipmentArchiveFolderPathV2_(direction, customerName, folder) {");
+    // A reused legacy folder (found via a stored Drive link, not newly
+    // created) is never assumed to actually live at the synthesized nested
+    // path — only a freshly created folder gets that path (Codex review
+    // round 10 on PR #103).
+    expect(pipeline).toContain('meta.archiveFolderPath = existing ? "" : shipmentArchiveFolderPathV2_(direction, customerName, folder);');
     expect(validation).toContain("_documentNames:");
     expect(validation).toContain("_archiveFolderPath:");
     expect(validation).toContain('"Sender", "Documents", "Archive Folder"');
@@ -92,11 +99,11 @@ describe("Apps Script production integrity", () => {
     expect(triggers).toContain('"processLogisticsEmailsV2"');
     expect(triggers).toContain('"scanAndImportWmsTruckingOrders"');
     expect(triggers).toContain('"scanAndImportWmsTruckingOrdersV2"');
-    // Emergency-disabled 2026-08-25 (see the "keeps the WMS trucking importer
-    // emergency-disabled" test below) — the V2 handler stays in the cleanup
-    // list so setupAllTriggers() removes any installed trigger, but must NOT
-    // be provisioned again until the duplicate-insert root cause is fixed.
-    expect(triggers).not.toContain('{ handler: "scanAndImportWmsTruckingOrdersV2"');
+    // Emergency-disabled 2026-08-25 after the duplicate-row incident. Both
+    // names remain cleanup targets so setupAllTriggers removes stale installed
+    // triggers, but neither importer may be provisioned until a dry-run proves
+    // the duplicate-insert root cause is fixed.
+    expect(triggers).not.toContain('{ handler: "scanAndImportWmsTruckingOrdersV2",');
     expect(triggers).not.toContain('{ handler: "scanAndImportWmsTruckingOrders",');
     expect(triggers).not.toContain('{ handler: "requestSiteRedeploy"');
   });
@@ -323,5 +330,185 @@ describe("Apps Script production integrity", () => {
     // Retained purely as a cleanup target for any stray installable trigger
     // left over from testing an earlier revision of this PR.
     expect(triggers).toContain('"customerLookupOnEdit"');
+  });
+
+  it("ships the broadened Gmail search and both new customer/store resolvers enabled", () => {
+    const customerResolver = read("google-apps-script/GmailCustomerResolverV2.gs");
+    const storeResolver = read("google-apps-script/GmailStoreResolverV2.gs");
+    expect(read("google-apps-script/GmailPipelineV2.gs")).toContain("var GMAIL_V2_BROADENED_SEARCH_ENABLED_V2 = true;");
+    expect(customerResolver).toContain("var GMAIL_CUSTOMER_RESOLVER_ENABLED_V2 = true;");
+    expect(storeResolver).toContain("var GMAIL_STORE_RESOLVER_ENABLED_V2 = true;");
+  });
+
+  it("wires the customer/store resolvers into live ingestion behind a dry-run insert gate", () => {
+    const pipeline = read("google-apps-script/GmailPipelineV2.gs");
+    const insert = read("google-apps-script/OutboundSheetInsertV2.gs");
+    const validation = read("google-apps-script/Validation.gs");
+    expect(pipeline).toContain("resolveOutboundTargetV2_({}, meta, context)");
+    // Round 2 of the same review: gating this on context.kind === "outbound"
+    // specifically (a WH-Trucking/CARGOMATIC-style marker) made the whole
+    // ULTA/IHERB/TJX-ROSS routing capability effectively unreachable, since
+    // a genuine specialized-sheet notice (just a PO/BOL/date) has no reason
+    // to contain those markers and leaves context.kind blank instead.
+    //
+    // Round 5 of the same review: gating on "not inbound" was still too
+    // narrow — extractEmailContextV2_ classifies any ETA mention as
+    // inbound, which a genuine ULTA/IHERB/TJX-ROSS notice can easily also
+    // contain (an appointment/delivery date). Resolution now runs
+    // unconditionally, every time, so a confidently resolved identity can
+    // never be skipped by a generic inbound guess.
+    expect(pipeline).not.toContain('if (context.kind !== "inbound") {');
+    expect(pipeline).not.toContain('if (context.kind === "outbound") {\n    var resolvedTarget');
+    // Archiving direction must also follow a resolved customer/DC identity,
+    // not just context.kind, for the same reason.
+    expect(pipeline).toContain('(context.kind === "outbound" || context.customer) ? "outbound" : "inbound"');
+    expect(pipeline).toContain("upsertOutboundEmailAcrossSheetsV2_(record, false, OUTBOUND_INSERT_SHEETS_V2, OUTBOUND_INSERT_DRY_RUN_V2)");
+    expect(pipeline).toContain("upsertOutboundEmailAcrossSheetsV2_(record, true, OUTBOUND_INSERT_SHEETS_V2, OUTBOUND_INSERT_DRY_RUN_V2)");
+    expect(insert).toContain("var OUTBOUND_INSERT_DRY_RUN_V2 = false;");
+    expect(insert).toContain('OUTBOUND_INSERT_SHEETS_V2 = ["WH Trucking Request", "IHERB", "ULTA", "TJX/ROSS"];');
+    // TRANSFERS is deliberately excluded — its real header has no
+    // customer/shipper concept at all (an internal BP<->NJ transfer log).
+    expect(insert).not.toContain('"TRANSFERS"');
+    // The single-sheet shim keeps GmailXpoV2.gs's fallback and any other
+    // pre-existing caller scoped to WH Trucking Request only, and always
+    // live (dryRun: false) — this rollout gate only ever protects the
+    // automatic-ingestion path, not a caller with no dry-run concept of
+    // its own or a human's explicit PENDING VERIFICATION approval.
+    expect(pipeline).toContain('upsertOutboundEmailAcrossSheetsV2_(record, allowInsert, ["WH Trucking Request"], false);');
+    expect(validation).toContain("upsertOutboundEmailAcrossSheetsV2_(record, true, OUTBOUND_INSERT_SHEETS_V2, false)");
+  });
+
+  it("reserves each Gmail search query its own thread-discovery share instead of a flat post-hoc slice", () => {
+    const pipeline = read("google-apps-script/GmailPipelineV2.gs");
+    // Codex review on PR #102: filling threadsById in query order and then
+    // slicing the combined set to GMAIL_V2_MAX_THREADS let the broadened
+    // query's results (always inserted last) get silently discarded
+    // whenever the first two queries alone already filled every slot.
+    expect(pipeline).toContain("var perQueryThreadCap = Math.ceil(GMAIL_V2_MAX_THREADS / queries.length);");
+    expect(pipeline).not.toMatch(/Object\.keys\(threadsById\)\.slice\(/);
+    // Round 2 of the same review: attribution (which quer(y/ies) matched a
+    // thread, for the broadenedMatches metric) must be computed from the
+    // full, uncapped search results — not from which threads happened to
+    // win a slot under the per-query cap — or a thread that overflowed one
+    // query's share could get admitted under another's and miscounted.
+    expect(pipeline).toContain("var matchedByQueryIndex = {};");
+    expect(pipeline).toContain("perQueryResults.forEach(function (threads, queryIndex) {");
+    // And: a thread with no unprocessed message left must not consume its
+    // query's admission share either, or a query that stably returns the
+    // same already-fully-handled threads can permanently starve a
+    // genuinely new thread ranked just below the cap. Round 6 of the same
+    // review: filtering this at admission time wasn't enough either — a
+    // query with more matches than fit in one page would keep re-fetching
+    // the same already-processed top results forever, since Gmail search
+    // has no built-in "exclude already-handled" filter. Paging past them at
+    // search time (before admission) is what actually lets threads ranked
+    // behind the fully-processed ones surface.
+    expect(pipeline).toContain("function gmailV2AdmissibleThreadsForQueryV2_(query, deadline, offsetKey) {");
+    expect(pipeline).toContain("var evaluation = gmailV2EvaluateThreadV2_(page[i]);");
+    expect(pipeline).toContain(
+      "return gmailV2AdmissibleThreadsForQueryV2_(query, queryDeadline, GMAIL_V2_DISCOVERY_OFFSET_PREFIX + index);",
+    );
+    // Round 10 of the same review: a deadline hit mid-page previously
+    // abandoned the rest of that page with no memory of where it stopped —
+    // every trigger invocation restarted the same query at offset 0, so a
+    // stable backlog of already-seen/retry-deferred threads at the front of
+    // the results could permanently starve an unseen thread ranked behind
+    // it. The search offset now persists per query across runs and only
+    // resets once that query's results are genuinely exhausted.
+    expect(pipeline).toContain('var GMAIL_V2_DISCOVERY_OFFSET_PREFIX = "GMAIL_V2_DISCOVERY_OFFSET_";');
+    expect(pipeline).toContain("var start = props ? Number(props.getProperty(offsetKey) || 0) : 0;");
+    expect(pipeline).toContain("if (exhausted) props.deleteProperty(offsetKey);");
+    expect(pipeline).toContain("else props.setProperty(offsetKey, String(start));");
+    // A short/near-exhausted page combined with a tight deadline must not
+    // be misread as "nothing left" — only a page fully evaluated before
+    // deciding it's shorter than a full page counts as real exhaustion.
+    expect(pipeline).toContain("if (i < page.length) break;");
+    // Round 10, a second finding on the same review: "not matched by an
+    // established query" is only trustworthy when that query's discovery
+    // actually reached its true end-of-results this run — otherwise a
+    // thread the broadened query also found could be misclassified as
+    // broadened-only and forced into PENDING VERIFICATION instead of that
+    // established query's normal upsert path.
+    expect(pipeline).toContain("return { admissible: admissible, deferredCounts: deferredCounts, truncated: !exhausted };");
+    expect(pipeline).toContain("var anyEstablishedQueryTruncated = perQueryDiscovery.some(function (discovery, queryIndex) {");
+    expect(pipeline).toContain("if (broadenedQueryIndex !== -1 && !anyEstablishedQueryTruncated) {");
+    expect(pipeline).toContain("function gmailV2ThreadHasUnprocessedMessageV2_(thread) {");
+    expect(pipeline).toContain("return gmailV2EvaluateThreadV2_(thread).admissible;");
+    // Round 7 of the same review: discovery itself must respect the run's
+    // overall time budget — with 4 queries each potentially scanning up to
+    // GMAIL_V2_MAX_SEARCH_SCAN already-processed threads, an unbounded
+    // discovery phase could exhaust the whole run before a single message
+    // is processed or the run log is written.
+    expect(pipeline).toContain("var GMAIL_V2_DISCOVERY_BUDGET_MS = 60000;");
+    expect(pipeline).toContain("var discoveryDeadline = runStarted + GMAIL_V2_DISCOVERY_BUDGET_MS;");
+    expect(pipeline).toContain("if (Date.now() >= deadline) break;");
+    // Round 8 of the same review: a shared deadline alone still let a
+    // first query with a large processed/retry-deferred backlog consume
+    // the ENTIRE discovery budget before any later query got a single page
+    // fetched (Array.map runs each query's discovery to completion before
+    // starting the next) — each query now gets its own reserved slice.
+    expect(pipeline).toContain("var perQueryDiscoveryBudgetMs = Math.floor(GMAIL_V2_DISCOVERY_BUDGET_MS / queries.length);");
+    expect(pipeline).toContain("var queryDeadline = Math.min(discoveryDeadline, Date.now() + perQueryDiscoveryBudgetMs);");
+    // Also round 7: a thread admission rejects solely for being
+    // retry-deferred (never fully seen, never past the lookback window)
+    // must still surface in stats.retryDeferred — it is never admitted, so
+    // the main per-message loop's own retryDeferred++ never sees it.
+    expect(pipeline).toContain("function gmailV2EvaluateThreadV2_(thread) {");
+    expect(pipeline).toContain("deferredCountByThreadId[id] = discovery.deferredCounts[id];");
+    expect(pipeline).toContain("retryDeferred: discoveredRetryDeferred");
+    // Round 5 of the same review: a per-query cap can go unused when that
+    // query simply has fewer than its share of hits (e.g. only one of
+    // three queries has any matches), leaving global budget idle while
+    // that query's own overflow ages past the lookback window instead of
+    // being processed. A second fill pass spends the leftover global
+    // budget on overflow from every query.
+    expect(pipeline).toContain("var overflowByQuery = [];");
+    expect(pipeline).toContain("var remainingGlobalBudget = GMAIL_V2_MAX_THREADS - Object.keys(threadsById).length;");
+    expect(pipeline).toContain("overflowByQuery.forEach(function (overflow) {");
+  });
+
+  it("forces every broadened-only-matched record through PENDING VERIFICATION until explicitly trusted", () => {
+    const pipeline = read("google-apps-script/GmailPipelineV2.gs");
+    // Codex review on PR #102: query 0 was already fully sender-agnostic
+    // before this file's changes, but the broadened query's generic terms
+    expect(pipeline).toContain("var GMAIL_V2_BROADENED_AUTOCOMMIT_ENABLED_V2 = false;");
+    expect(pipeline).toContain("if (isBroadenedOnly && !GMAIL_V2_BROADENED_AUTOCOMMIT_ENABLED_V2) {");
+    expect(pipeline).toContain("function processLogisticsMessageV2_(message, isBroadenedOnly) {");
+    expect(pipeline).toContain("processLogisticsMessageV2_(message, isBroadenedOnly)");
+  });
+
+  it("only skips archiving Gmail attachments for a weak broadened-only match with zero extracted records", () => {
+    const pipeline = read("google-apps-script/GmailPipelineV2.gs");
+    // Codex review round 1 on PR #102: the broadened search query is
+    // generic enough that an unrelated email can match with zero
+    // extractable records — gating purely on documentAttachments.length
+    // would still create a permanent Drive folder for a shipment that was
+    // never matched or inserted anywhere.
+    //
+    // Codex review round 3 on PR #102: that fix over-reached — gating on
+    // records.length unconditionally also stopped archiving attachments
+    // for the two ORIGINAL, already-trusted queries whenever extraction
+    // failed, losing the exact artifact a human needs to debug why
+    // extraction failed. The zero-records skip must apply only to threads
+    // found ONLY by the broadened query.
+    //
+    // On this branch (PR #103), archiving direction/customer bucketing
+    // (archiveDirection/context.customer, not a bare context.kind check)
+    // has replaced the plain inbound-only gate, so the assertion below
+    // matches this branch's merged form of the same fix.
+    expect(pipeline).toContain("var isWeakBroadenedMatch = isBroadenedOnly && !records.length;");
+    expect(pipeline).toContain("if (documentAttachments.length && !isWeakBroadenedMatch) {");
+  });
+
+  it("marks a resolved specialized-sheet record as outbound, not just customer/DC-tagged", () => {
+    const pipeline = read("google-apps-script/GmailPipelineV2.gs");
+    // Codex review round 4 on PR #103: resolving a customer/DC identity set
+    // context.customer but left context.kind blank for a specialized
+    // (ULTA/IHERB/TJX-ROSS) notice with no generic outbound marker — the
+    // attachment parsers' own `context.kind || "inbound"` default then
+    // still classified the record as inbound and could insert it into
+    // IMPORTS instead of the resolved sheet.
+    expect(pipeline).toContain("context.customer = resolvedTarget.customer;");
+    expect(pipeline).toContain('context.kind = "outbound";');
   });
 });
