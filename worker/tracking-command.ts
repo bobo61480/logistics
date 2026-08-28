@@ -3,7 +3,7 @@ import { carrierConfigured, trackParcel, type Carrier, type TrackingResult } fro
 const MAX_REQUESTS = 25;
 const MAX_BODY_BYTES = 4_096;
 const CACHE_TTL_SECONDS = 15 * 60; // last-known location doesn't need to be fetched every pageview
-const CARRIERS: Carrier[] = ["ups", "fedex", "usps"];
+const CARRIERS: Carrier[] = ["ups", "fedex", "usps", "dhl"];
 
 function json(value: unknown, status = 200, extraHeaders?: HeadersInit) {
   return Response.json(value, { status, headers: { "cache-control": "no-store", ...extraHeaders } });

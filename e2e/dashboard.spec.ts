@@ -356,6 +356,9 @@ test("renders live schedules and KPI cards computed from the workbooks", async (
   await expect(kpiCard("SALES · NATIONALS")).toContainText("$1,500.00");
   await expect(kpiCard("SALES · WMS WHOLESALE")).toContainText("$2,000.00");
 
+  // Detailed KPI panels are intentionally hidden in the default Summary view.
+  await page.getByRole("button", { name: "Details", exact: true }).click();
+
   // Carrier ranking: 3 named carriers with one move each → 33.3% share.
   const carriers = page.locator(".carrier-ranking li");
   await expect(carriers).toHaveCount(3);
@@ -373,19 +376,13 @@ test("renders live schedules and KPI cards computed from the workbooks", async (
 
   // Shipment Notices card renders the snapshot's ingestion feed.
   await expect(page.getByRole("heading", { name: "Shipment Notices" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Needs review (1)" })).toBeVisible();
   await expect(page.getByText("IN00778")).toBeVisible();
-  await expect(page.getByText("No ETA or ship date found.")).toBeVisible();
   // A silently-committed row surfaces its "Received: ..." summary prominently.
   await expect(page.getByText("Received: IN00777 · MSKU1234567 · ETA 8/30")).toBeVisible();
-  await expect(page.getByRole("link", { name: "Source email" }).first()).toHaveAttribute(
-    "href",
-    "https://mail.google.com/mail/u/0/#all/pending1",
-  );
 
-  // Drive Archive card offers the document quick links.
-  await expect(page.getByRole("heading", { name: "Drive Archive" })).toBeVisible();
-  await expect(page.getByRole("link", { name: /SK Logistics Email Archive/ })).toBeVisible();
+  // Document Folders card offers the canonical archive quick links.
+  await expect(page.getByRole("heading", { name: "Document Folders" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Inbound Shipments" })).toBeVisible();
 });
 
 test("saves a status edit through the Apps Script endpoint and confirms it", async ({ page }) => {

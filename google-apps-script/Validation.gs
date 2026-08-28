@@ -11,7 +11,7 @@
 
 var VALIDATION = {
   pendingSheetName: "PENDING VERIFICATION",
-  pendingHeaders: ["Timestamp", "Kind", "Status", "Issues", "Customer", "Invoice / PI", "BL / PRO", "Container", "Ship Date / ETA", "Qty", "Carrier / Vessel", "Note", "Source Email", "Drive File", "Raw JSON"],
+  pendingHeaders: ["Timestamp", "Kind", "Status", "Issues", "Customer", "Invoice / PI", "BL / PRO", "Container", "Ship Date / ETA", "Qty", "Carrier / Vessel", "Note", "Source Email", "Drive File", "Raw JSON", "Sender", "Documents", "Archive Folder"],
   statusValues: ["NEEDS REVIEW", "APPROVED", "REJECTED", "COMMITTED"],
   colors: { needsReview: "#FFF3CD", approved: "#D9EAD3", rejected: "#F4CCCC", committed: "#E8F0FE" },
   dateWindowPastDays: 45,     // reject dates further back than this
@@ -37,7 +37,13 @@ function validateRecord_(record, kind) {
     }
   } else {
     if (!record.customer) issues.push("Customer is missing.");
-    if (!record.invoice && !record.pro) issues.push("Neither invoice/PO nor PRO/BOL found.");
+    // shipmentNo accepted alongside invoice/pro: TJX/ROSS's own insert
+    // path (OutboundSheetInsertV2.gs's insertEligible) allows a record
+    // through with only its persisted SHIPMENT # and no PO#/BOL yet — this
+    // universal gate ran before that path could ever be reached and had no
+    // matching allowance, so that advertised shipment-number-only insert
+    // was unreachable in practice (Codex review round 8 on PR #103).
+    if (!record.invoice && !record.pro && !record.shipmentNo) issues.push("Neither invoice/PO, PRO/BOL, nor shipment # found.");
     if (!record.shipDate) issues.push("Ship date is missing.");
     if (record.shipDate && !isSaneDate_(record.shipDate)) issues.push("Ship date does not parse or is outside the expected window: " + record.shipDate);
   }
@@ -96,6 +102,10 @@ function ensurePendingSheet_() {
       .build();
     sheet.getRange(2, statusCol, 1000, 1).setDataValidation(rule);
   }
+  if (sheet.getMaxColumns() < VALIDATION.pendingHeaders.length) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), VALIDATION.pendingHeaders.length - sheet.getMaxColumns());
+  }
+  sheet.getRange(1, 1, 1, VALIDATION.pendingHeaders.length).setValues([VALIDATION.pendingHeaders]);
   return sheet;
 }
 
@@ -118,7 +128,14 @@ function addPendingRow_(entry) {
     r.note || "",
     (entry.meta && entry.meta.permalink) || r._sourceEmail || "",
     entry.driveUrl || r._driveFile || "",
-    JSON.stringify(r).slice(0, 5000)
+    JSON.stringify(Object.assign({}, r, {
+      _sender: (entry.meta && entry.meta.from) || "",
+      _documentNames: (entry.meta && entry.meta.documentNames) || [],
+      _archiveFolderPath: (entry.meta && entry.meta.archiveFolderPath) || ""
+    })).slice(0, 5000),
+    (entry.meta && entry.meta.from) || "",
+    JSON.stringify((entry.meta && entry.meta.documentNames) || []),
+    (entry.meta && entry.meta.archiveFolderPath) || ""
   ]);
   sheet.getRange(sheet.getLastRow(), 1, 1, VALIDATION.pendingHeaders.length)
     .setBackground(VALIDATION.colors.needsReview);
@@ -157,7 +174,14 @@ function addCommittedAuditRow_(entry) {
     entry.note || "",
     (entry.meta && entry.meta.permalink) || r._sourceEmail || "",
     entry.driveUrl || r._driveFolder || "",
-    JSON.stringify(r).slice(0, 5000)
+    JSON.stringify(Object.assign({}, r, {
+      _sender: (entry.meta && entry.meta.from) || "",
+      _documentNames: (entry.meta && entry.meta.documentNames) || [],
+      _archiveFolderPath: (entry.meta && entry.meta.archiveFolderPath) || ""
+    })).slice(0, 5000),
+    (entry.meta && entry.meta.from) || "",
+    JSON.stringify((entry.meta && entry.meta.documentNames) || []),
+    (entry.meta && entry.meta.archiveFolderPath) || ""
   ]);
   sheet.getRange(sheet.getLastRow(), 1, 1, VALIDATION.pendingHeaders.length)
     .setBackground(VALIDATION.colors.committed);
@@ -183,10 +207,37 @@ function commitApprovedPendingRow_(sheet, rowIndex1based, data, col) {
   record.note = data[col["Note"]] || record.note;
   var when = data[col["Ship Date / ETA"]];
   var kind = String(data[col["Kind"]] || "outbound").toLowerCase();
-  if (kind === "inbound") { record.eta = when || record.eta; upsertInboundEmailV2_(record, true); }
-  else { record.shipDate = when || record.shipDate; upsertOutboundEmailV2_(record, true); }
+  var upsert;
+  if (kind === "inbound") { record.eta = when || record.eta; upsert = upsertInboundEmailV2_(record, true); }
+  // Multi-sheet, not the single-sheet upsertOutboundEmailV2_ shim: a human
+  // reviewer approving a PENDING VERIFICATION row may have typed an IHERB/
+  // ULTA/TJX-ROSS identity into the Customer cell (a bare DC# number, an
+  // "ULTA (CITY)" label, or literally "IHERB"), and that should route to
+  // the matching sheet the same way automatic ingestion now does.
+  // dryRun: false — a human has already approved this specific write by
+  // setting the row's Status to APPROVED; the automatic-ingestion-only
+  // safety gate does not apply to an explicit human decision.
+  else { record.shipDate = when || record.shipDate; upsert = upsertOutboundEmailAcrossSheetsV2_(record, true, OUTBOUND_INSERT_SHEETS_V2, false); }
+  // Only mark COMMITTED when the upsert actually matched or inserted —
+  // e.g. a tie among candidate rows returns matched:false, and the row's
+  // own approval would otherwise be silently discarded: Status flips to
+  // COMMITTED, the shipment is neither updated nor inserted anywhere, and
+  // the approval workflow has no way to retry it (Codex review on PR
+  // #103). Leaving Status at APPROVED means the next processApprovedPending()
+  // cycle retries it automatically — a real fix (a human correcting the
+  // ambiguous data) resolves on its own; a still-ambiguous one just keeps
+  // logging and retrying rather than vanishing.
+  if (!upsert || !upsert.matched) {
+    logPipeline_("PENDING APPROVAL COMMIT FAILED", record.customer || record.pro || record.invoice || "", JSON.stringify({
+      row: rowIndex1based,
+      kind: kind,
+      record: record
+    }));
+    return { committed: false };
+  }
   sheet.getRange(rowIndex1based, col["Status"] + 1).setValue("COMMITTED");
   sheet.getRange(rowIndex1based, 1, 1, VALIDATION.pendingHeaders.length).setBackground(VALIDATION.colors.committed);
+  return { committed: true };
 }
 
 /**
@@ -209,8 +260,7 @@ function processApprovedPending() {
       var status = String(data[r][col["Status"]] || "").trim().toUpperCase();
       var rowRange = sheet.getRange(r + 1, 1, 1, VALIDATION.pendingHeaders.length);
       if (status === "APPROVED") {
-        commitApprovedPendingRow_(sheet, r + 1, data[r], col);
-        committed++;
+        if (commitApprovedPendingRow_(sheet, r + 1, data[r], col).committed) committed++;
       } else if (status === "REJECTED") {
         rowRange.setBackground(VALIDATION.colors.rejected).setFontColor("#999999");
       }
@@ -239,10 +289,10 @@ function reviewKeyForRow_(data, col) {
 /**
  * Instant dashboard-driven approve/reject for one PENDING VERIFICATION row,
  * called from Code.gs's doPost({action:"reviewPending"}). Only ever acts on
- * a row currently in NEEDS REVIEW, matched by reviewKeyForRow_, and refuses
- * (never guesses) if zero or more than one open row matches — the same
- * "verify identifiers before writing" discipline used by the status-write
- * path and by skwbp's StatusWriteback.gs.
+ * a row currently in NEEDS REVIEW, matched by reviewKeyForRow_. When repeated
+ * emails produced more than one open row for the same shipment identifiers,
+ * the newest appended row wins because it represents the latest email state.
+ * Older rows remain as an audit trail and can still be resolved separately.
  */
 function reviewPendingRow_(payload) {
   var reviewKey = String(payload.reviewKey || "").trim();
@@ -268,23 +318,28 @@ function reviewPendingRow_(payload) {
     if (matches.length === 0) {
       throw new Error("That review row is no longer open — someone may have already resolved it. Refresh and retry.");
     }
-    if (matches.length > 1) {
-      throw new Error("More than one open review row matches — refusing to guess. Resolve directly in PENDING VERIFICATION.");
-    }
-
-    var r0 = matches[0];
+    // PENDING VERIFICATION is append-only. Selecting the last matching row
+    // deterministically applies the decision to the latest notice instead of
+    // blocking the operator when the same shipment received repeated emails.
+    var r0 = matches[matches.length - 1];
     var rowIndex1based = r0 + 1;
     var rowRange = sheet.getRange(rowIndex1based, 1, 1, VALIDATION.pendingHeaders.length);
     if (decision === "approve") {
       sheet.getRange(rowIndex1based, col["Status"] + 1).setValue("APPROVED");
-      commitApprovedPendingRow_(sheet, rowIndex1based, data[r0], col);
+      var commitResult = commitApprovedPendingRow_(sheet, rowIndex1based, data[r0], col);
       SpreadsheetApp.flush();
-      return { ok: true, action: "approved", row: rowIndex1based, status: "COMMITTED" };
+      // Report what actually happened — a tie or other non-match leaves
+      // the row at APPROVED (retried automatically by the next
+      // processApprovedPending() cycle), not falsely reported as
+      // COMMITTED (Codex review on PR #103).
+      return commitResult.committed
+        ? { ok: true, action: "approved", row: rowIndex1based, status: "COMMITTED", matchedRows: matches.length }
+        : { ok: true, action: "approved", row: rowIndex1based, status: "APPROVED", matchedRows: matches.length, warning: "Could not be matched or safely inserted yet — left approved for retry." };
     }
     sheet.getRange(rowIndex1based, col["Status"] + 1).setValue("REJECTED");
     rowRange.setBackground(VALIDATION.colors.rejected).setFontColor("#999999");
     SpreadsheetApp.flush();
-    return { ok: true, action: "rejected", row: rowIndex1based, status: "REJECTED" };
+    return { ok: true, action: "rejected", row: rowIndex1based, status: "REJECTED", matchedRows: matches.length };
   } finally {
     lock.releaseLock();
   }

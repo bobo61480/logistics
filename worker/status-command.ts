@@ -6,7 +6,7 @@ const MAX_FIELD_LENGTH = 500;
 const WRITE_TIMEOUT_MS = 20_000;
 const EDITABLE_SHEETS = new Map([
   ["inbound", new Set(["IMPORTS"])],
-  ["outbound", new Set(["Outbound Shipping Schedule", "WH Trucking Request"])],
+  ["outbound", new Set(["Outbound Shipping Schedule", "WH Trucking Request", "NATIONAL ORDER PROGRESS", "Stylekorean"])],
 ]);
 
 type StatusCommand = {

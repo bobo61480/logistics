@@ -158,6 +158,11 @@ async function fullCsv(spreadsheetId: string, gid: number) {
   return parseCsv(await response.text());
 }
 
+function headerIndex(headers: string[], name: string, fallback: number) {
+  const index = headers.findIndex((header) => header.trim().toLowerCase() === name.toLowerCase());
+  return index >= 0 ? index : fallback;
+}
+
 export async function computeLiveKpis(): Promise<Record<string, number | string | CarrierKpi[]>> {
   try {
     const [nationalRows, wmsRows, truckingRows, transferRows] = await Promise.all([
@@ -170,10 +175,24 @@ export async function computeLiveKpis(): Promise<Record<string, number | string 
     const yearStart = today.year * 10_000 + 101;
     const monthStart = today.year * 10_000 + today.month * 100 + 1;
 
+    const nationalHeaders = nationalRows[0] ?? [];
+    const nationalStatusIndex = headerIndex(nationalHeaders, "Status", 0);
+    const nationalDeptIndex = nationalHeaders.findIndex(
+      (header) => header.trim().toLowerCase() === "dept",
+    );
+    const nationalAmountIndex = headerIndex(nationalHeaders, "Amount", 4);
+    const nationalOrderDateIndex = headerIndex(nationalHeaders, "Order Date", 6);
+
     const nationalSales = nationalRows.slice(1).flatMap((row) => {
-      if ((row[0] ?? "").trim().toLowerCase() === "cancelled") return [];
-      const date = dateCode(row[6] ?? "");
-      const value = amount(row[4] ?? "", true);
+      if ((row[nationalStatusIndex] ?? "").trim().toLowerCase() === "cancelled") return [];
+      if (
+        nationalDeptIndex >= 0 &&
+        (row[nationalDeptIndex] ?? "").trim().toLowerCase() !== "national"
+      ) {
+        return [];
+      }
+      const date = dateCode(row[nationalOrderDateIndex] ?? "");
+      const value = amount(row[nationalAmountIndex] ?? "", true);
       return date >= yearStart && date <= today.code && value !== null && value > 0
         ? [{ date, value }]
         : [];

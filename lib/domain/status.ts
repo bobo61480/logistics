@@ -1,5 +1,9 @@
 export type LogisticsStatus =
   | "Scheduled"
+  | "Schedule Requested"
+  | "Picked Up/Shipped"
+  | "In Transit"
+  | "In Transit/Stopover"
   | "Work in Progress"
   | "Pending"
   | "Shipping"
@@ -18,14 +22,18 @@ export type LogisticsStatus =
 
 const aliases = new Map<string, LogisticsStatus>([
   ["SCHEDULED", "Scheduled"],
+  ["SCHEDULE REQUESTED", "Schedule Requested"],
   ["READY", "Scheduled"],
   ["ROUTED/BOOKED", "Scheduled"],
-  ["PICKED UP", "Scheduled"],
+  ["PICKED UP", "Picked Up/Shipped"],
+  ["PICKED UP/SHIPPED", "Picked Up/Shipped"],
   ["WORK IN PROGRESS", "Work in Progress"],
   ["WIP", "Work in Progress"],
   ["PENDING", "Pending"],
   ["SHIPPING", "Shipping"],
-  ["IN TRANSIT", "Shipping"],
+  ["IN TRANSIT", "In Transit"],
+  ["ARRIVED AT INTERIM", "In Transit/Stopover"],
+  ["IN TRANSIT/STOPOVER", "In Transit/Stopover"],
   ["SHIPPED", "Shipped"],
   ["DELIVERED", "Delivered"],
   ["RECEIVED", "Received"],
@@ -48,8 +56,6 @@ const aliases = new Map<string, LogisticsStatus>([
 ]);
 
 const terminal = new Set<LogisticsStatus>([
-  "Shipped",
-  "Delivered",
   "Received",
   "Cancelled",
   "Completed",

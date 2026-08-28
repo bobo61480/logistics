@@ -89,6 +89,20 @@ jobs:
           npx wrangler deploy --keep-vars 2>&1 | tee /tmp/cloudflare-route-deploy.log
           deploy_status=${PIPESTATUS[0]}
           set -e
+          if [ "$deploy_status" -ne 0 ] \
+            && grep -Fq 'Authentication error [code: 10000]' /tmp/cloudflare-route-deploy.log; then
+            echo "::warning::The deploy token cannot manage zone routes; preserving the existing route and deploying a new Worker version instead."
+            release_tag="release-${GITHUB_SHA}"
+            npx wrangler versions upload \
+              --keep-vars \
+              --tag "$release_tag" \
+              --message "Production release ${GITHUB_SHA}"
+            npx wrangler versions deploy \
+              --version-tag "${release_tag}@100%" \
+              --message "Production release ${GITHUB_SHA}" \
+              --yes
+            deploy_status=0
+          fi
           if [ "$deploy_status" -ne 0 ]; then
             {
               echo "Cloudflare route recovery failed for commit ${GITHUB_SHA}."
