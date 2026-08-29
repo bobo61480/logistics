@@ -6,7 +6,7 @@ import {
   readDatabaseHealth,
   type OperationalSnapshot,
 } from "./database";
-import { fetchOperationalSources } from "./sources";
+import { fetchOperationalSources, type GmailIngestionEvent } from "./sources";
 import { handleStatusCommand } from "./status-command";
 import { handlePendingReviewCommand } from "./pending-review-command";
 import { handleTrackingCommand } from "./tracking-command";
@@ -55,7 +55,7 @@ function dedupeOperationalPayload(snapshot: Awaited<ReturnType<typeof fetchOpera
   sources.outbound = rawOutbound ? outbound.rows : null;
 
   if (Array.isArray(sources.gmailIngestion)) {
-    sources.gmailIngestion = dedupeObjects(sources.gmailIngestion as Array<Record<string, unknown>>, (event) => {
+    sources.gmailIngestion = dedupeObjects<GmailIngestionEvent>(sources.gmailIngestion, (event) => {
       const sourceEmail = String(event.sourceEmailUrl ?? "").trim();
       const shipment = String(event.shipmentId ?? event.container ?? event.invoice ?? event.blOrPro ?? "").trim().toUpperCase();
       const status = String(event.status ?? "").trim().toUpperCase();
