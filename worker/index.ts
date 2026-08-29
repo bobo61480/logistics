@@ -1,4 +1,5 @@
 import { computeKpisFromRows } from "../lib/kpis/compute";
+import { dedupeShipmentRows } from "../lib/domain/dedupe";
 import {
   persistSnapshot,
   readCurrentSnapshot,
@@ -10,7 +11,7 @@ import { handleStatusCommand } from "./status-command";
 import { handlePendingReviewCommand } from "./pending-review-command";
 import { handleTrackingCommand } from "./tracking-command";
 
-const WORKER_VERSION = "2026-08-13-worker-v8-public-guardrails";
+const WORKER_VERSION = "2026-08-29-worker-v9-d1-canonical-dedupe";
 const SNAPSHOT_CACHE_URL = "https://stylekorean.internal/api/logistics/snapshot";
 const SNAPSHOT_CACHE_SECONDS = 60;
 const SNAPSHOT_REFRESH_SECONDS = 15 * 60;
@@ -31,14 +32,73 @@ function json(value: unknown, status = 200, cacheControl = "no-store") {
   });
 }
 
+function dedupeObjects<T>(items: T[], keyFor: (item: T) => string) {
+  const seen = new Set<string>();
+  const output: T[] = [];
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const key = keyFor(items[index]);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    output.push(items[index]);
+  }
+  return output.reverse();
+}
+
+function dedupeOperationalPayload(snapshot: Awaited<ReturnType<typeof fetchOperationalSources>>) {
+  const startedAt = Date.now();
+  const sources = { ...snapshot.sources };
+  const imports = dedupeShipmentRows(sources.imports as string[][] | null, "inbound");
+  const outbound = dedupeShipmentRows(sources.outbound as string[][] | null, "outbound");
+  sources.imports = imports.rows;
+  sources.outbound = outbound.rows;
+
+  if (Array.isArray(sources.gmailIngestion)) {
+    sources.gmailIngestion = dedupeObjects(sources.gmailIngestion as Array<Record<string, unknown>>, (event) => {
+      const sourceEmail = String(event.sourceEmailUrl ?? "").trim();
+      const shipment = String(event.shipmentId ?? event.container ?? event.invoice ?? event.blOrPro ?? "").trim().toUpperCase();
+      const status = String(event.status ?? "").trim().toUpperCase();
+      const timestamp = String(event.timestamp ?? "").trim();
+      return sourceEmail || [shipment, status, timestamp].join("|");
+    });
+  }
+
+  const kpiRows = {
+    nationalRows: dedupeShipmentRows(snapshot.kpiRows.nationalRows, "generic").rows,
+    wmsRows: dedupeShipmentRows(snapshot.kpiRows.wmsRows, "generic").rows,
+    truckingRows: dedupeShipmentRows(snapshot.kpiRows.truckingRows, "outbound").rows,
+    transferRows: dedupeShipmentRows(snapshot.kpiRows.transferRows, "outbound").rows,
+  };
+
+  const totalRemoved = imports.removed + outbound.removed
+    + (snapshot.kpiRows.nationalRows.length - kpiRows.nationalRows.length)
+    + (snapshot.kpiRows.wmsRows.length - kpiRows.wmsRows.length)
+    + (snapshot.kpiRows.truckingRows.length - kpiRows.truckingRows.length)
+    + (snapshot.kpiRows.transferRows.length - kpiRows.transferRows.length);
+
+  return {
+    ...snapshot,
+    sources,
+    kpiRows,
+    dedupe: {
+      removed: totalRemoved,
+      importsRemoved: imports.removed,
+      importsMerged: imports.merged,
+      importsConflicts: imports.conflicts,
+      outboundRemoved: outbound.removed,
+      outboundMerged: outbound.merged,
+      outboundConflicts: outbound.conflicts,
+      elapsedMs: Date.now() - startedAt,
+    },
+  };
+}
+
 async function buildSnapshotPayload(env: Env): Promise<OperationalSnapshot> {
   const generatedAt = new Date().toISOString();
-  const snapshot = await fetchOperationalSources(env.APPS_SCRIPT_WRITE_URL);
+  const raw = await fetchOperationalSources(env.APPS_SCRIPT_WRITE_URL);
+  const snapshot = dedupeOperationalPayload(raw);
   const outboundMeta = snapshot.sources.outboundMeta as { rowCount?: number } | undefined;
   const hasOutboundRows = Number(outboundMeta?.rowCount ?? 0) > 0;
-  if (!snapshot.sources.imports || !hasOutboundRows) {
-    throw new Error("Core Logistics Master sources are unavailable");
-  }
+  if (!snapshot.sources.imports || !hasOutboundRows) throw new Error("Core Logistics Master sources are unavailable");
 
   let kpis = null;
   let kpiError = "";
@@ -48,6 +108,7 @@ async function buildSnapshotPayload(env: Env): Promise<OperationalSnapshot> {
     kpiError = error instanceof Error ? error.message : String(error);
   }
 
+  console.log(JSON.stringify({ event: "snapshot-deduplicated", ...snapshot.dedupe }));
   return {
     ok: true,
     generatedAt,
@@ -63,13 +124,8 @@ async function refreshDatabaseSnapshot(env: DatabaseEnv) {
   const startedAt = Date.now();
   const snapshot = await buildSnapshotPayload(env);
   const persisted = await persistSnapshot(env.DB, snapshot);
-  console.log(JSON.stringify({
-    event: "d1-snapshot-refreshed",
-    generatedAt: snapshot.generatedAt,
-    durationMs: Date.now() - startedAt,
-    ...persisted,
-  }));
-  return { ...snapshot, storage: "d1" as const, storedAt: new Date().toISOString() };
+  console.log(JSON.stringify({ event: "d1-snapshot-refreshed", generatedAt: snapshot.generatedAt, durationMs: Date.now() - startedAt, ...persisted }));
+  return { ...snapshot, storage: "d1" as const, storedAt: new Date().toISOString(), frontendSource: "d1" as const };
 }
 
 function snapshotResponse(payload: OperationalSnapshot & Record<string, unknown>) {
@@ -92,90 +148,54 @@ async function readFreshCache() {
   if (!cachedAt || Date.now() - cachedAt > SNAPSHOT_CACHE_SECONDS * 1000) return { cached, fresh: false };
   const response = new Response(cached.body, cached);
   response.headers.set("cache-control", "public, max-age=0, must-revalidate");
-  response.headers.set("x-stylekorean-cache", "HIT");
+  response.headers.set("x-stylekorean-cache", "HIT-D1");
   return { cached: response, fresh: true };
 }
 
 async function handleSnapshot(env: Env, context: ExecutionContext) {
+  if (!hasDatabase(env)) return json({ ok: false, error: "D1 frontend database is not configured", frontendSource: "d1" }, 503);
   const cacheState = await readFreshCache();
   if (cacheState?.fresh) return cacheState.cached;
 
-  if (hasDatabase(env)) {
-    try {
-      const stored = await readCurrentSnapshot(env.DB);
-      if (stored) {
-        const ageMs = Date.now() - Date.parse(stored.generatedAt);
-        const stale = ageMs > SNAPSHOT_REFRESH_SECONDS * 1000;
-        if (stale) {
-          context.waitUntil(refreshDatabaseSnapshot(env).catch((error) => {
-            console.error(JSON.stringify({ event: "d1-background-refresh-failed", error: String(error) }));
-          }));
-        }
-        const response = snapshotResponse({
-          ...stored,
-          stale: stale || undefined,
-          staleReason: stale ? "The durable snapshot is refreshing in the background" : undefined,
-          servedAt: new Date().toISOString(),
-        });
-        if (!stale) cacheSnapshot(context, response);
-        response.headers.set("x-stylekorean-cache", "D1");
-        if (stale) response.headers.set("warning", '110 - "Response is stale"');
-        return response;
-      }
-
-      const initialPayload = await buildSnapshotPayload(env);
-      try {
-        const persisted = await persistSnapshot(env.DB, initialPayload);
-        console.log(JSON.stringify({
-          event: "d1-snapshot-initialized",
-          generatedAt: initialPayload.generatedAt,
-          ...persisted,
-        }));
-        const initial = snapshotResponse({
-          ...initialPayload,
-          storage: "d1",
-          storedAt: new Date().toISOString(),
-        });
-        cacheSnapshot(context, initial);
-        initial.headers.set("x-stylekorean-cache", "D1-INITIALIZED");
-        return initial;
-      } catch (error) {
-        console.error(JSON.stringify({ event: "d1-initialization-failed", error: String(error) }));
-        const fallback = snapshotResponse({
-          ...initialPayload,
-          storage: "sheets",
-          databaseInitializing: false,
-          databaseError: "The durable snapshot could not be initialized",
-        });
-        fallback.headers.set("x-stylekorean-cache", "D1-INITIALIZATION-FAILED");
-        return fallback;
-      }
-    } catch (error) {
-      console.error(JSON.stringify({ event: "d1-snapshot-read-failed", error: String(error) }));
-    }
-  }
-
   try {
-    const live = snapshotResponse({ ...(await buildSnapshotPayload(env)), storage: "sheets" });
-    cacheSnapshot(context, live);
-    live.headers.set("x-stylekorean-cache", hasDatabase(env) ? "D1-FALLBACK" : "MISS");
-    return live;
-  } catch (error) {
-    const payload = cacheState?.cached
-      ? await cacheState.cached.clone().json().catch(() => null) as Record<string, unknown> | null
-      : null;
-    if (payload?.ok === true) {
-      const response = json({
-        ...payload,
-        stale: true,
-        staleReason: error instanceof Error ? error.message : "Live sources are temporarily unavailable",
-        servedAt: new Date().toISOString(),
-      });
-      response.headers.set("warning", '110 - "Response is stale"');
-      response.headers.set("x-stylekorean-cache", "STALE");
+    const stored = await readCurrentSnapshot(env.DB);
+    if (stored) {
+      const stale = Date.now() - Date.parse(stored.generatedAt) > SNAPSHOT_REFRESH_SECONDS * 1000;
+      if (stale) {
+        try {
+          const refreshed = await refreshDatabaseSnapshot(env);
+          const response = snapshotResponse({ ...refreshed, servedAt: new Date().toISOString() });
+          cacheSnapshot(context, response);
+          response.headers.set("x-stylekorean-cache", "D1-REFRESHED");
+          return response;
+        } catch (error) {
+          console.error(JSON.stringify({ event: "d1-foreground-refresh-failed", error: String(error) }));
+          const response = snapshotResponse({
+            ...stored,
+            frontendSource: "d1",
+            stale: true,
+            staleReason: error instanceof Error ? error.message : "D1 refresh failed",
+            servedAt: new Date().toISOString(),
+          });
+          response.headers.set("x-stylekorean-cache", "D1-STALE");
+          response.headers.set("warning", '110 - "Response is stale"');
+          return response;
+        }
+      }
+      const response = snapshotResponse({ ...stored, frontendSource: "d1", servedAt: new Date().toISOString() });
+      cacheSnapshot(context, response);
+      response.headers.set("x-stylekorean-cache", "D1");
       return response;
     }
-    return json({ ok: false, generatedAt: new Date().toISOString(), error: "Core Logistics Master sources are unavailable" }, 503);
+
+    const initial = await refreshDatabaseSnapshot(env);
+    const response = snapshotResponse({ ...initial, servedAt: new Date().toISOString() });
+    cacheSnapshot(context, response);
+    response.headers.set("x-stylekorean-cache", "D1-INITIALIZED");
+    return response;
+  } catch (error) {
+    console.error(JSON.stringify({ event: "d1-snapshot-unavailable", error: String(error) }));
+    return json({ ok: false, error: "D1 frontend database is unavailable", frontendSource: "d1" }, 503);
   }
 }
 
@@ -193,36 +213,29 @@ async function handleHealth(env: Env) {
     }
   }
   return json({
-    ok: true,
+    ok: databaseState === "ready",
     service: "stylekorean-logistics-control-tower",
     version: WORKER_VERSION,
-    dataStore: databaseState === "ready"
-      ? "Cloudflare D1 + Google Sheets fallback"
-      : databaseState === "unbound"
-        ? "Google Sheets"
-        : `Google Sheets fallback (D1 ${databaseState})`,
+    dataStore: "Cloudflare D1",
+    frontendSource: "d1",
+    googleSheetsRole: "synchronized operational source",
     databaseConfigured: hasDatabase(env),
-    accessPolicy: "public",
     databaseReady: databaseState === "ready",
     databaseState,
     databaseAgeSeconds,
-    statusWriteConfigured: Boolean(env.APPS_SCRIPT_WRITE_URL),
-    statusWriteMode: "Apps Script source-confirmed proxy",
-    statusWriteAuthentication: "none",
-    statusWriteRateLimit: "30 requests per 60 seconds per client IP and Cloudflare location",
+    deduplication: "enabled-before-d1-publish",
+    statusWriteMode: "strict Google Sheets + D1 dual write",
     checkedAt: new Date().toISOString(),
-  });
+  }, databaseState === "ready" ? 200 : 503);
 }
 
 async function handleReconciliation(env: Env) {
-  if (!hasDatabase(env)) {
-    return json({ ok: true, databaseConfigured: false, ready: false, activationRequired: true });
-  }
+  if (!hasDatabase(env)) return json({ ok: false, databaseConfigured: false, ready: false, frontendSource: "d1" }, 503);
   try {
-    return json({ ok: true, databaseConfigured: true, ...(await readDatabaseHealth(env.DB)) });
+    return json({ ok: true, databaseConfigured: true, frontendSource: "d1", ...(await readDatabaseHealth(env.DB)) });
   } catch (error) {
     console.error(JSON.stringify({ event: "d1-health-read-failed", error: String(error) }));
-    return json({ ok: false, databaseConfigured: true, ready: false, error: "Database health is unavailable" }, 503);
+    return json({ ok: false, databaseConfigured: true, ready: false, frontendSource: "d1", error: "Database health is unavailable" }, 503);
   }
 }
 
@@ -242,13 +255,9 @@ export default {
     const url = new URL(request.url);
     let response: Response;
     if (url.pathname === "/api/logistics/snapshot") {
-      response = request.method === "GET"
-        ? await handleSnapshot(env, context)
-        : json({ ok: false, error: "Method not allowed" }, 405);
+      response = request.method === "GET" ? await handleSnapshot(env, context) : json({ ok: false, error: "Method not allowed" }, 405);
     } else if (url.pathname === "/api/logistics/reconciliation") {
-      response = request.method === "GET"
-        ? await handleReconciliation(env)
-        : json({ ok: false, error: "Method not allowed" }, 405);
+      response = request.method === "GET" ? await handleReconciliation(env) : json({ ok: false, error: "Method not allowed" }, 405);
     } else if (url.pathname === "/api/logistics/status") {
       response = await handleStatusCommand(request, env, context);
     } else if (url.pathname === "/api/logistics/pending-review") {
@@ -256,9 +265,7 @@ export default {
     } else if (url.pathname === "/api/logistics/tracking") {
       response = await handleTrackingCommand(request, env);
     } else if (url.pathname === "/api/logistics/health") {
-      response = request.method === "GET"
-        ? await handleHealth(env)
-        : json({ ok: false, error: "Method not allowed" }, 405);
+      response = request.method === "GET" ? await handleHealth(env) : json({ ok: false, error: "Method not allowed" }, 405);
     } else if (url.pathname.startsWith("/api/")) {
       response = json({ ok: false, error: "API route not found" }, 404);
     } else {
@@ -269,7 +276,7 @@ export default {
 
   async scheduled(_controller: ScheduledController, env: Env, context: ExecutionContext) {
     if (!hasDatabase(env)) {
-      console.log(JSON.stringify({ event: "d1-scheduled-refresh-skipped", reason: "binding-not-configured" }));
+      console.error(JSON.stringify({ event: "d1-scheduled-refresh-skipped", reason: "binding-not-configured" }));
       return;
     }
     context.waitUntil(refreshDatabaseSnapshot(env).catch((error) => {
