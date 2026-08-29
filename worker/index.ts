@@ -156,8 +156,22 @@ async function readFreshCache() {
   return { cached: response, fresh: true };
 }
 
-async function handleSnapshot(env: Env, context: ExecutionContext) {
+async function handleSnapshot(env: Env, context: ExecutionContext, forceRefresh = false) {
   if (!hasDatabase(env)) return json({ ok: false, error: "D1 frontend database is not configured", frontendSource: "d1" }, 503);
+
+  if (forceRefresh) {
+    try {
+      const refreshed = await refreshDatabaseSnapshot(env);
+      const response = snapshotResponse({ ...refreshed, forcedRefresh: true, servedAt: new Date().toISOString() });
+      cacheSnapshot(context, response);
+      response.headers.set("x-stylekorean-cache", "D1-FORCED-REFRESH");
+      return response;
+    } catch (error) {
+      console.error(JSON.stringify({ event: "d1-forced-refresh-failed", error: String(error) }));
+      return json({ ok: false, error: "Canonical D1 refresh failed", frontendSource: "d1" }, 503);
+    }
+  }
+
   const cacheState = await readFreshCache();
   if (cacheState?.fresh) return cacheState.cached;
 
@@ -223,12 +237,15 @@ async function handleHealth(env: Env) {
     dataStore: "Cloudflare D1",
     frontendSource: "d1",
     googleSheetsRole: "synchronized operational source",
+    accessPolicy: "public",
     databaseConfigured: hasDatabase(env),
     databaseReady: databaseState === "ready",
     databaseState,
     databaseAgeSeconds,
     deduplication: "enabled-before-d1-publish",
     statusWriteMode: "strict Google Sheets + D1 dual write",
+    statusWriteAuthentication: "none",
+    statusWriteRateLimit: "30 requests per 60 seconds per client IP and Cloudflare location",
     checkedAt: new Date().toISOString(),
   }, databaseState === "ready" ? 200 : 503);
 }
@@ -259,7 +276,20 @@ export default {
     const url = new URL(request.url);
     let response: Response;
     if (url.pathname === "/api/logistics/snapshot") {
-      response = request.method === "GET" ? await handleSnapshot(env, context) : json({ ok: false, error: "Method not allowed" }, 405);
+      if (request.method !== "GET") {
+        response = json({ ok: false, error: "Method not allowed" }, 405);
+      } else {
+        const forceRefresh = url.searchParams.get("refresh") === "1" || url.searchParams.has("scheduled_refresh");
+        if (forceRefresh) {
+          const clientIp = request.headers.get("cf-connecting-ip")?.trim() || "unknown";
+          const rateLimit = await env.STATUS_WRITE_RATE_LIMITER.limit({ key: `snapshot-refresh:${clientIp}` });
+          response = rateLimit.success
+            ? await handleSnapshot(env, context, true)
+            : json({ ok: false, error: "Snapshot refresh rate limit exceeded" }, 429);
+        } else {
+          response = await handleSnapshot(env, context, false);
+        }
+      }
     } else if (url.pathname === "/api/logistics/reconciliation") {
       response = request.method === "GET" ? await handleReconciliation(env) : json({ ok: false, error: "Method not allowed" }, 405);
     } else if (url.pathname === "/api/logistics/status") {
