@@ -9,6 +9,7 @@
 var GMAIL_SAFETY_V4_VERSION = "2026-08-29-v4-canonical-dedupe";
 var GMAIL_SAFETY_V4_NEEDS_CORRECTION = "NEEDS CORRECTION";
 var GMAIL_SAFETY_V4_LAST_UPSERT = null;
+var GMAIL_SAFETY_V4_D1_REFRESH_URL = "https://stylekorean.dpdns.org/api/logistics/snapshot?refresh=1&source=apps-script-gmail";
 
 function gmailSafetyV4ValidFreightId_(value) {
   var id = String(value || "").trim().toUpperCase().replace(/\s+/g, "");
@@ -51,10 +52,7 @@ function gmailSafetyV4ApplyRecord_(record, meta) {
 }
 
 function gmailSafetyV4ConvertBlob_(blob, targetMime) {
-  var file = Drive.Files.create({
-    name: "TMP-email-import-" + Date.now(),
-    mimeType: targetMime
-  }, blob, { fields: "id" });
+  var file = Drive.Files.create({ name: "TMP-email-import-" + Date.now(), mimeType: targetMime }, blob, { fields: "id" });
   if (!file || !file.id) throw new Error("Drive conversion returned no file ID.");
   return file.id;
 }
@@ -71,6 +69,44 @@ function gmailSafetyV4PdfText_(blob) {
   }
 }
 
+function gmailSafetyV4RefreshD1_(reason) {
+  SpreadsheetApp.flush();
+  try {
+    var response = UrlFetchApp.fetch(GMAIL_SAFETY_V4_D1_REFRESH_URL + "&reason=" + encodeURIComponent(String(reason || "gmail")), {
+      method: "get",
+      muteHttpExceptions: true,
+      followRedirects: true,
+      headers: { "User-Agent": "StyleKorean-AppsScript-DualWrite/2026-08-29" }
+    });
+    var code = response.getResponseCode();
+    var body = response.getContentText();
+    var parsed = {};
+    try { parsed = JSON.parse(body || "{}"); } catch (ignored) {}
+    if (code < 200 || code >= 300 || parsed.ok !== true || parsed.storage !== "d1" || parsed.frontendSource !== "d1") {
+      throw new Error("D1 refresh rejected: HTTP " + code + " " + String(body || "").slice(0, 300));
+    }
+    try { writeLog_("D1 DUAL WRITE", String(reason || "gmail"), JSON.stringify({ ok: true, generatedAt: parsed.generatedAt })); } catch (ignored2) {}
+    return { ok: true, generatedAt: parsed.generatedAt };
+  } catch (error) {
+    try { writeLog_("D1 DUAL WRITE ERROR", String(reason || "gmail"), String(error && error.stack || error)); } catch (ignored3) {}
+    return { ok: false, error: String(error && error.message || error) };
+  }
+}
+
+function gmailSafetyV4InstallMutationSync_(handlerName, changed) {
+  var base = this[handlerName];
+  if (typeof base !== "function" || base._gmailSafetyV4D1) return;
+  var wrapped = function () {
+    var result = base.apply(this, arguments);
+    var shouldRefresh = false;
+    try { shouldRefresh = changed(result || {}); } catch (e) {}
+    if (shouldRefresh) gmailSafetyV4RefreshD1_(handlerName);
+    return result;
+  };
+  wrapped._gmailSafetyV4D1 = true;
+  this[handlerName] = wrapped;
+}
+
 function gmailSafetyV4Install_() {
   if (typeof LOGISTICS_STATUS_ALIASES_ !== "undefined") {
     LOGISTICS_STATUS_ALIASES_["FDA RELEASED"] = "FDA Released / Scheduled";
@@ -85,9 +121,7 @@ function gmailSafetyV4Install_() {
 
   if (typeof mergeRecordContextV2_ === "function" && !mergeRecordContextV2_._gmailSafetyV4) {
     var baseMerge = mergeRecordContextV2_;
-    var wrappedMerge = function (record, context, meta) {
-      return gmailSafetyV4ApplyRecord_(baseMerge(record, context, meta), meta || {});
-    };
+    var wrappedMerge = function (record, context, meta) { return gmailSafetyV4ApplyRecord_(baseMerge(record, context, meta), meta || {}); };
     wrappedMerge._gmailSafetyV4 = true;
     mergeRecordContextV2_ = wrappedMerge;
   }
@@ -121,8 +155,7 @@ function gmailSafetyV4Install_() {
       baseCommit(sheet, rowIndex1based, data, col);
       var result = GMAIL_SAFETY_V4_LAST_UPSERT;
       if (!result || result.matched !== true) {
-        var statusCell = sheet.getRange(rowIndex1based, col["Status"] + 1);
-        statusCell.setValue(GMAIL_SAFETY_V4_NEEDS_CORRECTION);
+        sheet.getRange(rowIndex1based, col["Status"] + 1).setValue(GMAIL_SAFETY_V4_NEEDS_CORRECTION);
         var issueCell = sheet.getRange(rowIndex1based, col["Issues"] + 1);
         var priorIssue = String(issueCell.getDisplayValue() || "").trim();
         var issue = "Approved record could not be uniquely matched or safely inserted. Correct identifiers/customer/date, then approve again.";
@@ -158,6 +191,10 @@ function gmailSafetyV4Install_() {
     if (typeof convertBlobWithDriveRestV2_ === "function") convertBlobWithDriveRestV2_ = gmailSafetyV4ConvertBlob_;
     if (typeof pdfTextV2_ === "function") pdfTextV2_ = gmailSafetyV4PdfText_;
   }
+
+  gmailSafetyV4InstallMutationSync_("processLogisticsEmailsV2", function (r) { return Number(r.inserted || 0) + Number(r.updated || 0) > 0; });
+  gmailSafetyV4InstallMutationSync_("processXpoTrackingEmailsV2", function (r) { return Number(r.updated || 0) > 0; });
+  gmailSafetyV4InstallMutationSync_("processApprovedPending", function (r) { return Number(r.committed || 0) > 0; });
 
   return GMAIL_SAFETY_V4_VERSION;
 }
