@@ -69,25 +69,20 @@ function rowFingerprint(row: string[]) {
   return row.map(normalize).join("\u001f");
 }
 
-function mergeRows(older: string[], newer: string[]) {
-  const width = Math.max(older.length, newer.length);
-  const merged = new Array<string>(width).fill("");
-  let conflicts = 0;
+function nonEmptyCount(row: string[]) {
+  return row.reduce((count, cell) => count + (String(cell ?? "").trim() ? 1 : 0), 0);
+}
+
+function isSubset(sparse: string[], rich: string[]) {
+  const width = Math.max(sparse.length, rich.length);
+  let sawValue = false;
   for (let i = 0; i < width; i += 1) {
-    const a = String(older[i] ?? "").trim();
-    const b = String(newer[i] ?? "").trim();
-    if (!a) merged[i] = b;
-    else if (!b || normalize(a) === normalize(b)) merged[i] = a;
-    else {
-      // Same strong shipment identity but newer source data disagrees. Keep one
-      // frontend record and prefer the later sheet row, which is how the
-      // operational sheets record corrections. Count the conflict for health
-      // reporting instead of rendering two contradictory copies.
-      merged[i] = b;
-      conflicts += 1;
-    }
+    const a = normalize(sparse[i]);
+    if (!a) continue;
+    sawValue = true;
+    if (a !== normalize(rich[i])) return false;
   }
-  return { row: merged, conflicts };
+  return sawValue;
 }
 
 export function dedupeShipmentRows(rows: string[][] | null | undefined, kind: "inbound" | "outbound" | "generic"): DedupeResult {
@@ -101,7 +96,7 @@ export function dedupeShipmentRows(rows: string[][] | null | undefined, kind: "i
   const header = rows[headerRow] ?? [];
   const output = rows.slice(0, headerRow + 1).map((row) => row.slice());
   const byKey = new Map<string, number>();
-  const exact = new Map<string, number>();
+  const exact = new Set<string>();
   let removed = 0;
   let merged = 0;
   let conflicts = 0;
@@ -112,29 +107,43 @@ export function dedupeShipmentRows(rows: string[][] | null | undefined, kind: "i
       output.push(source);
       continue;
     }
+
     const fp = rowFingerprint(source);
     if (exact.has(fp)) {
       removed += 1;
       continue;
     }
-    exact.set(fp, sourceIndex);
+    exact.add(fp);
 
     const key = kind === "inbound" ? importKey(source, header) : kind === "outbound" ? outboundKey(source, header) : "";
     if (!key) {
       output.push(source);
       continue;
     }
+
     const existingIndex = byKey.get(key);
     if (existingIndex === undefined) {
       byKey.set(key, output.length);
       output.push(source);
       continue;
     }
-    const result = mergeRows(output[existingIndex], source);
-    output[existingIndex] = result.row;
-    removed += 1;
-    merged += 1;
-    conflicts += result.conflicts;
+
+    const existing = output[existingIndex];
+    if (isSubset(source, existing)) {
+      removed += 1;
+      merged += 1;
+      continue;
+    }
+    if (isSubset(existing, source)) {
+      output[existingIndex] = source;
+      removed += 1;
+      merged += 1;
+      continue;
+    }
+
+    conflicts += 1;
+    if (nonEmptyCount(source) > nonEmptyCount(existing)) byKey.set(key, output.length);
+    output.push(source);
   }
 
   return { rows: output, removed, merged, conflicts };
