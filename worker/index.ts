@@ -35,22 +35,24 @@ function json(value: unknown, status = 200, cacheControl = "no-store") {
 function dedupeObjects<T>(items: T[], keyFor: (item: T) => string) {
   const seen = new Set<string>();
   const output: T[] = [];
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const key = keyFor(items[index]);
+  for (const item of items) {
+    const key = keyFor(item);
     if (!key || seen.has(key)) continue;
     seen.add(key);
-    output.push(items[index]);
+    output.push(item);
   }
-  return output.reverse();
+  return output;
 }
 
 function dedupeOperationalPayload(snapshot: Awaited<ReturnType<typeof fetchOperationalSources>>) {
   const startedAt = Date.now();
   const sources = { ...snapshot.sources };
-  const imports = dedupeShipmentRows(sources.imports as string[][] | null, "inbound");
-  const outbound = dedupeShipmentRows(sources.outbound as string[][] | null, "outbound");
-  sources.imports = imports.rows;
-  sources.outbound = outbound.rows;
+  const rawImports = Array.isArray(sources.imports) ? sources.imports as string[][] : null;
+  const rawOutbound = Array.isArray(sources.outbound) ? sources.outbound as string[][] : null;
+  const imports = dedupeShipmentRows(rawImports, "inbound");
+  const outbound = dedupeShipmentRows(rawOutbound, "outbound");
+  sources.imports = rawImports ? imports.rows : null;
+  sources.outbound = rawOutbound ? outbound.rows : null;
 
   if (Array.isArray(sources.gmailIngestion)) {
     sources.gmailIngestion = dedupeObjects(sources.gmailIngestion as Array<Record<string, unknown>>, (event) => {
@@ -98,7 +100,9 @@ async function buildSnapshotPayload(env: Env): Promise<OperationalSnapshot> {
   const snapshot = dedupeOperationalPayload(raw);
   const outboundMeta = snapshot.sources.outboundMeta as { rowCount?: number } | undefined;
   const hasOutboundRows = Number(outboundMeta?.rowCount ?? 0) > 0;
-  if (!snapshot.sources.imports || !hasOutboundRows) throw new Error("Core Logistics Master sources are unavailable");
+  if (!Array.isArray(snapshot.sources.imports) || snapshot.sources.imports.length === 0 || !Array.isArray(snapshot.sources.outbound) || !hasOutboundRows) {
+    throw new Error("Core Logistics Master sources are unavailable");
+  }
 
   let kpis = null;
   let kpiError = "";
