@@ -49,7 +49,7 @@ describe("production hardening", () => {
     expect(worker).toContain("fetchOperationalSources(env.APPS_SCRIPT_WRITE_URL)");
   });
 
-  it("ships a reusable production smoke verifier", () => {
+  it("ships a reusable D1-only production smoke verifier", () => {
     const script = read("scripts/verify-production.mjs");
     const pkg = JSON.parse(read("package.json"));
     expect(pkg.scripts["verify:production"]).toBe("node scripts/verify-production.mjs");
@@ -59,7 +59,8 @@ describe("production hardening", () => {
     expect(script).toContain("/light-full");
     expect(script).toContain("x-frame-options");
     expect(script).toContain("REQUIRE_D1");
-    expect(script).toContain('snapshot.storage !== "sheets"');
+    expect(script).toContain('snapshot.storage !== "d1"');
+    expect(script).toContain('snapshot.frontendSource !== "d1"');
   });
 
   it("keeps Cloudflare as the only site deployment path", () => {
