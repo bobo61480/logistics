@@ -41,7 +41,16 @@ async function fetchDirectCmsInventory(env: DirectInventoryEnv) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), DIRECT_TIMEOUT_MS);
   try {
-    const response = await fetch(url, { headers: { Accept: "application/json", "x-api-key": env.CMS_IMS_API_KEY }, signal: controller.signal });
+    const response = await fetch(url, {
+      headers: {
+        Accept: "application/json, text/plain, */*",
+        "x-api-key": env.CMS_IMS_API_KEY,
+        Origin: "https://cms.siliconii.com",
+        Referer: "https://cms.siliconii.com/ImsReport/StockExpDate",
+        "User-Agent": "StyleKorean-Control-Tower/2026-08-30",
+      },
+      signal: controller.signal,
+    });
     if (!response.ok) throw new Error(`Siliconii IMS HTTP ${response.status}`);
     const payload = await response.json() as { ResultCode?: string; ResultMessage?: string; Data?: Array<Record<string, unknown>> };
     if (payload.ResultCode !== "0000" || !Array.isArray(payload.Data)) throw new Error(payload.ResultMessage || "Siliconii IMS returned invalid inventory data");
