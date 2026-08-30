@@ -61,9 +61,11 @@ describe("control tower Worker routing", () => {
   it("keeps the last good D1 snapshot visible during a short source outage", () => {
     const worker = read("worker/index.ts");
     expect(worker).toContain("SNAPSHOT_REFRESH_SECONDS");
-    expect(worker).toContain('x-stylekorean-cache", "D1-STALE"');
+    expect(worker).toContain('x-stylekorean-cache", "D1-STALE-WHILE-REVALIDATE"');
     expect(worker).toContain("Response is stale");
     expect(worker).toContain("staleReason");
+    expect(worker).toContain('event: "d1-background-refresh-failed"');
+    expect(worker).not.toContain('event: "d1-foreground-refresh-failed"');
   });
 
   it("adds baseline security headers to APIs and static assets", () => {
