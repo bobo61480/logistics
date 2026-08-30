@@ -21,6 +21,7 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           page_path = Path('app/page.tsx')
           text = page_path.read_text()
@@ -32,134 +33,54 @@ jobs:
                   raise SystemExit(f'Expected exactly one match, found {count}: {old[:100]!r}')
               text = text.replace(old, new, 1)
 
+          def sub_once(pattern: str, replacement: str, label: str):
+              global text
+              text, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
+              if count != 1:
+                  raise SystemExit(f'Expected exactly one regex match for {label}, found {count}')
+
           replace_once('import ShipmentEventTrackerCard from "./ShipmentEventTrackerCard";\n', '')
           replace_once('\n      <ShipmentEventTrackerCard />\n', '\n')
 
-          replace_once(
-          '''// The live-map tracking backend only integrates UPS/FedEx/USPS (carrier-tracking.ts) —
-          // DHL and Amazon don't have a server-side lookup, so they're intentionally excluded here.
-          function trackableCarrier(value?: string): "ups" | "fedex" | "usps" | null {
-            const normalized = clean(value).toLowerCase();
-            if (normalized.includes("ups")) return "ups";
-            if (normalized.includes("fedex")) return "fedex";
-            if (normalized.includes("usps")) return "usps";
-            return null;
-          }
-          ''',
-          '''// Amazon Shipping tracking requires the carrierId returned by getRates/purchase,
-          // which the current sheet model does not persist. DHL Unified, UPS, FedEx and USPS
-          // can be looked up from the tracking number carried by the operational row.
-          function trackableCarrier(value?: string): "ups" | "fedex" | "usps" | "dhl" | null {
-            const normalized = clean(value).toLowerCase();
-            if (normalized.includes("ups")) return "ups";
-            if (normalized.includes("fedex")) return "fedex";
-            if (normalized.includes("usps")) return "usps";
-            if (normalized.includes("dhl")) return "dhl";
-            return null;
-          }
-          ''')
+          sub_once(
+              r'// The live-map tracking backend only integrates UPS/FedEx/USPS.*?function trackableCarrier\(value\?: string\): "ups" \| "fedex" \| "usps" \| null \{.*?\n\}',
+              '''// Amazon Shipping tracking requires the carrierId returned by getRates/purchase,\n// which the current sheet model does not persist. DHL Unified, UPS, FedEx and USPS\n// can be looked up from the tracking number carried by the operational row.\nfunction trackableCarrier(value?: string): "ups" | "fedex" | "usps" | "dhl" | null {\n  const normalized = clean(value).toLowerCase();\n  if (normalized.includes("ups")) return "ups";\n  if (normalized.includes("fedex")) return "fedex";\n  if (normalized.includes("usps")) return "usps";\n  if (normalized.includes("dhl")) return "dhl";\n  return null;\n}''',
+              'trackableCarrier',
+          )
 
-          replace_once(
-          '''const LEGACY_WRITE_ENDPOINT =
-            process.env.NEXT_PUBLIC_APPS_SCRIPT_WRITE_URL ?? "";
-          ''',
-          '')
+          sub_once(
+              r'const LEGACY_WRITE_ENDPOINT =\n\s*process\.env\.NEXT_PUBLIC_APPS_SCRIPT_WRITE_URL \?\? "";\n',
+              '',
+              'legacy write endpoint constant',
+          )
 
-          replace_once(
-          '''  try {
-            const response = await fetch(STATUS_ENDPOINT, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload),
-            });
-            return await parseConfirmation(response);
-          } catch (error) {
-            const statusCode = (error as Error & { status?: number })?.status;
-            const mayUseLegacy =
-              Boolean(LEGACY_WRITE_ENDPOINT) &&
-              (statusCode === 404 || statusCode === 405 || statusCode === undefined);
+          sub_once(
+              r'  try \{\n\s*const response = await fetch\(STATUS_ENDPOINT, \{.*?\n\s*return await parseConfirmation\(response\);\n\s*\} catch \(error\) \{.*?fetch\(LEGACY_WRITE_ENDPOINT, \{.*?\n\s*return await parseConfirmation\(response\);\n\s*\}',
+              '''  const response = await fetch(STATUS_ENDPOINT, {\n    method: "POST",\n    headers: { "Content-Type": "application/json" },\n    body: JSON.stringify(payload),\n  });\n  return await parseConfirmation(response);''',
+              'postStatus legacy fallback',
+          )
 
-            // Static-host migration fallback only. Do not fall back on validation or
-            // concurrency errors, because doing so could overwrite a newer status.
-            if (!mayUseLegacy) throw error;
-
-            const response = await fetch(LEGACY_WRITE_ENDPOINT, {
-              method: "POST",
-              headers: { "Content-Type": "text/plain;charset=utf-8" },
-              body: JSON.stringify(payload),
-            });
-            return await parseConfirmation(response);
-          }
-          ''',
-          '''  const response = await fetch(STATUS_ENDPOINT, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          });
-          return await parseConfirmation(response);
-          ''')
-
-          replace_once(
-          '''  } catch (workerError) {
-            // Keep a read-only direct-Sheets fallback so the schedule remains visible
-            // during a Worker routing incident. Status writes still require the Worker.
-            console.warn("Worker snapshot unavailable; falling back to Google Sheets.", workerError);
-            return {
-              ...(await fetchSheetSnapshot()),
-              // The direct-Sheets fallback carries no ingestion feed.
-              gmailIngestion: null,
-              connection: {
-                mode: "sheets" as const,
-                storage: "sheets" as const,
-                version: undefined,
-                detail: workerError instanceof Error ? workerError.message : "Worker snapshot unavailable",
-                degradedSources: 0,
-              },
-            };
-          }
-          ''',
-          '''  } catch (workerError) {
-            // D1 is the canonical frontend source. If the Worker/D1 path is unavailable,
-            // surface the failure instead of silently switching the browser to Google Sheets.
-            throw workerError;
-          }
-          ''')
+          sub_once(
+              r'  \} catch \(workerError\) \{\n\s*// Keep a read-only direct-Sheets fallback.*?\n\s*return \{\n\s*\.\.\.\(await fetchSheetSnapshot\(\)\),.*?\n\s*\};\n\s*\}',
+              '''  } catch (workerError) {\n    // D1 is the canonical frontend source. If the Worker/D1 path is unavailable,\n    // surface the failure instead of silently switching the browser to Google Sheets.\n    throw workerError;\n  }''',
+              'fetchOperationalSnapshot Sheets fallback',
+          )
 
           replace_once('  storage?: "d1" | "sheets";\n', '  storage?: "d1";\n')
           replace_once('      liveKpis: snapshot.kpis ?? (await fetchLiveKpis()),\n', '      liveKpis: snapshot.kpis ?? EMPTY_KPIS,\n')
 
-          replace_once(
-          '''                : connection?.mode === "sheets"
-                  ? "Direct Sheets fallback · Worker reconnecting"
-                  : connection?.mode === "stale"
-                    ? "Last good snapshot · live sources reconnecting"
-                    : connection?.degradedSources
-          ''',
-          '''                : connection?.mode === "stale"
-                  ? "Last good D1 snapshot · live sources reconnecting"
-                  : connection?.degradedSources
-          ''')
+          sub_once(
+              r': connection\?\.mode === "sheets"\n\s*\? "Direct Sheets fallback · Worker reconnecting"\n\s*: connection\?\.mode === "stale"\n\s*\? "Last good snapshot · live sources reconnecting"',
+              ': connection?.mode === "stale"\n                    ? "Last good D1 snapshot · live sources reconnecting"',
+              'sync strip Sheets branch',
+          )
           replace_once('                        ? "D1 snapshot · Sheets fallback ready"\n', '                        ? "D1 snapshot · canonical frontend"\n')
 
-          replace_once(
-          '''      {!error && connection && connection.mode !== "worker" && (
-            <div className="alert warning" role="status">
-              <strong>{connection.mode === "stale" ? "Continuity mode." : "Fallback mode."}</strong>{" "}
-              {connection.mode === "stale"
-                ? "The last verified snapshot is still available while live workbook sources recover."
-                : "The dashboard is reading Google Sheets directly; status writes still require the Worker."}
-              {connection.detail ? ` ${connection.detail}` : ""}
-            </div>
-          )}
-          ''',
-          '''      {!error && connection?.mode === "stale" && (
-            <div className="alert warning" role="status">
-              <strong>Continuity mode.</strong>{" "}
-              The last verified D1 snapshot is still available while live workbook sources recover.
-              {connection.detail ? ` ${connection.detail}` : ""}
-            </div>
-          )}
-          ''')
+          sub_once(
+              r'      \{!error && connection && connection\.mode !== "worker" && \(\n\s*<div className="alert warning" role="status">.*?\n\s*</div>\n\s*\)\}',
+              '''      {!error && connection?.mode === "stale" && (\n        <div className="alert warning" role="status">\n          <strong>Continuity mode.</strong>{" "}\n          The last verified D1 snapshot is still available while live workbook sources recover.\n          {connection.detail ? ` ${connection.detail}` : ""}\n        </div>\n      )}''',
+              'fallback alert',
+          )
 
           page_path.write_text(text)
 
@@ -169,19 +90,14 @@ jobs:
 
           test_path = Path('tests/production-source-consolidation.test.ts')
           test = test_path.read_text()
-          test = test.replace(
-              'import { readFileSync } from "node:fs";',
-              'import { existsSync, readFileSync } from "node:fs";',
-              1,
-          )
-          old = '''    const shipmentEvents = read("app/ShipmentEventTrackerCard.tsx");
-              expect(shipmentEvents).not.toContain("TRACKED_EVENTS");
-              expect(shipmentEvents).not.toContain("REVIEWED_THROUGH");
-              expect(shipmentEvents).not.toContain("08/22/26");
-              expect(shipmentEvents).toContain("return null");'''
-          new = '''    const page = read("app/page.tsx");
-              expect(page).not.toContain("ShipmentEventTrackerCard");
-              expect(existsSync("app/ShipmentEventTrackerCard.tsx")).toBe(false);'''
+          if 'existsSync' not in test.splitlines()[0]:
+              test = test.replace(
+                  'import { readFileSync } from "node:fs";',
+                  'import { existsSync, readFileSync } from "node:fs";',
+                  1,
+              )
+          old = '''    const shipmentEvents = read("app/ShipmentEventTrackerCard.tsx");\n    expect(shipmentEvents).not.toContain("TRACKED_EVENTS");\n    expect(shipmentEvents).not.toContain("REVIEWED_THROUGH");\n    expect(shipmentEvents).not.toContain("08/22/26");\n    expect(shipmentEvents).toContain("return null");'''
+          new = '''    const page = read("app/page.tsx");\n    expect(page).not.toContain("ShipmentEventTrackerCard");\n    expect(existsSync("app/ShipmentEventTrackerCard.tsx")).toBe(false);'''
           if old not in test:
               raise SystemExit('Expected consolidation test block was not found')
           test_path.write_text(test.replace(old, new, 1))
