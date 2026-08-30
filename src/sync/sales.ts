@@ -2,14 +2,8 @@
  * src/sync/sales.ts
  * Syncs WMS Wholesale and NATIONAL ORDER PROGRESS into sales_entries.
  *
- * Column indices confirmed from computeLiveKpis() in lib/sales-kpis.ts:
- *
- * WMS Wholesale (WMS workbook GID 0) — two header rows, data from row 3:
- *   0=date  6=amount  (no K/M/B suffixes)
- *
- * NATIONAL ORDER PROGRESS (NATIONAL workbook GID 99300389) — one header row:
- *   0=status  4=amount (K/M/B allowed)  6=order_date
- *   Rows where status col === "cancelled" are excluded.
+ * NATIONAL ORDER PROGRESS has changed column layout over time, so the
+ * importer resolves status/department/amount/order-date by header name.
  */
 
 import {
@@ -28,13 +22,22 @@ interface SalesRow {
   synced_at: number;
 }
 
+function normalizeHeader(value: unknown) {
+  return clean(value).toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim();
+}
+
+function headerIndex(header: string[], aliases: string[], fallback: number) {
+  const wanted = new Set(aliases.map(normalizeHeader));
+  const index = header.findIndex((value) => wanted.has(normalizeHeader(value)));
+  return index >= 0 ? index : fallback;
+}
+
 export async function syncSales(db: D1Database): Promise<{ wms: number; nationals: number }> {
   const today = pacificToday();
   const now = Date.now();
-  const yearStart = today.year * 10_000 + 101; // Jan 1 of current year
+  const yearStart = today.year * 10_000 + 101;
   const records: SalesRow[] = [];
 
-  // ── WMS Wholesale ─────────────────────────────────────────────────────────
   let wmsCount = 0;
   try {
     const rows = await fetchCsvExport(WMS_ID, 0);
@@ -61,16 +64,24 @@ export async function syncSales(db: D1Database): Promise<{ wms: number; national
     throw err;
   }
 
-  // ── Nationals ─────────────────────────────────────────────────────────────
   let nationalsCount = 0;
   try {
     const rows = await fetchCsvExport(NATIONAL_ID, 99300389);
+    const header = rows[0] ?? [];
+    const statusCol = headerIndex(header, ["Status", "Overall PO Status"], 0);
+    const departmentCol = headerIndex(header, ["Dept", "Department"], 2);
+    const amountCol = headerIndex(header, ["Amount", "Total Order Amount"], 4);
+    const orderDateCol = headerIndex(header, ["Order Date"], 6);
+    const hasDepartmentHeader = header.some((value) => ["DEPT", "DEPARTMENT"].includes(normalizeHeader(value)));
+
     for (let i = 1; i < rows.length; i++) {
       const r = rows[i];
-      if (clean(r[0]).toLowerCase() === "cancelled") continue;
-      const code = dateCode(clean(r[6]));
+      const status = clean(r[statusCol]);
+      if (status.toLowerCase() === "cancelled") continue;
+      if (hasDepartmentHeader && clean(r[departmentCol]).toLowerCase() !== "national") continue;
+      const code = dateCode(clean(r[orderDateCol]));
       if (!code || code < yearStart || code > today.code) continue;
-      const amount = parseAmount(clean(r[4]), true);
+      const amount = parseAmount(clean(r[amountCol]), true);
       if (amount <= 0) continue;
       records.push({
         id: `nationals-${i + 1}`,
@@ -78,7 +89,7 @@ export async function syncSales(db: D1Database): Promise<{ wms: number; national
         date_iso: codeToIso(code),
         date_code: code,
         amount_usd: amount,
-        status: clean(r[0]),
+        status,
         synced_at: now,
       });
     }
