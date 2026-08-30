@@ -63,9 +63,16 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CMS_IMS_API_KEY: ${{ secrets.CMS_IMS_API_KEY }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          if [ -n "${CMS_IMS_API_KEY:-}" ]; then
+            printf '%s' "$CMS_IMS_API_KEY" | npx wrangler secret put CMS_IMS_API_KEY --name stylekorean
+          else
+            echo "CMS_IMS_API_KEY repository secret is not configured"
+            exit 1
+          fi
           # A version-only deployment cannot recover a detached zone route, so
           # canonical deploy is attempted first. The current production token
           # can publish Worker versions but may not be allowed to list/edit zone
