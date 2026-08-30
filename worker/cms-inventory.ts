@@ -1,7 +1,11 @@
 import { runCmsReadonlyQuery, type CmsGatewayEnv } from "./cms-client";
 
 const DIRECT_STOCK_URL = "https://ims.siliconii.com/api/get/report/stock/expdate";
-const DIRECT_TIMEOUT_MS = 25_000;
+// The IMS host responds in a few seconds from a normal network, but its
+// Cloudflare egress path can hang until the previous 25-second timeout. Keep
+// the direct attempt short and fall back to the Google Apps Script egress.
+const DIRECT_TIMEOUT_MS = 8_000;
+const PROXY_TIMEOUT_MS = 45_000;
 
 type ColumnRow = { TABLE_SCHEMA?: unknown; TABLE_NAME?: unknown; COLUMN_NAME?: unknown };
 
@@ -13,7 +17,10 @@ export type CmsInventoryRow = {
   quantity: number;
 };
 
-type DirectInventoryEnv = CmsGatewayEnv & { CMS_IMS_API_KEY?: string };
+type DirectInventoryEnv = CmsGatewayEnv & {
+  CMS_IMS_API_KEY?: string;
+  APPS_SCRIPT_WRITE_URL?: string;
+};
 
 const SKU_COLUMNS = ["sku", "sku_cd", "prod_cd", "product_cd", "item_cd", "goods_cd"];
 const QTY_COLUMNS = ["qty", "stock_qty", "stock_qtot", "inv_qty", "onhand_qty", "on_hand_qty", "wh_qty", "avail_qty"];
@@ -63,6 +70,29 @@ async function fetchDirectCmsInventory(env: DirectInventoryEnv) {
   }
 }
 
+async function fetchAppsScriptCmsInventory(env: DirectInventoryEnv) {
+  if (!env.APPS_SCRIPT_WRITE_URL || !env.CMS_IMS_API_KEY) return null;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), PROXY_TIMEOUT_MS);
+  try {
+    const response = await fetch(env.APPS_SCRIPT_WRITE_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ action: "cmsInventory", apiKey: env.CMS_IMS_API_KEY }),
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`CMS IMS proxy HTTP ${response.status}`);
+    const payload = await response.json() as { ok?: boolean; rows?: Array<Record<string, unknown>>; error?: string };
+    if (payload.ok !== true || !Array.isArray(payload.rows)) throw new Error(payload.error || "CMS IMS proxy returned invalid inventory data");
+    return payload.rows.map((row): CmsInventoryRow => ({
+      productName: text(row.productName), sku: text(row.sku), upc: text(row.upc),
+      expirationDate: text(row.expirationDate), quantity: Number(row.quantity) || 0,
+    })).filter((row) => row.sku);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function fetchCmsInventory(env: DirectInventoryEnv) {
   const started = Date.now();
   const fetchedAt = new Date().toISOString();
@@ -74,9 +104,23 @@ export async function fetchCmsInventory(env: DirectInventoryEnv) {
     error,
   });
   if (!env.CMS_MCP_URL && !env.CMS_IMS_API_KEY) return { configured: false, rows: [] as CmsInventoryRow[], health: health(false, "CMS gateway is not configured") };
+  let directError = "";
+  if (env.CMS_IMS_API_KEY) {
+    try {
+      const directRows = await fetchDirectCmsInventory(env);
+      if (directRows) return { configured: true, rows: directRows, health: health(true) };
+    } catch (error) {
+      directError = error instanceof Error ? error.message : String(error);
+    }
+    try {
+      const proxiedRows = await fetchAppsScriptCmsInventory(env);
+      if (proxiedRows) return { configured: true, rows: proxiedRows, health: health(true) };
+    } catch (error) {
+      const proxyError = error instanceof Error ? error.message : String(error);
+      throw new Error(`${proxyError}${directError ? ` (direct IMS: ${directError})` : ""}`);
+    }
+  }
   try {
-    const directRows = await fetchDirectCmsInventory(env);
-    if (directRows) return { configured: true, rows: directRows, health: health(true) };
     const metadata = await runCmsReadonlyQuery(env, `SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME
       FROM CSMS.INFORMATION_SCHEMA.COLUMNS
       WHERE LOWER(COLUMN_NAME) IN ('${[...SKU_COLUMNS, ...QTY_COLUMNS, ...NAME_COLUMNS, ...UPC_COLUMNS, ...EXPIRY_COLUMNS].join("','")}')

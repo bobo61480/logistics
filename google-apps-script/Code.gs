@@ -165,6 +165,15 @@ function doPost(e) {
     }
     const request = JSON.parse(rawContents || "{}");
 
+    // The IMS report is reachable from Google's egress but intermittently
+    // blocked or stalled when fetched directly from a Cloudflare Worker. The
+    // Worker uses this narrowly-scoped proxy only after a direct fetch fails.
+    // The key is never logged or returned; a Script Property can be used when
+    // configured, otherwise the Worker supplies it over the TLS request.
+    if (request.action === "cmsInventory") {
+      return json_(fetchCmsInventoryProxy_(request));
+    }
+
     // Dashboard-driven Gmail-ingestion approve/reject. Kept as an explicit
     // "action" discriminator so the pre-existing status-update callers
     // (which never send "action") are completely unaffected.
@@ -223,6 +232,44 @@ function doPost(e) {
   } finally {
     if (haveLock) lock.releaseLock();
   }
+}
+
+function fetchCmsInventoryProxy_(request) {
+  const configuredKey = PropertiesService.getScriptProperties().getProperty("CMS_IMS_API_KEY") || "";
+  const apiKey = String(configuredKey || request.apiKey || "").trim();
+  if (!apiKey || apiKey.length > 512) throw new Error("CMS IMS credential is not configured.");
+
+  const query = [
+    "curr_lang=ENG", "comp_cd=CO000007", "exp_date_fr=", "exp_date_to=",
+    "prod_cd=", "prod_nm=", "brand_cd=", "brand_nm=", "hide_null_cost=false"
+  ].join("&");
+  const response = UrlFetchApp.fetch("https://ims.siliconii.com/api/get/report/stock/expdate?" + query, {
+    method: "get",
+    headers: {
+      Accept: "application/json, text/plain, */*",
+      "x-api-key": apiKey,
+      Origin: "https://cms.siliconii.com",
+      Referer: "https://cms.siliconii.com/ImsReport/StockExpDate",
+      "User-Agent": "StyleKorean-Control-Tower/2026-08-30"
+    },
+    muteHttpExceptions: true
+  });
+  const status = response.getResponseCode();
+  if (status < 200 || status >= 300) throw new Error("Siliconii IMS HTTP " + status);
+  const payload = JSON.parse(response.getContentText() || "{}");
+  if (String(payload.ResultCode || "") !== "0000" || !Array.isArray(payload.Data)) {
+    throw new Error(String(payload.ResultMessage || "Siliconii IMS returned invalid inventory data"));
+  }
+  const rows = payload.Data.map(function (row) {
+    return {
+      productName: String(row.prod_nm || "").trim(),
+      sku: String(row.prod_cd || "").trim(),
+      upc: String(row.barcode || "").trim(),
+      expirationDate: String(row.exp_date || "").trim(),
+      quantity: Number(row.stock_qty) || 0
+    };
+  }).filter(function (row) { return row.sku; });
+  return { ok: true, source: "ims", rows: rows };
 }
 
 function validateRequest_(request) {
