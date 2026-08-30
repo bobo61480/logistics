@@ -7,9 +7,9 @@ Captured from the authenticated CMS session and `/home/bobo/siliconii-cms.har` o
 | Method | Endpoint | Safe query fields | UI result fields observed |
 | --- | --- | --- | --- |
 | GET | `https://ims.siliconii.com/api/get/report/stock/stocks` | `comp_cd`, `whouse_cd`, `wh_cds`, `brand_cd`, `brand_nm`, `barcode`, `dept_cd`, `prod_cd`, `prod_nm`, `biz_gbn`, `sales_rate`, `sdt`, `edt`, `qty`, `qty_ob`, `amt`, `amt_ob`, `biz_curr`, `xrate`, `s_crdt_rate`, `sku_status`, `curr_lang` | `prod_cd`, `prod_nm`, `barcode`, `brand_nm`, `stock_qty`, `hold_qty`, `avail_qty`, `ow_qty`, `pnfm_qty`, `iw_dt`, plus amount/rate/status fields |
-| GET | `https://ims.siliconii.com/api/get/report/stock/expdate` | `curr_lang`, `comp_cd`, `exp_date_fr`, `exp_date_to`, `prod_cd`, `prod_nm`, `brand_cd`, `brand_nm`, `hide_null_cost` | `prod_cd`, `prod_nm`, `brand_nm`, `exp_date`, `stock_qty`, `avg_ucost`, `stock_amt` |
+| GET | `https://ims.siliconii.com/api/get/report/stock/expdate` | `curr_lang`, `comp_cd`, `exp_date_fr`, `exp_date_to`, `prod_cd`, `prod_nm`, `brand_cd`, `brand_nm`, `hide_null_cost` | `prod_cd`, `prod_nm`, `brand_nm`, `barcode`, `exp_date`, `stock_qty`, `avg_ucost`, `stock_amt` |
 
-The stock API is served from `ims.siliconii.com` and requires the browser’s `x-api-key` request header. The key is not stored in this repository. Production integration should use a Cloudflare Worker secret (for example `CMS_IMS_API_KEY`) and never a public `NEXT_PUBLIC_*` variable.
+The stock APIs are served from `ims.siliconii.com` and require the browser’s `x-api-key` request header. The expiration report returned `ResultCode`, `ResultMessage`, and `Data`; the supplied capture contained 19,231 `Data` rows. The key is not stored in this repository. Production integration uses the Cloudflare Worker secret `CMS_IMS_API_KEY`, never a public `NEXT_PUBLIC_*` variable.
 
 The CMS stock report UI also exposes warehouse, product, barcode, department, business type, date, quantity, amount, and SKU-status filters. The response is large (approximately 3.7–5.6 MB in the supplied HAR), so the Worker should bound response bytes and persist a reduced `{productName, sku, upc, expirationDate, quantity}` projection in D1.
 
