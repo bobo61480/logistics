@@ -12,6 +12,7 @@ interface __BaseEnv_Env {
 	FEDEX_CLIENT_SECRET?: string;
 	USPS_CLIENT_ID?: string;
 	USPS_CLIENT_SECRET?: string;
+	DHL_API_KEY?: string;
 }
 declare namespace Cloudflare {
 	interface GlobalProps {
