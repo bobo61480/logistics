@@ -61,9 +61,15 @@ describe("dark-theme toggle infrastructure", () => {
     }
   });
 
-  it("declares only a single :root block, not two conflicting ones", () => {
+  it("does not redeclare conflicting custom properties across root blocks", () => {
     const css = read("app/globals.css");
-    const rootBlocks = css.match(/^:root\s*\{/gm) ?? [];
-    expect(rootBlocks).toHaveLength(1);
+    const rootBodies = [...css.matchAll(/^:root\s*\{([\s\S]*?)^\}/gm)].map((match) => match[1]);
+    expect(rootBodies.length).toBeGreaterThan(0);
+
+    const declarations = rootBodies.flatMap((body) =>
+      [...body.matchAll(/^\s*(--[\w-]+)\s*:/gm)].map((match) => match[1]),
+    );
+    const duplicates = declarations.filter((name, index) => declarations.indexOf(name) !== index);
+    expect([...new Set(duplicates)]).toEqual([]);
   });
 });
