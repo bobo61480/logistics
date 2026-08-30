@@ -71,6 +71,8 @@ async function fetchDirectCmsInventory(env: DirectInventoryEnv) {
 }
 
 async function fetchAppsScriptCmsInventory(env: DirectInventoryEnv) {
+  // Keep this path in the published Worker bundle alongside the IMS secret;
+  // secret-only deployments otherwise preserve the prior script version.
   if (!env.APPS_SCRIPT_WRITE_URL || !env.CMS_IMS_API_KEY) return null;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), PROXY_TIMEOUT_MS);
