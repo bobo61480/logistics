@@ -15,7 +15,7 @@ describe("production hardening", () => {
     expect(workflow).toContain("/api/logistics/health");
     expect(workflow).toContain("/api/logistics/snapshot");
     expect(workflow).toContain("/api/logistics/reconciliation");
-    expect(workflow).toContain("2026-08-29-worker-v9-d1-canonical-dedupe");
+    expect(workflow).toContain("2026-08-30-worker-v10-d1-inventory-reconciliation");
     expect(workflow).toContain('health.frontendSource!=="d1"');
     expect(workflow).toContain('snapshot.storage!=="d1"');
     expect(workflow).toContain('snapshot.frontendSource!=="d1"');
@@ -49,7 +49,7 @@ describe("production hardening", () => {
     expect(wranglerConfig).toContain('crons = ["*/15 * * * *"]');
 
     const worker = read("worker/index.ts");
-    expect(worker).toContain('const WORKER_VERSION = "2026-08-29-worker-v9-d1-canonical-dedupe"');
+    expect(worker).toContain('const WORKER_VERSION = "2026-08-30-worker-v10-d1-inventory-reconciliation"');
     expect(worker).toContain('frontendSource: "d1"');
     expect(worker).toContain('statusWriteMode: "strict Google Sheets + D1 dual write"');
     expect(worker).toContain('return json({ ok: false, error: "D1 frontend database is not configured"');

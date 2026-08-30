@@ -2354,3 +2354,16 @@ small                             { font-size: var(--fs-control) !important; }
 [class*="fulfillment"] table,
 [class*="fulfillment"] .tk-table  { font-size: var(--fs-body) !important; }
 
+.inventory-reconciliation { margin: 20px 0; border: 1px solid var(--hairline-strong); border-radius: 16px; background: var(--surface); overflow: hidden; }
+.inventory-reconciliation-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 20px; border-bottom: 1px solid var(--hairline); }
+.inventory-reconciliation-heading h2 { margin: 2px 0 0; font-size: 20px; }
+.inventory-reconciliation-heading strong { white-space: nowrap; color: var(--accent-imports); }
+.inventory-reconciliation-table-wrap { max-height: 480px; overflow: auto; }
+.inventory-reconciliation-table { width: 100%; border-collapse: collapse; font-size: var(--fs-body); }
+.inventory-reconciliation-table th { position: sticky; top: 0; z-index: 1; padding: 10px 12px; background: var(--surface-inset); text-align: left; font-size: var(--fs-head); text-transform: uppercase; }
+.inventory-reconciliation-table td { padding: 11px 12px; border-top: 1px solid var(--hairline); vertical-align: top; }
+.inventory-reconciliation-table td small { display: block; color: var(--text-faint); }
+.inventory-reconciliation-empty { margin: 0; padding: 22px 20px; color: var(--text-soft); }
+.difference-positive { color: #16814f; font-weight: 700; }
+.difference-negative { color: #c33d42; font-weight: 700; }
+@media (max-width: 800px) { .inventory-reconciliation-table { min-width: 920px; } }
