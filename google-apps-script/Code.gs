@@ -272,6 +272,14 @@ function fetchCmsInventoryProxy_(request) {
   return { ok: true, source: "ims", rows: rows };
 }
 
+// One-time owner-run helper. Running this from the Apps Script editor causes
+// Google to request the external_request scope explicitly; it has no data or
+// spreadsheet side effects and does not send the IMS credential.
+function authorizeCmsImsExternalRequest() {
+  const response = UrlFetchApp.fetch("https://ims.siliconii.com/", { method: "get", muteHttpExceptions: true });
+  return { ok: true, status: response.getResponseCode() };
+}
+
 function validateRequest_(request) {
   if (!["outbound", "inbound"].includes(request.kind)) throw new Error("Invalid relation kind.");
   if (!ALLOWED_SHEETS.includes(request.sourceSheet)) throw new Error("Source sheet is not allowed.");
