@@ -14,11 +14,14 @@ describe("control tower Worker routing", () => {
     expect(worker).toContain('url.pathname === "/api/logistics/reconciliation"');
     expect(worker).toContain("env.ASSETS.fetch(request)");
     expect(wrangler).toContain('main = "worker/index.ts"');
+    expect(wrangler).toContain('[assets]');
+    expect(wrangler).toContain('directory = "./out"');
     expect(wrangler).toContain('binding = "ASSETS"');
     expect(wrangler).toContain('run_worker_first = ["/api/*"]');
-    expect(wrangler).toContain('pattern = "stylekorean.dpdns.org/*"');
-    expect(wrangler).toContain('zone_id = "5d128576939145a0274370efd693dafe"');
-    expect(wrangler).not.toContain("custom_domain = true");
+    expect(wrangler).toContain('pattern = "stylekorean.dpdns.org"');
+    expect(wrangler).toContain("custom_domain = true");
+    expect(wrangler).not.toContain('pattern = "stylekorean.dpdns.org/*"');
+    expect(wrangler).not.toContain('zone_id = "5d128576939145a0274370efd693dafe"');
     expect(wrangler).toContain("workers_dev = false");
   });
 
