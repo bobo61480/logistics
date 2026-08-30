@@ -180,25 +180,22 @@ async function handleSnapshot(env: Env, context: ExecutionContext, forceRefresh 
     if (stored) {
       const stale = Date.now() - Date.parse(stored.generatedAt) > SNAPSHOT_REFRESH_SECONDS * 1000;
       if (stale) {
-        try {
-          const refreshed = await refreshDatabaseSnapshot(env);
-          const response = snapshotResponse({ ...refreshed, servedAt: new Date().toISOString() });
-          cacheSnapshot(context, response);
-          response.headers.set("x-stylekorean-cache", "D1-REFRESHED");
-          return response;
-        } catch (error) {
-          console.error(JSON.stringify({ event: "d1-foreground-refresh-failed", error: String(error) }));
-          const response = snapshotResponse({
-            ...stored,
-            frontendSource: "d1",
-            stale: true,
-            staleReason: error instanceof Error ? error.message : "D1 refresh failed",
-            servedAt: new Date().toISOString(),
-          });
-          response.headers.set("x-stylekorean-cache", "D1-STALE");
-          response.headers.set("warning", '110 - "Response is stale"');
-          return response;
-        }
+        context.waitUntil(refreshDatabaseSnapshot(env).then((refreshed) => {
+          const refreshedResponse = snapshotResponse({ ...refreshed, servedAt: new Date().toISOString() });
+          cacheSnapshot(context, refreshedResponse);
+        }).catch((error) => {
+          console.error(JSON.stringify({ event: "d1-background-refresh-failed", error: String(error) }));
+        }));
+        const response = snapshotResponse({
+          ...stored,
+          frontendSource: "d1",
+          stale: true,
+          staleReason: "The durable snapshot is refreshing in the background",
+          servedAt: new Date().toISOString(),
+        });
+        response.headers.set("x-stylekorean-cache", "D1-STALE-WHILE-REVALIDATE");
+        response.headers.set("warning", '110 - "Response is stale"');
+        return response;
       }
       const response = snapshotResponse({ ...stored, frontendSource: "d1", servedAt: new Date().toISOString() });
       cacheSnapshot(context, response);
