@@ -1,5 +1,8 @@
 import { runCmsReadonlyQuery, type CmsGatewayEnv } from "./cms-client";
 
+const DIRECT_STOCK_URL = "https://ims.siliconii.com/api/get/report/stock/expdate";
+const DIRECT_TIMEOUT_MS = 25_000;
+
 type ColumnRow = { TABLE_SCHEMA?: unknown; TABLE_NAME?: unknown; COLUMN_NAME?: unknown };
 
 export type CmsInventoryRow = {
@@ -9,6 +12,8 @@ export type CmsInventoryRow = {
   expirationDate: string;
   quantity: number;
 };
+
+type DirectInventoryEnv = CmsGatewayEnv & { CMS_IMS_API_KEY?: string };
 
 const SKU_COLUMNS = ["sku", "sku_cd", "prod_cd", "product_cd", "item_cd", "goods_cd"];
 const QTY_COLUMNS = ["qty", "stock_qty", "stock_qtot", "inv_qty", "onhand_qty", "on_hand_qty", "wh_qty", "avail_qty"];
@@ -26,7 +31,30 @@ function findColumn(columns: string[], aliases: string[]) {
   return aliases.map((alias) => normalized.get(alias)).find(Boolean) ?? "";
 }
 
-export async function fetchCmsInventory(env: CmsGatewayEnv) {
+async function fetchDirectCmsInventory(env: DirectInventoryEnv) {
+  if (!env.CMS_IMS_API_KEY) return null;
+  const url = new URL(DIRECT_STOCK_URL);
+  url.search = new URLSearchParams({
+    curr_lang: "ENG", comp_cd: "CO000007", exp_date_fr: "", exp_date_to: "",
+    prod_cd: "", prod_nm: "", brand_cd: "", brand_nm: "", hide_null_cost: "false",
+  }).toString();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), DIRECT_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { headers: { Accept: "application/json", "x-api-key": env.CMS_IMS_API_KEY }, signal: controller.signal });
+    if (!response.ok) throw new Error(`Siliconii IMS HTTP ${response.status}`);
+    const payload = await response.json() as { ResultCode?: string; ResultMessage?: string; Data?: Array<Record<string, unknown>> };
+    if (payload.ResultCode !== "0000" || !Array.isArray(payload.Data)) throw new Error(payload.ResultMessage || "Siliconii IMS returned invalid inventory data");
+    return payload.Data.map((row): CmsInventoryRow => ({
+      productName: text(row.prod_nm), sku: text(row.prod_cd), upc: text(row.barcode),
+      expirationDate: text(row.exp_date), quantity: Number(row.stock_qty) || 0,
+    })).filter((row) => row.sku);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function fetchCmsInventory(env: DirectInventoryEnv) {
   const started = Date.now();
   const fetchedAt = new Date().toISOString();
   const health = (ok: boolean, error?: string) => ({
@@ -36,8 +64,10 @@ export async function fetchCmsInventory(env: CmsGatewayEnv) {
     latencyMs: Date.now() - started,
     error,
   });
-  if (!env.CMS_MCP_URL) return { configured: false, rows: [] as CmsInventoryRow[], health: health(false, "CMS gateway is not configured") };
+  if (!env.CMS_MCP_URL && !env.CMS_IMS_API_KEY) return { configured: false, rows: [] as CmsInventoryRow[], health: health(false, "CMS gateway is not configured") };
   try {
+    const directRows = await fetchDirectCmsInventory(env);
+    if (directRows) return { configured: true, rows: directRows, health: health(true) };
     const metadata = await runCmsReadonlyQuery(env, `SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME
       FROM CSMS.INFORMATION_SCHEMA.COLUMNS
       WHERE LOWER(COLUMN_NAME) IN ('${[...SKU_COLUMNS, ...QTY_COLUMNS, ...NAME_COLUMNS, ...UPC_COLUMNS, ...EXPIRY_COLUMNS].join("','")}')
