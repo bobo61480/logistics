@@ -72,7 +72,7 @@ export function InventoryReconciliationCard({ warehouse, cms, configured }: {
           <p className="eyebrow">Inventory reconciliation</p>
           <h2>Warehouse vs Siliconii CMS</h2>
         </div>
-        <strong>{differences.length} differences</strong>
+        <strong>{!configured || cms.length === 0 ? "Unavailable" : `${differences.length} differences`}</strong>
       </div>
       {!configured ? <p className="inventory-reconciliation-empty">Siliconii CMS is not configured for this deployment.</p>
         : cms.length === 0 ? <p className="inventory-reconciliation-empty">CMS inventory is temporarily unavailable. The last warehouse stock remains visible below.</p>
