@@ -7,21 +7,13 @@ const LEAFLET_CSS = "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css
 const LEAFLET_JS = "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js";
 const TRACKING_ENDPOINT =
   process.env.NEXT_PUBLIC_LOGISTICS_TRACKING_URL ?? "/api/logistics/tracking";
-// Must match tracking-command.ts's MAX_REQUESTS — the Worker silently drops anything past
-// that many entries in a single call, so a board with more trackable parcels than this needs
-// to split across multiple requests or the extras vanish from the map with no error.
 const TRACKING_BATCH_SIZE = 25;
-// Re-poll carrier tracking on this cadence — tracking-command.ts caches each
-// carrier+number lookup for 15 minutes anyway, so polling more often than that
-// wouldn't surface anything new, just spend rate-limit budget re-asking.
 const TRACKING_POLL_MS = 2 * 60 * 60 * 1000;
 const CONTINENTAL_US_CENTER: LatLng = [39.5, -98.35];
 const PORT_LOOKUP: Record<string, { label: string; coords: LatLng }> = {
   LAX: { label: "Port of Los Angeles", coords: [33.7395, -118.2601] },
   LGB: { label: "Port of Long Beach", coords: [33.754, -118.2165] },
 };
-// Air imports share the same "LAX" pod code as ocean imports, but that code means the
-// seaport for ocean and the airport for air — route air milestones here instead.
 const AIRPORT_LOOKUP: Record<string, { label: string; coords: LatLng }> = {
   LAX: { label: "Los Angeles International Airport", coords: [33.9416, -118.4085] },
 };
@@ -35,7 +27,7 @@ function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;");
 }
 
-export type Carrier = "ups" | "fedex" | "usps";
+export type Carrier = "ups" | "fedex" | "usps" | "dhl";
 
 export type MilestoneShipment = {
   id: string;
@@ -72,9 +64,7 @@ export type TrackingResult = {
 /**
  * Shared carrier-tracking poll for TrackableShipment lists. Hoisted out of
  * LiveMapPanel so a page can fetch each carrier+number combination once and
- * hand the results to multiple cards (the map, the outbound small-parcel
- * schedule) instead of every consumer opening its own duplicate batch of
- * requests against the shared per-IP rate limiter.
+ * hand the results to multiple cards instead of opening duplicate requests.
  */
 export function useParcelTracking(trackable: TrackableShipment[]) {
   const [tracking, setTracking] = useState<Record<string, TrackingResult>>({});
@@ -88,7 +78,7 @@ export function useParcelTracking(trackable: TrackableShipment[]) {
 
   useEffect(() => {
     if (!trackable.length) {
-      setConfigured((current) => current ?? { ups: false, fedex: false, usps: false });
+      setConfigured((current) => current ?? { ups: false, fedex: false, usps: false, dhl: false });
       return;
     }
     let cancelled = false;
@@ -111,7 +101,14 @@ export function useParcelTracking(trackable: TrackableShipment[]) {
             body: JSON.stringify({
               requests: batch.map((item) => ({ carrier: item.carrier, number: item.trackingNumber })),
             }),
-          }).then((response) => response.json() as Promise<{ ok?: boolean; results?: TrackingResult[]; configured?: Record<Carrier, boolean> }>),
+          }).then(
+            (response) =>
+              response.json() as Promise<{
+                ok?: boolean;
+                results?: TrackingResult[];
+                configured?: Record<Carrier, boolean>;
+              }>,
+          ),
         ),
       )
         .then((batchResponses) => {
@@ -129,7 +126,7 @@ export function useParcelTracking(trackable: TrackableShipment[]) {
           setConfigured(configuredResult);
         })
         .catch(() => {
-          /* Tracking is best-effort — cards still show scheduled data without it. */
+          /* Tracking is best-effort — schedule data remains available without it. */
         })
         .finally(() => {
           if (!cancelled) setLoading(false);
@@ -142,7 +139,7 @@ export function useParcelTracking(trackable: TrackableShipment[]) {
       cancelled = true;
       window.clearInterval(interval);
     };
-    // trackableKey is a stable string fingerprint of trackable — safe dep
+    // trackableKey is a stable string fingerprint of trackable.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trackableKey]);
 
@@ -244,8 +241,12 @@ export function LiveMapPanel({
             `${shipment.status ? `<br/>Status: ${escapeHtml(shipment.status)}` : ""}`,
         )
         .addTo(layerRef.current);
-      L.polyline([origin.coords, destination.coords], { color: isAir ? "#2563eb" : "#0e7490", weight: 2, dashArray: "4 6", opacity: 0.7 })
-        .addTo(layerRef.current);
+      L.polyline([origin.coords, destination.coords], {
+        color: isAir ? "#2563eb" : "#0e7490",
+        weight: 2,
+        dashArray: "4 6",
+        opacity: 0.7,
+      }).addTo(layerRef.current);
       bounds.push(origin.coords, destination.coords);
     });
 
@@ -276,7 +277,9 @@ export function LiveMapPanel({
     }
   }, [ready, milestones, trackable, tracking]);
 
-  const trackedCount = trackable.filter((item) => tracking[`${item.carrier}:${item.trackingNumber}`]?.ok).length;
+  const trackedCount = trackable.filter(
+    (item) => tracking[`${item.carrier}:${item.trackingNumber}`]?.ok,
+  ).length;
   const anyCarrierConfigured = configured ? Object.values(configured).some(Boolean) : true;
 
   return (
@@ -300,7 +303,7 @@ export function LiveMapPanel({
       </div>
       {!anyCarrierConfigured && trackable.length > 0 && (
         <p className="live-map-hint">
-          No carrier tracking connected yet — UPS/FedEx/USPS API credentials aren&apos;t configured, so parcel
+          No carrier tracking connected yet — UPS/FedEx/USPS/DHL API credentials aren&apos;t configured, so parcel
           positions won&apos;t appear. Ocean/air port milestones above still work without them.
         </p>
       )}
