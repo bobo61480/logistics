@@ -47,6 +47,17 @@ describe("effective outbound source selection", () => {
     });
   });
 
+  it("does not mistake the Outbound Shipping Schedule KPI banner for a shipment", () => {
+    const schedule = [
+      ["", "", "", ""],
+      ["VISIBLE ROW ENTRIES", "2", "", "VISIBLE SHIPMENTS"],
+    ];
+    const trucking = [...blankRows(2), ["ULTA", "INV-9", "", "8/31/2026"]];
+    const selected = selectOutboundSource(schedule, trucking);
+    expect(selected.rows).toBe(trucking);
+    expect(selected.meta).toMatchObject({ sheetName: "WH Trucking Request", rowCount: 1, fallback: true });
+  });
+
   it("reports zero usable rows instead of treating blank source ranges as data", () => {
     expect(selectOutboundSource(blankRows(4), blankRows(3)).meta.rowCount).toBe(0);
   });

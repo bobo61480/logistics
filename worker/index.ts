@@ -10,8 +10,9 @@ import { fetchOperationalSources, type GmailIngestionEvent } from "./sources";
 import { handleStatusCommand } from "./status-command";
 import { handlePendingReviewCommand } from "./pending-review-command";
 import { handleTrackingCommand } from "./tracking-command";
+import { fetchCmsInventory } from "./cms-inventory";
 
-const WORKER_VERSION = "2026-08-29-worker-v9-d1-canonical-dedupe";
+const WORKER_VERSION = "2026-08-30-worker-v10-d1-inventory-reconciliation";
 const SNAPSHOT_CACHE_URL = "https://stylekorean.internal/api/logistics/snapshot";
 const SNAPSHOT_CACHE_SECONDS = 60;
 const SNAPSHOT_REFRESH_SECONDS = 15 * 60;
@@ -96,7 +97,14 @@ function dedupeOperationalPayload(snapshot: Awaited<ReturnType<typeof fetchOpera
 
 async function buildSnapshotPayload(env: Env): Promise<OperationalSnapshot> {
   const generatedAt = new Date().toISOString();
-  const raw = await fetchOperationalSources(env.APPS_SCRIPT_WRITE_URL);
+  const [raw, cmsInventory] = await Promise.all([
+    fetchOperationalSources(env.APPS_SCRIPT_WRITE_URL),
+    fetchCmsInventory(env),
+  ]);
+  raw.sourceHealth.push(cmsInventory.health);
+  const rawSources = raw.sources as Record<string, unknown>;
+  rawSources.cmsInventory = cmsInventory.rows;
+  rawSources.cmsInventoryConfigured = cmsInventory.configured;
   const snapshot = dedupeOperationalPayload(raw);
   const outboundMeta = snapshot.sources.outboundMeta as { rowCount?: number } | undefined;
   const hasOutboundRows = Number(outboundMeta?.rowCount ?? 0) > 0;

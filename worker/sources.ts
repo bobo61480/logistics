@@ -31,6 +31,10 @@ type AppsScriptSnapshot = {
     imports?: string[][];
     outbound?: string[][];
     trucking?: string[][];
+    b2bTrucking?: string[][];
+    ulta?: string[][];
+    iherb?: string[][];
+    tjxRoss?: string[][];
     transfers?: string[][];
     nationalOutbound?: string[][];
     salesOutbound?: string[][];
@@ -126,12 +130,20 @@ export function normalizeImportsParcelRows(rows: string[][]) {
   });
 }
 
-function populatedOutboundRows(rows: string[][] | null, headerRow: number) {
+function isShipmentDate(value: unknown) {
+  const text = String(value ?? "").trim();
+  if (!text) return false;
+  if (/^Date\(\d{4},\d{1,2},\d{1,2}/.test(text)) return true;
+  if (!/^(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}-\d{1,2}-\d{1,2})/.test(text)) return false;
+  return Number.isFinite(Date.parse(text));
+}
+
+export function populatedOutboundRows(rows: string[][] | null, headerRow: number) {
   if (!rows) return 0;
   return rows.slice(headerRow).filter((row) => {
     const customer = String(row[0] ?? "").trim();
     const shipDate = String(row[3] ?? "").trim();
-    return Boolean(customer && shipDate);
+    return Boolean(customer && isShipmentDate(shipDate));
   }).length;
 }
 
@@ -317,6 +329,10 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
           healthFor("IMPORTS", raw.imports),
           outboundHealth,
           healthFor("WH Trucking Request", raw.trucking),
+          healthFor("B2B/E-COM TRUCKING", raw.b2bTrucking),
+          healthFor("ULTA", raw.ulta),
+          healthFor("IHERB", raw.iherb),
+          healthFor("TJX/ROSS", raw.tjxRoss),
           healthFor("TRANSFERS", raw.transfers),
           healthFor("Nationals", nationalTable),
           healthFor("WMS Stylekorean", salesTable),
@@ -329,6 +345,12 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
           imports: raw.imports ? normalizeImportsParcelRows(raw.imports) : null,
           outbound: effectiveOutbound.rows,
           outboundMeta: effectiveOutbound.meta,
+          outboundSchedule: raw.outbound ?? null,
+          truckingRequests: raw.trucking ?? null,
+          b2bTrucking: raw.b2bTrucking ?? null,
+          ulta: raw.ulta ?? null,
+          iherb: raw.iherb ?? null,
+          tjxRoss: raw.tjxRoss ?? null,
           nationalOutbound: nationalTable,
           salesOutbound: salesTable,
           inventoryDashboardTable: inventoryTable,
@@ -355,13 +377,17 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
     }
   }
 
-  const [imports, outbound, trucking, transfers, nationalOutbound, salesOutbound, inventoryDashboardTable, skwInboundTable, skwStockTable, pendingVerification] = await Promise.all([
+  const [imports, outbound, trucking, b2bTrucking, ulta, iherb, tjxRoss, transfers, nationalOutbound, salesOutbound, inventoryDashboardTable, skwInboundTable, skwStockTable, pendingVerification] = await Promise.all([
     fetchCsvSource("IMPORTS", LOGISTICS_MASTER_ID, IMPORTS_GID),
     fetchCsvSource("Outbound Shipping Schedule", LOGISTICS_MASTER_ID, OUTBOUND_GID),
-    fetchCsvSource("WH Trucking Request", LOGISTICS_MASTER_ID, TRUCKING_GID),
+    fetchGvizSource("WH Trucking Request", LOGISTICS_MASTER_ID, { sheet: "WH Trucking Request", range: "A1:AF25000", headers: 0 }).then((result) => ({ ...result, data: result.data ? gvizTableRows(result.data).slice(1) : null })),
+    fetchGvizSource("B2B/E-COM TRUCKING", LOGISTICS_MASTER_ID, { sheet: "B2B/E-COM TRUCKING", range: "A1:AF5000", headers: 0 }),
+    fetchGvizSource("ULTA", LOGISTICS_MASTER_ID, { sheet: "ULTA", range: "A1:AF5000", headers: 0 }),
+    fetchGvizSource("IHERB", LOGISTICS_MASTER_ID, { sheet: "IHERB", range: "A1:AF5000", headers: 0 }),
+    fetchGvizSource("TJX/ROSS", LOGISTICS_MASTER_ID, { sheet: "TJX/ROSS", range: "A1:AF5000", headers: 0 }),
     fetchCsvSource("TRANSFERS", LOGISTICS_MASTER_ID, TRANSFERS_GID),
     fetchGvizSource("Nationals", NATIONAL_SHEET_ID, { gid: NATIONAL_GID, range: "A1:U3500", headers: 1 }),
-    fetchGvizSource("WMS Stylekorean", WMS_SHEET_ID, { gid: WMS_GID, range: "A2:AF4200", headers: 1 }),
+    fetchGvizSource("WMS Stylekorean", WMS_SHEET_ID, { gid: WMS_GID, range: "A2:AF12000", headers: 1 }),
     fetchGvizSource("Inventory", LOGISTICS_MASTER_ID, { sheet: "INVENTORY", range: "A1:O6500", headers: 1 }),
     fetchGvizSource("SKW Inbound", LOGISTICS_MASTER_ID, { sheet: "SKW_Inbound", range: "A1:R2500", headers: 1 }),
     fetchGvizSource("SKW Stock", LOGISTICS_MASTER_ID, { sheet: "SKW_Stock", range: "A1:J2500", headers: 1 }),
@@ -378,11 +404,17 @@ export async function fetchOperationalSources(appsScriptUrl?: string) {
     : outbound.health;
 
   return {
-    sourceHealth: [imports, { health: outboundHealth }, trucking, transfers, nationalOutbound, salesOutbound, inventoryDashboardTable, skwInboundTable, skwStockTable, pendingVerification].map((entry) => entry.health),
+    sourceHealth: [imports, { health: outboundHealth }, trucking, b2bTrucking, ulta, iherb, tjxRoss, transfers, nationalOutbound, salesOutbound, inventoryDashboardTable, skwInboundTable, skwStockTable, pendingVerification].map((entry) => entry.health),
     sources: {
       imports: imports.data ? normalizeImportsParcelRows(imports.data) : null,
       outbound: effectiveOutbound.rows,
       outboundMeta: effectiveOutbound.meta,
+      outboundSchedule: outbound.data,
+      truckingRequests: trucking.data,
+      b2bTrucking: b2bTrucking.data,
+      ulta: ulta.data,
+      iherb: iherb.data,
+      tjxRoss: tjxRoss.data,
       nationalOutbound: nationalOutbound.data,
       salesOutbound: salesOutbound.data,
       inventoryDashboardTable: inventoryDashboardTable.data,
