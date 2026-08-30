@@ -94,6 +94,69 @@ jobs:
             exit "$deploy_status"
           fi
 
+      - name: Inspect custom-domain DNS and edge state
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set +e
+          zone_id="5d128576939145a0274370efd693dafe"
+          host="stylekorean.dpdns.org"
+
+          echo "::group::Cloudflare zone DNS records"
+          curl -sS --max-time 20 \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            "https://api.cloudflare.com/client/v4/zones/${zone_id}/dns_records?name=${host}" \
+            -o /tmp/cf-dns.json
+          node - <<'NODE'
+          const fs = require('fs');
+          try {
+            const body = JSON.parse(fs.readFileSync('/tmp/cf-dns.json','utf8'));
+            console.log(JSON.stringify({ success: body.success, errors: body.errors, result: (body.result || []).map(r => ({ id:r.id,type:r.type,name:r.name,content:r.content,proxied:r.proxied,ttl:r.ttl })) }, null, 2));
+          } catch (error) {
+            console.log('Cloudflare DNS response was not valid JSON:', String(error));
+          }
+          NODE
+          echo "::endgroup::"
+
+          echo "::group::Cloudflare Worker custom domains"
+          curl -sS --max-time 20 \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/domains/records" \
+            -o /tmp/cf-domains.json
+          node - <<'NODE'
+          const fs = require('fs');
+          try {
+            const body = JSON.parse(fs.readFileSync('/tmp/cf-domains.json','utf8'));
+            const rows = Array.isArray(body.result) ? body.result.filter(r => String(r.hostname || r.name || '').includes('stylekorean.dpdns.org')) : [];
+            console.log(JSON.stringify({ success: body.success, errors: body.errors, result: rows }, null, 2));
+          } catch (error) {
+            console.log('Cloudflare domains response was not valid JSON:', String(error));
+          }
+          NODE
+          echo "::endgroup::"
+
+          echo "::group::Public DNS resolution"
+          echo "getent ahosts:"
+          getent ahosts "$host" || true
+          echo "Google DNS A:"
+          curl -sS --max-time 20 "https://dns.google/resolve?name=${host}&type=A" || true
+          echo
+          echo "Google DNS AAAA:"
+          curl -sS --max-time 20 "https://dns.google/resolve?name=${host}&type=AAAA" || true
+          echo
+          echo "Google DNS NS:"
+          curl -sS --max-time 20 "https://dns.google/resolve?name=${host}&type=NS" || true
+          echo
+          echo "::endgroup::"
+
+          echo "::group::TLS/HTTP edge probe"
+          curl -vkI --connect-timeout 10 --max-time 20 "https://${host}/" 2>&1 | sed -n '1,120p' || true
+          echo "::endgroup::"
+
       - name: Verify live custom domain, D1 frontend, and Worker APIs
         shell: bash
         env:
