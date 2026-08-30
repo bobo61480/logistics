@@ -785,7 +785,7 @@ function dashboardInventoryItems(table: any): InventoryCollections {
     const sku = value(indexes.sku);
     const upc = value(indexes.upc);
     const incoming = inventoryNumber(value(indexes.incoming));
-    if ((!productName && !sku && !upc) || incoming <= 0) return;
+    if (!productName && !sku && !upc) return;
     const shipmentNo = value(indexes.shipmentNo);
     const base = {
       shipmentNo,
@@ -797,7 +797,9 @@ function dashboardInventoryItems(table: any): InventoryCollections {
       location: value(indexes.location),
       status: value(indexes.status),
     };
-    if (!/^(DELIVERED|RECEIVED|COMPLETED|CANCELLED)$/.test(value(indexes.status).toUpperCase())) inbound.push({ ...base, id: `inventory-inbound-${rowIndex}`, quantity: incoming });
+    if (incoming > 0 && !/^(DELIVERED|RECEIVED|COMPLETED|CANCELLED)$/.test(value(indexes.status).toUpperCase())) {
+      inbound.push({ ...base, id: `inventory-inbound-${rowIndex}`, quantity: incoming });
+    }
     const onHand = inventoryNumber(value(indexes.onHand));
     if (onHand > 0) inStock.push({ ...base, id: `inventory-stock-${rowIndex}`, quantity: onHand });
   });
