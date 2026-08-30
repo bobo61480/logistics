@@ -33,6 +33,14 @@ describe("production hardening", () => {
     expect(workflow).toContain("x-content-type-options: nosniff");
 
     const wranglerConfig = read("wrangler.toml");
+    expect(wranglerConfig).toContain('pattern = "stylekorean.dpdns.org"');
+    expect(wranglerConfig).toContain("custom_domain = true");
+    expect(wranglerConfig).not.toContain('pattern = "stylekorean.dpdns.org/*"');
+    expect(wranglerConfig).not.toContain('zone_id = "5d128576939145a0274370efd693dafe"');
+    expect(wranglerConfig).toContain("[assets]");
+    expect(wranglerConfig).toContain('directory = "./out"');
+    expect(wranglerConfig).toContain('binding = "ASSETS"');
+    expect(wranglerConfig).toContain('run_worker_first = ["/api/*"]');
     expect(wranglerConfig).toContain("[[d1_databases]]");
     expect(wranglerConfig).toContain('binding = "DB"');
     expect(wranglerConfig).toContain('database_name = "stylekorean-logistics-read-model"');
@@ -47,6 +55,7 @@ describe("production hardening", () => {
     expect(worker).toContain('return json({ ok: false, error: "D1 frontend database is not configured"');
     expect(worker).toContain("const refreshed = await refreshDatabaseSnapshot(env)");
     expect(worker).toContain("fetchOperationalSources(env.APPS_SCRIPT_WRITE_URL)");
+    expect(worker).toContain("env.ASSETS.fetch(request)");
   });
 
   it("ships a reusable D1-only production smoke verifier", () => {
