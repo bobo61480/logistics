@@ -8,7 +8,6 @@ import { computeLiveKpis } from "../lib/sales-kpis";
 import FulfillmentTkOrders from "./FulfillmentTkOrders";
 import { GmailIngestionCard, type GmailIngestionEvent } from "./gmail-ingestion-card";
 import { DriveArchiveCard, driveLinkGlyph } from "./drive-archive-card";
-import ShipmentEventTrackerCard from "./ShipmentEventTrackerCard";
 import { LiveMapPanel, useParcelTracking, type MilestoneShipment, type TrackableShipment, type TrackingResult } from "./live-map";
 import { ThemeToggle } from "./theme-toggle";
 import { DataGrids } from "./data-grids";
@@ -40,8 +39,6 @@ const STATUS_ENDPOINT =
   process.env.NEXT_PUBLIC_LOGISTICS_STATUS_URL ?? "/api/logistics/status";
 const PENDING_REVIEW_ENDPOINT =
   process.env.NEXT_PUBLIC_LOGISTICS_PENDING_REVIEW_URL ?? "/api/logistics/pending-review";
-const LEGACY_WRITE_ENDPOINT =
-  process.env.NEXT_PUBLIC_APPS_SCRIPT_WRITE_URL ?? "";
 const AUTO_REFRESH_MS = 30 * 60 * 1000;
 
 type Direction = "inbound" | "outbound";
@@ -478,13 +475,15 @@ function carrierFromTrackingNumber(value: string) {
   return "";
 }
 
-// The live-map tracking backend only integrates UPS/FedEx/USPS (carrier-tracking.ts) —
-// DHL and Amazon don't have a server-side lookup, so they're intentionally excluded here.
-function trackableCarrier(value?: string): "ups" | "fedex" | "usps" | null {
+// Amazon Shipping tracking requires the carrierId returned by getRates/purchase,
+// which the current sheet model does not persist. DHL Unified, UPS, FedEx and USPS
+// can be looked up from the tracking number carried by the operational row.
+function trackableCarrier(value?: string): "ups" | "fedex" | "usps" | "dhl" | null {
   const normalized = clean(value).toLowerCase();
   if (normalized.includes("ups")) return "ups";
   if (normalized.includes("fedex")) return "fedex";
   if (normalized.includes("usps")) return "usps";
+  if (normalized.includes("dhl")) return "dhl";
   return null;
 }
 
@@ -1148,7 +1147,7 @@ type WorkerSnapshot = {
   ok: true;
   generatedAt?: string;
   version?: string;
-  storage?: "d1" | "sheets";
+  storage?: "d1";
   stale?: boolean;
   staleReason?: string;
   sourceHealth?: Array<{ name: string; ok: boolean; error?: string }>;
@@ -1254,7 +1253,7 @@ async function fetchOperationalSnapshot() {
       outboundMeta: sources.outboundMeta ?? OUTBOUND_SCHEDULE_META,
       nationalOutbound: sources.nationalOutbound ?? { cols: [], rows: [] },
       salesOutbound: sources.salesOutbound ?? { cols: [], rows: [] },
-      liveKpis: snapshot.kpis ?? (await fetchLiveKpis()),
+      liveKpis: snapshot.kpis ?? EMPTY_KPIS,
       inventoryDashboardTable: sources.inventoryDashboardTable ?? null,
       skwInboundTable: sources.skwInboundTable ?? null,
       skwStockTable: sources.skwStockTable ?? null,
@@ -1270,21 +1269,9 @@ async function fetchOperationalSnapshot() {
       },
     };
   } catch (workerError) {
-    // Keep a read-only direct-Sheets fallback so the schedule remains visible
-    // during a Worker routing incident. Status writes still require the Worker.
-    console.warn("Worker snapshot unavailable; falling back to Google Sheets.", workerError);
-    return {
-      ...(await fetchSheetSnapshot()),
-      // The direct-Sheets fallback carries no ingestion feed.
-      gmailIngestion: null,
-      connection: {
-        mode: "sheets" as const,
-        storage: "sheets" as const,
-        version: undefined,
-        detail: workerError instanceof Error ? workerError.message : "Worker snapshot unavailable",
-        degradedSources: 0,
-      },
-    };
+    // D1 is the canonical frontend source. If the Worker/D1 path is unavailable,
+    // surface the failure instead of silently switching the browser to Google Sheets.
+    throw workerError;
   }
 }
 
@@ -2139,30 +2126,12 @@ async function postStatus(item: ScheduleItem, status: string) {
     return result;
   };
 
-  try {
-    const response = await fetch(STATUS_ENDPOINT, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    return await parseConfirmation(response);
-  } catch (error) {
-    const statusCode = (error as Error & { status?: number })?.status;
-    const mayUseLegacy =
-      Boolean(LEGACY_WRITE_ENDPOINT) &&
-      (statusCode === 404 || statusCode === 405 || statusCode === undefined);
-
-    // Static-host migration fallback only. Do not fall back on validation or
-    // concurrency errors, because doing so could overwrite a newer status.
-    if (!mayUseLegacy) throw error;
-
-    const response = await fetch(LEGACY_WRITE_ENDPOINT, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(payload),
-    });
-    return await parseConfirmation(response);
-  }
+  const response = await fetch(STATUS_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return await parseConfirmation(response);
 }
 
 /**
@@ -3125,14 +3094,12 @@ export default function Home() {
               ? "Workbook connection needs attention"
               : loading
                 ? "Syncing live records…"
-                : connection?.mode === "sheets"
-                  ? "Direct Sheets fallback · Worker reconnecting"
-                  : connection?.mode === "stale"
-                    ? "Last good snapshot · live sources reconnecting"
+                : connection?.mode === "stale"
+                    ? "Last good D1 snapshot · live sources reconnecting"
                     : connection?.degradedSources
                       ? `${connection.degradedSources} optional source${connection.degradedSources === 1 ? "" : "s"} unavailable`
                       : connection?.storage === "d1"
-                        ? "D1 snapshot · Sheets fallback ready"
+                        ? "D1 snapshot · canonical frontend"
                         : "Worker snapshot · 3 live workbooks connected"}
           </span>
           <span className="mono">
@@ -3167,12 +3134,10 @@ export default function Home() {
         </a>
       </div>
 
-      {!error && connection && connection.mode !== "worker" && (
+      {!error && connection?.mode === "stale" && (
         <div className="alert warning" role="status">
-          <strong>{connection.mode === "stale" ? "Continuity mode." : "Fallback mode."}</strong>{" "}
-          {connection.mode === "stale"
-            ? "The last verified snapshot is still available while live workbook sources recover."
-            : "The dashboard is reading Google Sheets directly; status writes still require the Worker."}
+          <strong>Continuity mode.</strong>{" "}
+          The last verified D1 snapshot is still available while live workbook sources recover.
           {connection.detail ? ` ${connection.detail}` : ""}
         </div>
       )}
@@ -3452,7 +3417,6 @@ export default function Home() {
 
       <StatusLegend />
 
-      <ShipmentEventTrackerCard />
 
       <footer>
         <p><strong>SK</strong> STYLEKOREAN LOGISTICS · COMPANY OPERATIONS</p>

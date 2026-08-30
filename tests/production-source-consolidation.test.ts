@@ -1,15 +1,13 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const read = (path: string) => readFileSync(path, "utf8");
 
 describe("production source consolidation", () => {
   it("does not publish a manually curated shipment-exception snapshot beside the live Gmail/D1 feed", () => {
-    const shipmentEvents = read("app/ShipmentEventTrackerCard.tsx");
-    expect(shipmentEvents).not.toContain("TRACKED_EVENTS");
-    expect(shipmentEvents).not.toContain("REVIEWED_THROUGH");
-    expect(shipmentEvents).not.toContain("08/22/26");
-    expect(shipmentEvents).toContain("return null");
+    const page = read("app/page.tsx");
+    expect(page).not.toContain("ShipmentEventTrackerCard");
+    expect(existsSync("app/ShipmentEventTrackerCard.tsx")).toBe(false);
   });
 
   it("supports DHL as a first-class server-side tracking provider everywhere the parcel map can request it", () => {
