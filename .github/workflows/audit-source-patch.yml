@@ -1,0 +1,34 @@
+name: Audit-only surgical source patch
+
+on:
+  push:
+    branches:
+      - audit/production-hardening-20260831
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: audit/production-hardening-20260831
+      - name: Apply exact audited source edits
+        run: |
+          python scripts/audit-source-patch.py
+          git diff --check
+          git diff -- app/page.tsx app/live-map.tsx
+      - name: Commit surgical edits
+        run: |
+          if git diff --quiet; then
+            echo "No audited source edits were needed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/page.tsx app/live-map.tsx
+          git commit -m "Apply D1-only frontend and DHL tracking queue [audit-autopatch]"
+          git push origin HEAD:audit/production-hardening-20260831
