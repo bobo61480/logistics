@@ -8,7 +8,7 @@
 
 /* eslint-disable no-unused-vars */
 
-var GMAIL_PIPELINE_TRIGGER_SYNC_VERSION = "2026-08-29-central-v4-dedupe";
+var GMAIL_PIPELINE_TRIGGER_SYNC_VERSION = "2026-08-31-central-v5-gmail-recovery";
 var APPS_SCRIPT_DEPLOY_SYNC_VERSION = "2026-08-29-d1-canonical-v4";
 
 var TRIGGER_PLAN = [
@@ -22,6 +22,35 @@ var TRIGGER_PLAN = [
   { handler: "enrichImportsFromContainerLog", daily: 6 },
   { handler: "reconcileCustomerBackfill", daily: 5 }
 ];
+
+var TRIGGER_PLAN_PROPERTY = "CANONICAL_TRIGGER_PLAN_APPLIED_VERSION";
+var TRIGGER_LOCK_SKIP_PREFIX = "TRIGGER_LOCK_SKIPS_";
+
+function recordTriggerLockSkip_(handler) {
+  var props = PropertiesService.getScriptProperties();
+  var key = TRIGGER_LOCK_SKIP_PREFIX + String(handler || "unknown");
+  props.setProperty(key, String(Number(props.getProperty(key) || 0) + 1));
+}
+
+function consumeTriggerLockSkips_(handler) {
+  var props = PropertiesService.getScriptProperties();
+  var key = TRIGGER_LOCK_SKIP_PREFIX + String(handler || "unknown");
+  var count = Number(props.getProperty(key) || 0);
+  props.deleteProperty(key);
+  return count;
+}
+
+function ensureCanonicalTriggersForVersion_() {
+  var props = PropertiesService.getScriptProperties();
+  if (props.getProperty(TRIGGER_PLAN_PROPERTY) === GMAIL_PIPELINE_TRIGGER_SYNC_VERSION) return false;
+  setupAllTriggers();
+  try {
+    logPipeline_("TRIGGER PLAN REPAIRED", GMAIL_PIPELINE_TRIGGER_SYNC_VERSION, JSON.stringify({ handlers: TRIGGER_PLAN.length }));
+  } catch (e) {
+    Logger.log("Trigger repair logging failed: " + e.message);
+  }
+  return true;
+}
 
 var TRIGGER_CLEANUP_HANDLERS = [
   "processLogisticsEmails",
@@ -50,7 +79,8 @@ function setupAllTriggers() {
     else builder.everyDays(1).atHour(t.daily).create();
   });
 
-  Logger.log("Provisioned " + TRIGGER_PLAN.length + " canonical triggers.");
+  PropertiesService.getScriptProperties().setProperty(TRIGGER_PLAN_PROPERTY, GMAIL_PIPELINE_TRIGGER_SYNC_VERSION);
+  Logger.log("Provisioned " + TRIGGER_PLAN.length + " canonical triggers for " + GMAIL_PIPELINE_TRIGGER_SYNC_VERSION + ".");
   return TRIGGER_PLAN;
 }
 

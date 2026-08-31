@@ -12,22 +12,53 @@
 
 var WMS_TRUCKING_IMPORT_MIN_DATE = "2026-08-01";
 var WMS_TRUCKING_SYNC_ENABLED = true;
-// Re-enabled 2026-08-23 after fixing the customer-canonicalization bug that
-// caused the 2026-08-12 KORHEIM wrong-merge incident (canonicalWmsCustomer_
-// in Code.gs used an unanchored prefix match, not the word-boundary check it
-// has now). Ships in dry-run first: real scans run and log exactly what they
-// would insert/update to PIPELINE LOG without touching WH Trucking Request,
-// so the fix can be validated against live data before trusting it with
-// writes again. Flip to false only after reviewing several dry-run cycles.
-var WMS_TRUCKING_DRY_RUN = true;
+// Production writes are safe only after destination-aware grouping and
+// operational-date precedence. Current/future rows are synchronized; historic
+// freight is left as audit history instead of being recreated as new schedules.
+var WMS_TRUCKING_DRY_RUN = false;
 
-function wmsImportEligible_(dateInfo) {
-  var key = String(dateInfo && dateInfo.key || "").trim();
-  return /^\d{4}-\d{2}-\d{2}$/.test(key) && key >= WMS_TRUCKING_IMPORT_MIN_DATE;
+function wmsTodayKey_() {
+  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
 }
 
-function wmsExactGroupKey_(customer, dateInfo) {
-  return normalizeWmsCustomerKey_(canonicalWmsCustomer_(customer)) + "___" + String(dateInfo && dateInfo.key || "");
+function wmsImportEligible_(dateInfo, todayKey) {
+  var key = String(dateInfo && dateInfo.key || "").trim();
+  var floor = String(todayKey || wmsTodayKey_()).trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(key) && key >= WMS_TRUCKING_IMPORT_MIN_DATE && key >= floor;
+}
+
+function normalizeWmsDestinationHint_(value) {
+  var text = String(value || "").trim();
+  if (!text || /^(?:YES|NO|TRUE|FALSE|Y|N)$/i.test(text)) return "";
+  if (/\b(?:OOS|ADD[ -]?ON|FREE SAMPLE|TOTAL|SKU)\b|A-SKU|총량|재고|문제/i.test(text)) return "";
+  if (/^IN\d{6,}$/i.test(text)) return "";
+  if (/^[A-Z0-9._-]{3,25}$/i.test(text) && text.indexOf(" ") === -1) return "";
+  if (!/[A-Za-z가-힣]{3}/.test(text)) return "";
+  return normalizeWmsCustomerKey_(text);
+}
+
+function wmsDestinationHint_(row, map) {
+  var fields = ["REMARKS (WAREHOUSE)", "REMARKS (SALES)", "SKU 2", "SKU 1"];
+  for (var i = 0; i < fields.length; i++) {
+    var index = map[fields[i]];
+    if (index === undefined) continue;
+    var hint = normalizeWmsDestinationHint_(row[index]);
+    if (hint) return hint;
+  }
+  return "";
+}
+
+function wmsExactGroupKey_(customer, dateInfo, destinationHint) {
+  var key = normalizeWmsCustomerKey_(canonicalWmsCustomer_(customer)) + "___" + String(dateInfo && dateInfo.key || "");
+  var destination = normalizeWmsCustomerKey_(destinationHint || "");
+  return destination ? key + "___DEST_" + destination : key;
+}
+
+function shouldWmsOverwriteShipDate_(currentRow, map) {
+  var status = map["STATUS"] !== undefined ? String(currentRow[map["STATUS"]] || "").trim().toUpperCase() : "";
+  var pro = map["PRO#"] !== undefined ? String(currentRow[map["PRO#"]] || "").trim() : "";
+  if (status === "ROUTED/BOOKED" || pro) return false;
+  return true;
 }
 
 function chooseWmsTargetRow_(groupKey, invoices, rows) {
@@ -37,7 +68,6 @@ function chooseWmsTargetRow_(groupKey, invoices, rows) {
 
   for (var i = 0; i < rows.length; i++) {
     var row = rows[i];
-    if (row.key !== groupKey) continue;
     for (var j = 0; j < row.invoices.length; j++) {
       if (wanted.has(String(row.invoices[j] || "").trim().toUpperCase())) return row;
     }
@@ -84,6 +114,7 @@ function scanAndImportWmsTruckingOrdersV2() {
     var groups = new Map();
     var sourceByInvoice = new Map();
     var skippedBeforeCutoff = 0;
+    var importTodayKey = wmsTodayKey_();
 
     for (var r = sourceHeader.rowIndex + 1; r < sourceData.length; r++) {
       var row = sourceData[r];
@@ -97,15 +128,17 @@ function scanAndImportWmsTruckingOrdersV2() {
 
       var customer = canonicalWmsCustomer_(rawCustomer);
       var dateInfo = normalizeWmsShipDate_(rawShipDate);
-      if (!wmsImportEligible_(dateInfo)) {
+      if (!wmsImportEligible_(dateInfo, importTodayKey)) {
         skippedBeforeCutoff++;
         continue;
       }
 
-      var key = wmsExactGroupKey_(customer, dateInfo);
+      var destinationHint = wmsDestinationHint_(row, sourceMap);
+      var key = wmsExactGroupKey_(customer, dateInfo, destinationHint);
       sourceByInvoice.set(invoice, {
         customer: customer,
         dateInfo: dateInfo,
+        destinationHint: destinationHint,
         sourceRow: r + 1,
         key: key
       });
@@ -115,6 +148,7 @@ function scanAndImportWmsTruckingOrdersV2() {
           key: key,
           customer: customer,
           shipDate: dateInfo.display,
+          destinationHint: destinationHint,
           invoices: [],
           amounts: [],
           sourceRows: []
@@ -190,16 +224,19 @@ function scanAndImportWmsTruckingOrdersV2() {
         var changed = false;
 
         if (WMS_TRUCKING_DRY_RUN) {
+          var mayUpdateShipDate = shouldWmsOverwriteShipDate_(current, targetMap);
           changed = wouldChangeMappedValue_(current, targetMap, "CUSTOMER", group.customer) ||
             wouldChangeMappedValue_(current, targetMap, "INVOICE NO.", mergedInvoices.join("\n")) ||
-            wouldChangeMappedValue_(current, targetMap, "SHIP DATE", group.shipDate) ||
+            (mayUpdateShipDate && wouldChangeMappedValue_(current, targetMap, "SHIP DATE", group.shipDate)) ||
             (totalAmount > 0 && targetMap["VALUE"] !== undefined && !current[targetMap["VALUE"]]) ||
             (targetMap["STATUS"] !== undefined && !current[targetMap["STATUS"]]);
           logWmsDryRun_("update", match.rowNumber, group, mergedInvoices, totalAmount);
         } else {
           changed = writeMappedValue_(targetSheet, match.rowNumber, targetMap, "CUSTOMER", group.customer) || changed;
           changed = writeMappedValue_(targetSheet, match.rowNumber, targetMap, "INVOICE NO.", mergedInvoices.join("\n")) || changed;
-          changed = writeMappedValue_(targetSheet, match.rowNumber, targetMap, "SHIP DATE", group.shipDate) || changed;
+          if (shouldWmsOverwriteShipDate_(current, targetMap)) {
+            changed = writeMappedValue_(targetSheet, match.rowNumber, targetMap, "SHIP DATE", group.shipDate) || changed;
+          }
 
           if (totalAmount > 0 && targetMap["VALUE"] !== undefined && !current[targetMap["VALUE"]]) {
             targetSheet.getRange(match.rowNumber, targetMap["VALUE"] + 1).setValue(totalAmount);

@@ -14,7 +14,7 @@
 
 /* eslint-disable no-unused-vars */
 
-var GMAIL_PIPELINE_V2_VERSION = "2026-08-12-v4-status-retry-stabilization";
+var GMAIL_PIPELINE_V2_VERSION = "2026-08-31-v5-trigger-boundary-recovery";
 var GMAIL_V2_LOOKBACK_DAYS = 4;
 var GMAIL_V2_MAX_THREADS = 12;
 var GMAIL_V2_RUNTIME_BUDGET_MS = 210000;
@@ -25,9 +25,13 @@ var GMAIL_V2_MAX_TRANSIENT_ATTEMPTS = 4;
 
 function processLogisticsEmailsV2() {
   var lock = LockService.getScriptLock();
-  if (!lock.tryLock(5000)) return { skipped: "locked" };
+  if (!lock.tryLock(5000)) {
+    recordTriggerLockSkip_("processLogisticsEmailsV2");
+    return { skipped: "locked" };
+  }
   var runStarted = Date.now();
   try {
+    ensureCanonicalTriggersForVersion_();
     var labels = gmailV2Labels_();
     var queries = gmailV2Queries_();
     var threadsById = {};
@@ -39,7 +43,8 @@ function processLogisticsEmailsV2() {
 
     var stats = {
       threads: 0, messages: 0, inserted: 0, updated: 0, noop: 0,
-      pending: 0, errors: 0, deferredThreads: 0, retryDeferred: 0, budgetHit: false
+      pending: 0, errors: 0, deferredThreads: 0, retryDeferred: 0, budgetHit: false,
+      priorLockSkips: consumeTriggerLockSkips_("processLogisticsEmailsV2")
     };
     var threadIds = Object.keys(threadsById).slice(0, GMAIL_V2_MAX_THREADS);
     for (var ti = 0; ti < threadIds.length; ti++) {
@@ -751,13 +756,27 @@ function childFolderV2_(parent, name) {
   return it.hasNext() ? it.next() : parent.createFolder(name);
 }
 
+function chooseInboundInsertRowV2_(data, schedulingIndex) {
+  if (schedulingIndex < 0) throw new Error("IMPORTS SCHEDULING marker is missing; cannot safely insert an import shipment.");
+  var lastOccupiedIndex = 1;
+  for (var i = 2; i < schedulingIndex; i++) {
+    var occupied = (data[i] || []).some(function (cell) { return String(cell || "").trim() !== ""; });
+    if (occupied) lastOccupiedIndex = i;
+  }
+  var markerRow = schedulingIndex + 1;
+  var candidateRow = lastOccupiedIndex + 2;
+  if (candidateRow < markerRow) return { row: candidateRow, insertBeforeMarker: false };
+  return { row: markerRow, insertBeforeMarker: true };
+}
+
 function upsertInboundEmailV2_(record, allowInsert) {
   var ss = SpreadsheetApp.openById(GMAIL_PIPELINE.masterId);
   var sheet = ss.getSheetByName("IMPORTS");
   if (!sheet) throw new Error("IMPORTS sheet not found.");
   var data = sheet.getDataRange().getDisplayValues();
   var schedulingIndex = data.findIndex(function (row) { return String(row[0] || "").trim().toUpperCase() === "SCHEDULING"; });
-  var end = schedulingIndex === -1 ? data.length : schedulingIndex;
+  if (schedulingIndex < 0) throw new Error("IMPORTS SCHEDULING marker is missing; ingestion stopped before the small-parcel section.");
+  var end = schedulingIndex;
   var candidates = [];
   for (var r = 2; r < end; r++) {
     var score = inboundMatchScoreV2_(data[r], record);
@@ -770,9 +789,9 @@ function upsertInboundEmailV2_(record, allowInsert) {
   }
   if (!allowInsert) return { matched: false, action: "noop" };
   if (!record.eta || !(record.shipmentNo || record.container || record.mbl || record.hbl)) return { matched: false, action: "noop" };
-  var markerRow = schedulingIndex === -1 ? sheet.getLastRow() + 1 : schedulingIndex + 1;
-  sheet.insertRowBefore(markerRow);
-  var targetRow = markerRow;
+  var insertPlan = chooseInboundInsertRowV2_(data, schedulingIndex);
+  if (insertPlan.insertBeforeMarker) sheet.insertRowBefore(insertPlan.row);
+  var targetRow = insertPlan.row;
   if (targetRow > 3) sheet.getRange(targetRow - 1, 1, 1, 28).copyTo(sheet.getRange(targetRow, 1, 1, 28), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
   var values = new Array(28).fill("");
   values[0] = record.shipmentNo || "EMAIL IMPORT";
