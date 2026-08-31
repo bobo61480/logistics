@@ -2,8 +2,8 @@ import { carrierConfigured, trackParcel, type Carrier, type TrackingResult } fro
 
 const MAX_REQUESTS = 25;
 const MAX_BODY_BYTES = 4_096;
-const CACHE_TTL_SECONDS = 15 * 60; // last-known location doesn't need to be fetched every pageview
-const CARRIERS: Carrier[] = ["ups", "fedex", "usps"];
+const CACHE_TTL_SECONDS = 15 * 60;
+const CARRIERS: Carrier[] = ["ups", "fedex", "usps", "dhl"];
 
 function json(value: unknown, status = 200, extraHeaders?: HeadersInit) {
   return Response.json(value, { status, headers: { "cache-control": "no-store", ...extraHeaders } });
@@ -52,21 +52,27 @@ export async function handleTrackingCommand(request: Request, env: Env) {
   const cache = (caches as unknown as { default: Cache }).default;
   const results: TrackingResult[] = await Promise.all(
     valid.map(async ({ carrier, number }) => {
-      const cacheKey = cacheKeyFor(request, carrier, number);
+      const normalizedNumber = number.trim();
+      const cacheKey = cacheKeyFor(request, carrier, normalizedNumber);
       const cached = await cache.match(cacheKey);
       if (cached) return (await cached.json()) as TrackingResult;
 
-      // Rate-limit per external carrier call, not per HTTP request — a batch of up to
-      // MAX_REQUESTS numbers must not let a caller buy MAX_REQUESTS carrier lookups for
-      // the price of one rate-limit unit.
       const rateLimit = await env.STATUS_WRITE_RATE_LIMITER.limit({ key: `tracking:${clientIp}` });
       if (!rateLimit.success) {
-        return { carrier, number, ok: false, configured: true, error: "Tracking rate limit exceeded. Try again in a minute." };
+        return {
+          carrier,
+          number: normalizedNumber,
+          ok: false,
+          configured: true,
+          error: "Tracking rate limit exceeded. Try again in a minute.",
+        };
       }
 
-      const result = await trackParcel(env, carrier, number);
+      const result = await trackParcel(env, carrier, normalizedNumber);
       if (result.ok) {
-        const response = Response.json(result, { headers: { "cache-control": `public, max-age=${CACHE_TTL_SECONDS}` } });
+        const response = Response.json(result, {
+          headers: { "cache-control": `public, max-age=${CACHE_TTL_SECONDS}` },
+        });
         await cache.put(cacheKey, response.clone());
       }
       return result;
@@ -76,6 +82,8 @@ export async function handleTrackingCommand(request: Request, env: Env) {
   return json({
     ok: true,
     results,
-    configured: Object.fromEntries(CARRIERS.map((carrier) => [carrier, carrierConfigured(env, carrier)])),
+    configured: Object.fromEntries(
+      CARRIERS.map((carrier) => [carrier, carrierConfigured(env, carrier)]),
+    ),
   });
 }
