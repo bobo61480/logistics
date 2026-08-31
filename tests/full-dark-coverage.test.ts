@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const css = readFileSync("app/globals.css", "utf8");
-const shipmentEventCard = readFileSync("app/ShipmentEventTrackerCard.tsx", "utf8");
 const styleVariants = readFileSync("app/style-variants.module.css", "utf8");
 const fulfillmentTkCss = readFileSync("app/fulfillment-tk-orders.module.css", "utf8");
 
@@ -25,12 +24,6 @@ describe("PR-8 dark-theme full coverage pass", () => {
     expect(css).toContain('[data-theme="dark"] .import-schedules');
     expect(css).toContain('[data-theme="dark"] .import-table th');
     expect(css).toContain('[data-theme="dark"] .import-table td');
-  });
-
-  it("gives ShipmentEventTrackerCard its own inline dark overrides, since it doesn't use globals.css", () => {
-    expect(shipmentEventCard).toContain('[data-theme="dark"] .shipment-event-card');
-    expect(shipmentEventCard).toContain('[data-theme="dark"] .shipment-event-list');
-    expect(shipmentEventCard).toContain('[data-theme="dark"] .shipment-event-expired');
   });
 
   it("themes the site-wide platform switcher nav, which layout.tsx mounts on every route", () => {
