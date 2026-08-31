@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 type Helpers = {
   wmsImportEligible_: (dateInfo: { key: string }, todayKey?: string) => boolean;
+  wmsInvoiceSignatureFromKey_: (groupKey: string, invoice: string) => string;
   chooseWmsTargetRow_: (
     groupKey: string,
     invoices: string[],
@@ -32,7 +33,7 @@ function loadHelpers(): Helpers {
   const source = readFileSync("google-apps-script/WmsTruckingSyncV2.gs", "utf8");
   const context = vm.createContext({ Map, Set, console });
   vm.runInContext(
-    `${source}\n;globalThis.__helpers = {wmsImportEligible_,chooseWmsTargetRow_,filterWmsInvoicesForGroup_};`,
+    `${source}\n;globalThis.__helpers = {wmsImportEligible_,wmsInvoiceSignatureFromKey_,chooseWmsTargetRow_,filterWmsInvoicesForGroup_};`,
     context,
   );
   return context.__helpers as Helpers;
@@ -46,6 +47,28 @@ describe("WMS trucking importer v2 safeguards", () => {
     expect(helpers.wmsImportEligible_({ key: "2026-08-01" }, "2026-08-01")).toBe(true);
     expect(helpers.wmsImportEligible_({ key: "2026-08-11" }, "2026-08-01")).toBe(true);
     expect(helpers.wmsImportEligible_({ key: "2026-08-10" }, "2026-08-11")).toBe(false);
+  });
+
+  it("normalizes destination-specific WMS keys to an invoice idempotency signature", () => {
+    const sourceSignature = helpers.wmsInvoiceSignatureFromKey_(
+      "YIXI TRADING LLC DBA FANLOLI BEAUTY___2026-09-04___DEST_CHINATOWN",
+      "in00471237",
+    );
+    const targetSignature = helpers.wmsInvoiceSignatureFromKey_(
+      "YIXI TRADING LLC DBA FANLOLI BEAUTY___2026-09-04",
+      "IN00471237",
+    );
+
+    expect(sourceSignature).toBe(
+      "YIXI TRADING LLC DBA FANLOLI BEAUTY___2026-09-04___INV_IN00471237",
+    );
+    expect(targetSignature).toBe(sourceSignature);
+    expect(
+      helpers.wmsInvoiceSignatureFromKey_(
+        "YIXI TRADING LLC DBA FANLOLI BEAUTY___2026-09-04___DEST_JAPAN CENTER",
+        "IN00471235",
+      ),
+    ).not.toBe(sourceSignature);
   });
 
   it("does not reuse a row just because an invoice was previously merged into a nearby date", () => {
