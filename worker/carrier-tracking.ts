@@ -1,21 +1,20 @@
 /**
- * Server-side UPS / FedEx / USPS tracking integrations.
+ * Server-side parcel tracking integrations.
  *
- * Field names and endpoints verified against official docs (Aug 2026):
- * - UPS:   activity[0].location.address.{city,stateProvince,countryCode}
- * - FedEx: scanEvents[0].scanLocation.{city,stateOrProvinceCode,countryCode}
- *          (NOT latestStatusDetail.scanLocation — that's frequently empty)
- * - USPS:  trackingEvents[0].{eventCity,eventState,eventCountry}
- *          (legacy XML Web Tools API was retired Jan 25 2026 — v3 REST only)
+ * Provider contracts:
+ * - UPS: OAuth client credentials + Tracking v1 details endpoint.
+ * - FedEx: OAuth client credentials + Track API.
+ * - USPS: OAuth v3 + Tracking v3 REST API.
+ * - DHL: Shipment Tracking - Unified v1.5.8 using DHL-API-Key.
  *
- * None of the three return coordinates; geocode(city, state, country) in
- * ./geo converts the returned place name to an approximate lat/lng for the
- * map. Each carrier degrades to `configured:false` when its secrets are
- * unset, rather than throwing — the tracking panel shows "not connected"
- * for that carrier instead of erroring the whole map.
+ * Carrier responses are normalized here before they reach the browser. None of
+ * these providers return reliable GPS coordinates in the tracking response;
+ * the UI geocodes the last carrier-reported city/state/country as an
+ * approximate map position. Every provider degrades to configured:false when
+ * its secret is absent instead of failing the whole tracking panel.
  */
 
-export type Carrier = "ups" | "fedex" | "usps";
+export type Carrier = "ups" | "fedex" | "usps" | "dhl";
 
 export type TrackingResult = {
   carrier: Carrier;
@@ -32,18 +31,21 @@ export type TrackingResult = {
   error?: string;
 };
 
-// Per-isolate token cache. Best-effort — Workers isolates recycle
-// periodically, at which point a fresh token is fetched. This is fine at
-// tracking-lookup volumes (a handful of parcels, refreshed occasionally);
-// it avoids provisioning a KV namespace just to cache a token.
 const tokenCache = new Map<Carrier, { token: string; expiresAt: number }>();
 
-async function getCachedToken(carrier: Carrier, fetchToken: () => Promise<{ token: string; expiresInSeconds: number }>) {
+async function getCachedToken(
+  carrier: Carrier,
+  fetchToken: () => Promise<{ token: string; expiresInSeconds: number }>,
+) {
   const cached = tokenCache.get(carrier);
   if (cached && cached.expiresAt > Date.now() + 30_000) return cached.token;
   const { token, expiresInSeconds } = await fetchToken();
   tokenCache.set(carrier, { token, expiresAt: Date.now() + expiresInSeconds * 1000 });
   return token;
+}
+
+function text(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 // ---------------------------------------------------------------- UPS ----
@@ -64,20 +66,47 @@ async function upsToken(env: Env): Promise<string> {
   });
 }
 
+function upsWarningMessage(shipment: any) {
+  const warnings = Array.isArray(shipment?.warnings) ? shipment.warnings : [];
+  const messages = warnings
+    .map((warning: any) =>
+      text(warning?.message) ||
+      text(warning?.description) ||
+      text(warning?.code) ||
+      text(warning),
+    )
+    .filter(Boolean);
+  if (!messages.length) return "";
+
+  const joined = messages.join("; ");
+  // UPS can return HTTP 200 while the shipment body says the tracking number
+  // was not found. Treat that as an explicit lookup error rather than the much
+  // weaker "No tracking activity yet" state.
+  if (/Tracking Information Not Found/i.test(joined)) return joined;
+  return joined;
+}
+
 async function trackUps(env: Env, number: string): Promise<TrackingResult> {
   const base: TrackingResult = { carrier: "ups", number, ok: false, configured: true };
   try {
     const token = await upsToken(env);
-    const response = await fetch(`https://onlinetools.ups.com/api/track/v1/details/${encodeURIComponent(number)}`, {
-      headers: {
-        authorization: `Bearer ${token}`,
-        transId: crypto.randomUUID(),
-        transactionSrc: "stylekorean-logistics",
+    const response = await fetch(
+      `https://onlinetools.ups.com/api/track/v1/details/${encodeURIComponent(number)}`,
+      {
+        headers: {
+          authorization: `Bearer ${token}`,
+          transId: crypto.randomUUID(),
+          transactionSrc: "stylekorean-logistics",
+        },
       },
-    });
+    );
     if (!response.ok) return { ...base, error: `UPS track failed (${response.status})` };
     const data = (await response.json()) as any;
-    const pkg = data?.trackResponse?.shipment?.[0]?.package?.[0];
+    const shipment = data?.trackResponse?.shipment?.[0];
+    const warning = upsWarningMessage(shipment);
+    if (warning) return { ...base, error: `UPS: ${warning}` };
+
+    const pkg = shipment?.package?.[0];
     const activity = pkg?.activity?.[0];
     const address = activity?.location?.address;
     if (!activity) return { ...base, error: "No tracking activity yet" };
@@ -85,12 +114,16 @@ async function trackUps(env: Env, number: string): Promise<TrackingResult> {
       ...base,
       ok: true,
       status: pkg?.currentStatus?.description,
-      statusCategory: pkg?.currentStatus?.simplifiedTextDescription ?? pkg?.currentStatus?.type,
+      statusCategory:
+        pkg?.currentStatus?.simplifiedTextDescription ?? pkg?.currentStatus?.type,
       city: address?.city,
       state: address?.stateProvince,
       postal: address?.postalCode,
       country: address?.countryCode,
-      timestamp: activity?.date && activity?.time ? `${activity.date}T${activity.time}` : activity?.date,
+      timestamp:
+        activity?.date && activity?.time
+          ? `${activity.date}T${activity.time}`
+          : activity?.date,
     };
   } catch (error) {
     return { ...base, error: error instanceof Error ? error.message : "UPS lookup failed" };
@@ -131,16 +164,18 @@ async function trackFedex(env: Env, number: string): Promise<TrackingResult> {
     if (!response.ok) return { ...base, error: `FedEx track failed (${response.status})` };
     const data = (await response.json()) as any;
     const trackResult = data?.output?.completeTrackResults?.[0]?.trackResults?.[0];
-    // latestStatusDetail.scanLocation is frequently empty; scanEvents[0] is
-    // the reliable most-recent-first source for the last known location.
     const scanEvent = trackResult?.scanEvents?.[0];
     const location = scanEvent?.scanLocation;
     if (!scanEvent) return { ...base, error: "No scan events yet" };
     return {
       ...base,
       ok: true,
-      status: trackResult?.latestStatusDetail?.statusByLocale ?? trackResult?.latestStatusDetail?.description,
-      statusCategory: trackResult?.latestStatusDetail?.derivedCode ?? trackResult?.latestStatusDetail?.code,
+      status:
+        trackResult?.latestStatusDetail?.statusByLocale ??
+        trackResult?.latestStatusDetail?.description,
+      statusCategory:
+        trackResult?.latestStatusDetail?.derivedCode ??
+        trackResult?.latestStatusDetail?.code,
       city: location?.city,
       state: location?.stateOrProvinceCode,
       postal: location?.postalCode,
@@ -181,10 +216,12 @@ async function trackUsps(env: Env, number: string): Promise<TrackingResult> {
     );
     if (!response.ok) return { ...base, error: `USPS track failed (${response.status})` };
     const data = (await response.json()) as any;
-    // USPS doesn't explicitly guarantee event order in the docs; sort
-    // defensively by timestamp descending rather than trusting index 0.
     const events = Array.isArray(data?.trackingEvents) ? [...data.trackingEvents] : [];
-    events.sort((a, b) => new Date(b?.eventTimestamp ?? 0).getTime() - new Date(a?.eventTimestamp ?? 0).getTime());
+    events.sort(
+      (a, b) =>
+        new Date(b?.eventTimestamp ?? 0).getTime() -
+        new Date(a?.eventTimestamp ?? 0).getTime(),
+    );
     const latest = events[0];
     if (!latest) return { ...base, error: "No tracking events yet" };
     return {
@@ -203,19 +240,85 @@ async function trackUsps(env: Env, number: string): Promise<TrackingResult> {
   }
 }
 
+// ---------------------------------------------------------------- DHL ----
+
+async function trackDhl(env: Env, number: string): Promise<TrackingResult> {
+  const base: TrackingResult = { carrier: "dhl", number, ok: false, configured: true };
+  try {
+    const url = new URL("https://api-eu.dhl.com/track/shipments");
+    url.searchParams.set("trackingNumber", number);
+    const response = await fetch(url, {
+      headers: {
+        accept: "application/json",
+        "DHL-API-Key": env.DHL_API_KEY ?? "",
+      },
+    });
+    if (!response.ok) return { ...base, error: `DHL track failed (${response.status})` };
+
+    const data = (await response.json()) as any;
+    const shipment = data?.shipments?.[0];
+    if (!shipment) return { ...base, error: "DHL shipment not found" };
+
+    const status = shipment?.status;
+    const events = Array.isArray(shipment?.events) ? [...shipment.events] : [];
+    events.sort(
+      (a, b) =>
+        new Date(b?.timestamp ?? 0).getTime() - new Date(a?.timestamp ?? 0).getTime(),
+    );
+    const latest = events[0];
+    const location = status?.location?.address ?? latest?.location?.address ?? {};
+    const statusCode = text(status?.statusCode) || text(latest?.statusCode);
+    const description =
+      text(status?.statusDetailed) ||
+      text(status?.status) ||
+      text(status?.description) ||
+      text(latest?.statusDetailed) ||
+      text(latest?.status) ||
+      text(latest?.description) ||
+      statusCode;
+
+    if (!statusCode && !latest) return { ...base, error: "No DHL tracking events yet" };
+    return {
+      ...base,
+      ok: true,
+      status: description,
+      statusCategory: statusCode,
+      city: text(location?.addressLocality),
+      state: text(location?.addressRegion),
+      postal: text(location?.postalCode),
+      country: text(location?.countryCode),
+      timestamp: text(status?.timestamp) || text(latest?.timestamp),
+    };
+  } catch (error) {
+    return { ...base, error: error instanceof Error ? error.message : "DHL lookup failed" };
+  }
+}
+
 // ------------------------------------------------------------- shared ----
 
 export function carrierConfigured(env: Env, carrier: Carrier): boolean {
   if (carrier === "ups") return Boolean(env.UPS_CLIENT_ID && env.UPS_CLIENT_SECRET);
   if (carrier === "fedex") return Boolean(env.FEDEX_CLIENT_ID && env.FEDEX_CLIENT_SECRET);
-  return Boolean(env.USPS_CLIENT_ID && env.USPS_CLIENT_SECRET);
+  if (carrier === "usps") return Boolean(env.USPS_CLIENT_ID && env.USPS_CLIENT_SECRET);
+  return Boolean(env.DHL_API_KEY);
 }
 
-export async function trackParcel(env: Env, carrier: Carrier, number: string): Promise<TrackingResult> {
+export async function trackParcel(
+  env: Env,
+  carrier: Carrier,
+  number: string,
+): Promise<TrackingResult> {
   if (!carrierConfigured(env, carrier)) {
-    return { carrier, number, ok: false, configured: false, error: `${carrier.toUpperCase()} tracking is not configured` };
+    return {
+      carrier,
+      number,
+      ok: false,
+      configured: false,
+      error: `${carrier.toUpperCase()} tracking is not configured`,
+    };
   }
   if (carrier === "ups") return trackUps(env, number);
   if (carrier === "fedex") return trackFedex(env, number);
-  return trackUsps(env, number);
+  if (carrier === "usps") return trackUsps(env, number);
+  return trackDhl(env, number);
 }
