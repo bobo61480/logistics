@@ -1,0 +1,35 @@
+name: Apply WMS recovery guardrails
+
+on:
+  push:
+    branches:
+      - fix/gmail-logistics-recovery-20260831
+    paths:
+      - scripts/patch-wms-recovery-guardrails.mjs
+      - .github/workflows/apply-wms-recovery-guardrails.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/gmail-logistics-recovery-20260831
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+      - run: node scripts/patch-wms-recovery-guardrails.mjs
+      - run: |
+          rm scripts/patch-wms-recovery-guardrails.mjs
+          rm .github/workflows/apply-wms-recovery-guardrails.yml
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: tighten WMS recovery matching"
+          git push origin HEAD:fix/gmail-logistics-recovery-20260831
