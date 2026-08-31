@@ -1,0 +1,109 @@
+name: Audit-only surgical source patch
+
+on:
+  push:
+    branches:
+      - audit/production-hardening-20260831
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: audit/production-hardening-20260831
+      - name: Apply exact audited source edits
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          page = Path('app/page.tsx')
+          source = page.read_text()
+
+          old_carrier = '''// The live-map tracking backend only integrates UPS/FedEx/USPS (carrier-tracking.ts) —
+          // DHL and Amazon don't have a server-side lookup, so they're intentionally excluded here.
+          function trackableCarrier(value?: string): "ups" | "fedex" | "usps" | null {
+            const normalized = clean(value).toLowerCase();
+            if (normalized.includes("ups")) return "ups";
+            if (normalized.includes("fedex")) return "fedex";
+            if (normalized.includes("usps")) return "usps";
+            return null;
+          }'''.replace('          ', '')
+          new_carrier = '''// Only carriers with a server-side adapter belong in the live tracking queue.
+          // Amazon remains excluded until the purchased-shipment carrierId is stored with trackingId.
+          function trackableCarrier(value?: string): "ups" | "fedex" | "usps" | "dhl" | null {
+            const normalized = clean(value).toLowerCase();
+            if (normalized.includes("ups")) return "ups";
+            if (normalized.includes("fedex")) return "fedex";
+            if (normalized.includes("usps")) return "usps";
+            if (normalized.includes("dhl")) return "dhl";
+            return null;
+          }'''.replace('          ', '')
+          if old_carrier not in source:
+            raise SystemExit('trackableCarrier source block did not match exactly')
+          source = source.replace(old_carrier, new_carrier, 1)
+
+          old_fallback = '''  } catch (workerError) {
+            // Keep a read-only direct-Sheets fallback so the schedule remains visible
+            // during a Worker routing incident. Status writes still require the Worker.
+            console.warn("Worker snapshot unavailable; falling back to Google Sheets.", workerError);
+            return {
+              ...(await fetchSheetSnapshot()),
+              // The direct-Sheets fallback carries no ingestion feed.
+              gmailIngestion: null,
+              cmsInventory: [],
+              cmsInventoryConfigured: false,
+              connection: {
+                mode: "sheets" as const,
+                storage: "sheets" as const,
+                version: undefined,
+                detail: workerError instanceof Error ? workerError.message : "Worker snapshot unavailable",
+                degradedSources: 0,
+              },
+            };
+          }'''.replace('          ', '')
+          new_fallback = '''  } catch (workerError) {
+            // D1 is the only frontend authority. Do not silently switch the browser to
+            // direct Google Sheets reads during a Worker/D1 incident, because that can
+            // show operators a different state from the database used by writes and APIs.
+            console.error("D1 operational snapshot unavailable.", workerError);
+            throw workerError;
+          }'''.replace('          ', '')
+          if old_fallback not in source:
+            raise SystemExit('direct-Sheets fallback block did not match exactly')
+          source = source.replace(old_fallback, new_fallback, 1)
+          page.write_text(source)
+
+          live_map = Path('app/live-map.tsx')
+          source = live_map.read_text()
+          replacements = {
+            'export type Carrier = "ups" | "fedex" | "usps";': 'export type Carrier = "ups" | "fedex" | "usps" | "dhl";',
+            'setConfigured((current) => current ?? { ups: false, fedex: false, usps: false });': 'setConfigured((current) => current ?? { ups: false, fedex: false, usps: false, dhl: false });',
+            'UPS/FedEx/USPS API credentials aren&apos;t configured': 'UPS/FedEx/USPS/DHL API credentials aren&apos;t configured',
+          }
+          for old, new in replacements.items():
+            if old not in source:
+              raise SystemExit(f'live-map source block did not match exactly: {old}')
+            source = source.replace(old, new, 1)
+          live_map.write_text(source)
+          PY
+
+          git diff --check
+          git diff -- app/page.tsx app/live-map.tsx
+      - name: Commit surgical edits
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "No audited source edits were needed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/page.tsx app/live-map.tsx
+          git commit -m "Apply D1-only frontend and DHL tracking queue [audit-autopatch]"
+          git push origin HEAD:audit/production-hardening-20260831
