@@ -22,15 +22,27 @@ describe("2026-08-31 production audit regressions", () => {
     expect(existsSync("stylekorean")).toBe(false);
   });
 
-  it("supports DHL Unified tracking server-side without exposing its API key", () => {
+  it("keeps D1 as the browser's only operational data authority", () => {
+    const page = read("app/page.tsx");
+    expect(page).toContain('console.error("D1 operational snapshot unavailable."');
+    expect(page).not.toContain("falling back to Google Sheets");
+    expect(page).not.toContain('mode: "sheets" as const');
+    expect(page).not.toContain('storage: "sheets" as const');
+  });
+
+  it("supports DHL Unified tracking server-side and in the browser queue without exposing its API key", () => {
     const command = read("worker/tracking-command.ts");
     const tracking = read("worker/carrier-tracking.ts");
+    const liveMap = read("app/live-map.tsx");
+    const page = read("app/page.tsx");
     const env = read("worker-configuration.d.ts");
 
     expect(command).toContain('"dhl"');
     expect(tracking).toContain('"dhl"');
     expect(tracking).toContain("DHL-API-Key");
     expect(tracking).toContain("api-eu.dhl.com/track/shipments");
+    expect(liveMap).toContain('"dhl"');
+    expect(page).toContain('normalized.includes("dhl")');
     expect(env).toContain("DHL_API_KEY?: string");
   });
 
