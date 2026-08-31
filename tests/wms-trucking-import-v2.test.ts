@@ -3,12 +3,24 @@ import vm from "node:vm";
 import { describe, expect, it } from "vitest";
 
 type Helpers = {
-  wmsImportEligible_: (dateInfo: { key: string }) => boolean;
+  wmsImportEligible_: (dateInfo: { key: string }, todayKey?: string) => boolean;
   chooseWmsTargetRow_: (
     groupKey: string,
     invoices: string[],
-    rows: Array<{ rowNumber: number; key: string; active: boolean; invoices: string[] }>,
-  ) => { rowNumber: number; key: string; active: boolean; invoices: string[] } | null;
+    rows: Array<{
+      rowNumber: number;
+      key: string;
+      active: boolean;
+      invoices: string[];
+      operationallyLocked?: boolean;
+    }>,
+  ) => {
+    rowNumber: number;
+    key: string;
+    active: boolean;
+    invoices: string[];
+    operationallyLocked?: boolean;
+  } | null;
   filterWmsInvoicesForGroup_: (
     invoices: string[],
     groupKey: string,
@@ -29,10 +41,11 @@ function loadHelpers(): Helpers {
 const helpers = loadHelpers();
 
 describe("WMS trucking importer v2 safeguards", () => {
-  it("never imports ship dates before August 2026", () => {
-    expect(helpers.wmsImportEligible_({ key: "2026-07-31" })).toBe(false);
-    expect(helpers.wmsImportEligible_({ key: "2026-08-01" })).toBe(true);
-    expect(helpers.wmsImportEligible_({ key: "2026-08-11" })).toBe(true);
+  it("keeps the historical floor while limiting creation to the supplied operational day", () => {
+    expect(helpers.wmsImportEligible_({ key: "2026-07-31" }, "2026-08-01")).toBe(false);
+    expect(helpers.wmsImportEligible_({ key: "2026-08-01" }, "2026-08-01")).toBe(true);
+    expect(helpers.wmsImportEligible_({ key: "2026-08-11" }, "2026-08-01")).toBe(true);
+    expect(helpers.wmsImportEligible_({ key: "2026-08-10" }, "2026-08-11")).toBe(false);
   });
 
   it("does not reuse a row just because an invoice was previously merged into a nearby date", () => {
@@ -51,6 +64,35 @@ describe("WMS trucking importer v2 safeguards", () => {
     expect(
       helpers.chooseWmsTargetRow_("BEAUTIFYME___2026-08-10", ["IN00463488"], rows)?.rowNumber,
     ).toBe(653);
+  });
+
+  it("can follow a clean single-shipment reschedule without absorbing conflicting invoices", () => {
+    const clean = [
+      {
+        rowNumber: 720,
+        key: "WOOAMI___2026-09-01",
+        active: true,
+        invoices: ["IN00471193"],
+      },
+    ];
+    expect(
+      helpers.chooseWmsTargetRow_("WOOAMI___2026-09-02", ["IN00471193"], clean)?.rowNumber,
+    ).toBe(720);
+  });
+
+  it("returns a routed cross-date identity as locked so the caller can preserve carrier truth", () => {
+    const routed = [
+      {
+        rowNumber: 720,
+        key: "WOOAMI___2026-09-01",
+        active: true,
+        invoices: ["IN00469933", "IN00471193"],
+        operationallyLocked: true,
+      },
+    ];
+    const match = helpers.chooseWmsTargetRow_("WOOAMI___2026-09-02", ["IN00471193"], routed);
+    expect(match?.rowNumber).toBe(720);
+    expect(match?.operationallyLocked).toBe(true);
   });
 
   it("removes source-known invoices that belong to another exact ship-date group", () => {
