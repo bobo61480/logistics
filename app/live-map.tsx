@@ -35,7 +35,7 @@ function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;");
 }
 
-export type Carrier = "ups" | "fedex" | "usps";
+export type Carrier = "ups" | "fedex" | "usps" | "dhl";
 
 export type MilestoneShipment = {
   id: string;
@@ -88,7 +88,7 @@ export function useParcelTracking(trackable: TrackableShipment[]) {
 
   useEffect(() => {
     if (!trackable.length) {
-      setConfigured((current) => current ?? { ups: false, fedex: false, usps: false });
+      setConfigured((current) => current ?? { ups: false, fedex: false, usps: false, dhl: false });
       return;
     }
     let cancelled = false;
@@ -300,7 +300,7 @@ export function LiveMapPanel({
       </div>
       {!anyCarrierConfigured && trackable.length > 0 && (
         <p className="live-map-hint">
-          No carrier tracking connected yet — UPS/FedEx/USPS API credentials aren&apos;t configured, so parcel
+          No carrier tracking connected yet — UPS/FedEx/USPS/DHL API credentials aren&apos;t configured, so parcel
           positions won&apos;t appear. Ocean/air port milestones above still work without them.
         </p>
       )}
