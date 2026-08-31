@@ -1,6 +1,6 @@
 # StyleKorean Logistics Planner — Agent Instructions
 
-**What this is:** A static Next.js app served by a Cloudflare Worker. The Worker reads Google Sheets, exposes the same-origin snapshot/status APIs, serves the static export, and proxies approved status updates to Google Apps Script.
+**What this is:** A static Next.js app served by a Cloudflare Worker. Google Sheets remain the synchronized operational source, while Cloudflare D1 is the exclusive frontend/read-model source. The Worker refreshes and deduplicates approved Sheet/App Script data into D1, exposes same-origin APIs, serves the static export, and coordinates approved status updates across Google Sheets and D1.
 
 Live site: `stylekorean.dpdns.org`
 
@@ -10,7 +10,7 @@ Live site: `stylekorean.dpdns.org`
 npm run typecheck   # TypeScript check — run after any .ts/.tsx change
 npm run build       # Full static export (out/) — catches layout/render errors
 npm run dev         # Local dev server at localhost:3000
-npm test            # Unit tests (vitest) — lib/sales-kpis.ts parsers & KPI math
+npm test            # Unit tests (vitest)
 npm run test:e2e    # Playwright e2e — builds out/ and drives it in Chromium
 ```
 
@@ -18,42 +18,35 @@ Run `typecheck` and `npm test` before every commit. The project uses `"strict": 
 
 ## Tests
 
-- **Unit** (`tests/`, vitest): cover the CSV/date/money parsers and the full
-  `computeLiveKpis` pipeline in `lib/sales-kpis.ts` against fixture workbooks
-  with a frozen clock. Helpers there are exported specifically so tests can
-  reach them.
-- **E2E** (`e2e/`, Playwright): serve the real static export
-  (`e2e/static-server.mjs`) and intercept ALL `docs.google.com` /
-  `script.google.com` traffic with fixtures — tests never touch live
-  workbooks. Covers first render + KPI cards, the status-write round trip
-  (POST payload, confirmation re-read, finished-row removal), and the
-  failure banner. In sandboxes with a pre-installed Chromium, run with
-  `PLAYWRIGHT_CHROMIUM_EXECUTABLE=/opt/pw-browsers/chromium`; CI uses
-  `npx playwright install chromium`.
-- CI: `.github/workflows/ci-pr.yml` runs unit tests, type checking, and the
-  production build on pull requests. `.github/workflows/deploy-cloudflare.yml`
-  repeats those checks before the canonical production deploy.
+- **Unit** (`tests/`, vitest): cover domain/status rules, source normalization, deduplication, KPI math, Worker routing, carrier adapters, and production hardening.
+- **E2E** (`e2e/`, Playwright): serve the real static export (`e2e/static-server.mjs`) and intercept external source traffic with fixtures. Tests never mutate live workbooks.
+- CI: `.github/workflows/ci-pr.yml` runs unit tests, type checking, and the production build on pull requests. `.github/workflows/deploy-cloudflare.yml` repeats those checks before the canonical production deploy and verifies the live custom domain/D1 APIs afterward.
 
 ## Architecture
 
 - **`output: "export"`** — the UI is a static export. Cloudflare handles server-side API routes and assets; do not add Next.js API routes.
-- Primary data path: browser → same-origin Worker snapshot API → Google Sheets. The browser has a read-only direct-Sheets fallback for routing incidents.
-- Status writes: browser → same-origin Worker status API → approved Apps Script deployment. The canonical deployment URL is configured once in `wrangler.toml`.
-- Auto-refresh: every 30 minutes (`AUTO_REFRESH_MS`).
+- **Frontend authority:** browser → same-origin Worker snapshot API → Cloudflare D1. The browser must never bypass D1 by reading Google Sheets as an operational fallback.
+- **Source refresh:** Worker → approved Apps Script/Google Sheets sources → normalization/deduplication → D1. During a short source outage, serve the last good D1 snapshot with an explicit stale marker rather than changing data authority.
+- **Status writes:** browser → same-origin Worker status API → Google Sheets → confirmed D1 update. A successful response means both stores were reconciled; do not add a D1-only or Sheet-only success path.
+- **Tracking:** carrier credentials remain server-side. UPS, FedEx, USPS, and DHL Unified are supported adapters. Amazon Shipping tracking is not live until purchased-shipment `trackingId` and required `carrierId` are stored together.
+- **Siliconii CMS:** only approved reduced inventory projections may enter the public snapshot. Do not expose raw CMS outbound/order records without an authenticated surface and an explicit allowed-field contract.
+- Auto-refresh: every 30 minutes (`AUTO_REFRESH_MS`), with D1 refresh handled independently by the Worker/cron.
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `app/page.tsx` | Main UI — schedule view, filters, KPI panels, status editor |
-| `app/inventory-panels.tsx` | Reads `SKW_Inbound` and `SKW_Stock` tabs via gviz CSV |
-| `lib/sales-kpis.ts` | Client-side CSV parser for KPI data |
-| `app/inbound-pallets.ts` | Static SKU→pallet mapping (from packing list spreadsheets) |
-| `app/inbound-links.ts` | Packing list link lookup table |
-| `app/inbound-invoice-links.ts` | Invoice link lookup table |
-| `google-apps-script/Code.gs` | Apps Script bound to LOGISTICS MASTER 2026; handles `doPost` |
-| `scripts/` | Standalone `.mjs` analysis scripts — not part of the Next.js build |
-| `archive/legacy-static-site/` | Old static site — reference only, not live code |
+| `app/page.tsx` | Main UI — D1-backed schedules, filters, KPI panels, status editor |
+| `app/live-map.tsx` | Shared carrier tracking poll + shipment map |
+| `app/inventory-reconciliation-card.tsx` | Warehouse vs Siliconii inventory comparison |
+| `worker/index.ts` | D1 snapshot/health/reconciliation router and scheduled refresh |
+| `worker/sources.ts` | Server-side source acquisition and normalization |
+| `worker/status-command.ts` | Strict Google Sheets + D1 status write path |
+| `worker/carrier-tracking.ts` | UPS/FedEx/USPS/DHL provider adapters |
+| `worker/cms-inventory.ts` | Restricted Siliconii inventory projection |
+| `lib/sales-kpis.ts` | KPI parsing and calculation |
+| `google-apps-script/Code.gs` | Apps Script bound to LOGISTICS MASTER 2026; handles approved operations |
+| `archive/legacy-static-site/` | Historical reference only; never deploy from here |
 
 ## Google Sheets IDs
 
@@ -63,7 +56,7 @@ Run `typecheck` and `npm test` before every commit. The project uses `"strict": 
 | Nationals | `12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8` |
 | WMS/Sales | `14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I` |
 
-Tabs written by Apps Script: `WH Trucking Request`, `B2B/E-COM TRUCKING`, `TRANSFERS`, `ULTA`, `IHERB`, `IMPORTS`, `NATIONAL ORDER PROGRESS`, `Outbound Shipping Schedule`, `TJX/ROSS`, `TRUCKING` (the customer master — written live by `CustomerLookup.gs`'s per-edit lookup/create and `CustomerBackfill.gs`'s daily reconciliation, both gated by their own `_ENABLED`/`_DRY_RUN` flags).
+Tabs written by Apps Script include `WH Trucking Request`, `B2B/E-COM TRUCKING`, `TRANSFERS`, `ULTA`, `IHERB`, `IMPORTS`, `NATIONAL ORDER PROGRESS`, `Outbound Shipping Schedule`, `TJX/ROSS`, and `TRUCKING`. Preserve source-row identity for writes and check canonical keys before appending.
 
 ## Status Values
 
@@ -79,15 +72,18 @@ GitHub Pages is not a production target. Keep the repository's Pages feature dis
 
 ## Common Pitfalls
 
+- Do not create backup/copy sheets, nested repository copies, parallel data stores, or duplicate event feeds. Use version history, audit logs, and deterministic deduplication instead.
 - Update `APPS_SCRIPT_WRITE_URL` in `wrangler.toml` only if the Apps Script deployment ID is intentionally replaced. Normal clasp deployments update the existing ID.
-- Do **not** add `export const runtime = "edge"` or any server-side constructs — `output: "export"` will break the build.
+- Do **not** add `export const runtime = "edge"` or other server-side Next.js constructs — `output: "export"` will break the build.
 - Do not add a Pages `CNAME`; `wrangler.toml` is the production hostname source of truth.
-- `archive/legacy-static-site/` contains the old `app.js`, `index.html`, etc. Do not edit these — they are not deployed.
-- `inbound-pallets.ts` is manually maintained from packing list spreadsheets. When new shipments arrive, pallet data must be added here by hand.
+- Do not reintroduce browser direct-Sheets fallback. D1 is the frontend authority even during source outages.
+- Do not treat carrier proof-of-delivery/photo fields alone as delivery confirmation; use authoritative provider status/events.
+- Do not send arbitrary Amazon `TBA...` values to Shipping v2. Its tracking contract requires the purchased shipment's matching `carrierId`.
+- `archive/legacy-static-site/` is reference-only.
 
 ## Migration Notes
 
-See [CANONICAL_NEXTJS_MIGRATION.md](./CANONICAL_NEXTJS_MIGRATION.md) for the history of migrating from the legacy static site to this Next.js app.
+See [CANONICAL_NEXTJS_MIGRATION.md](./CANONICAL_NEXTJS_MIGRATION.md) for migration history. Historical plans may describe superseded architectures; current runtime code, tests, this file, and production verification take precedence.
 
 <!-- BEGIN:nextjs-agent-rules -->
 
