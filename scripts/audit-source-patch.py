@@ -1,0 +1,63 @@
+from pathlib import Path
+import re
+
+page = Path("app/page.tsx")
+source = page.read_text()
+
+old_carrier = '''// The live-map tracking backend only integrates UPS/FedEx/USPS (carrier-tracking.ts) —
+// DHL and Amazon don't have a server-side lookup, so they're intentionally excluded here.
+function trackableCarrier(value?: string): "ups" | "fedex" | "usps" | null {
+  const normalized = clean(value).toLowerCase();
+  if (normalized.includes("ups")) return "ups";
+  if (normalized.includes("fedex")) return "fedex";
+  if (normalized.includes("usps")) return "usps";
+  return null;
+}'''
+new_carrier = '''// Only carriers with a server-side adapter belong in the live tracking queue.
+// Amazon remains excluded until the purchased-shipment carrierId is stored with trackingId.
+function trackableCarrier(value?: string): "ups" | "fedex" | "usps" | "dhl" | null {
+  const normalized = clean(value).toLowerCase();
+  if (normalized.includes("ups")) return "ups";
+  if (normalized.includes("fedex")) return "fedex";
+  if (normalized.includes("usps")) return "usps";
+  if (normalized.includes("dhl")) return "dhl";
+  return null;
+}'''
+if old_carrier not in source:
+    raise SystemExit("trackableCarrier source block did not match exactly")
+source = source.replace(old_carrier, new_carrier, 1)
+
+fallback_pattern = re.compile(
+    r'  \} catch \(workerError\) \{\n'
+    r'    // Keep a read-only direct-Sheets fallback so the schedule remains visible\n'
+    r'    // during a Worker routing incident\. Status writes still require the Worker\.\n'
+    r'[\s\S]*?'
+    r'\n  \}\n\}\n\ntype ConnectionState'
+)
+fallback_replacement = '''  } catch (workerError) {
+    // D1 is the only frontend authority. Do not silently switch the browser to
+    // direct Google Sheets reads during a Worker/D1 incident, because that can
+    // show operators a different state from the database used by writes and APIs.
+    console.error("D1 operational snapshot unavailable.", workerError);
+    throw workerError;
+  }
+}
+
+type ConnectionState'''
+source, count = fallback_pattern.subn(fallback_replacement, source, count=1)
+if count != 1:
+    raise SystemExit(f"direct-Sheets fallback replacement count was {count}, expected 1")
+page.write_text(source)
+
+live_map = Path("app/live-map.tsx")
+source = live_map.read_text()
+replacements = {
+    'export type Carrier = "ups" | "fedex" | "usps";': 'export type Carrier = "ups" | "fedex" | "usps" | "dhl";',
+    'setConfigured((current) => current ?? { ups: false, fedex: false, usps: false });': 'setConfigured((current) => current ?? { ups: false, fedex: false, usps: false, dhl: false });',
+    'UPS/FedEx/USPS API credentials aren&apos;t configured': 'UPS/FedEx/USPS/DHL API credentials aren&apos;t configured',
+}
+for old, new in replacements.items():
+    if old not in source:
+        raise SystemExit(f"live-map source block did not match exactly: {old}")
+    source = source.replace(old, new, 1)
+live_map.write_text(source)
