@@ -3,8 +3,8 @@
  *
  * Safeguards:
  *  - never imports source ship dates before 2026-08-01
- *  - groups only by canonical customer + exact ship date
- *  - never reuses a target row whose exact customer/date key differs
+ *  - groups by canonical customer + exact ship date + explicit destination when present
+ *  - cross-date invoice matching rejects rows that contain conflicting invoices
  *  - repairs legacy nearby-date merges by removing source-known invoices that
  *    belong to another exact source group before updating the matched row
  *  - leaves terminal/completed target rows untouched
@@ -68,9 +68,20 @@ function chooseWmsTargetRow_(groupKey, invoices, rows) {
 
   for (var i = 0; i < rows.length; i++) {
     var row = rows[i];
+    var hasWantedInvoice = false;
     for (var j = 0; j < row.invoices.length; j++) {
-      if (wanted.has(String(row.invoices[j] || "").trim().toUpperCase())) return row;
+      if (wanted.has(String(row.invoices[j] || "").trim().toUpperCase())) {
+        hasWantedInvoice = true;
+        break;
+      }
     }
+    if (!hasWantedInvoice) continue;
+    if (row.key === groupKey) return row;
+    if (row.operationallyLocked) return row;
+    var hasConflictingInvoice = row.invoices.some(function (invoice) {
+      return !wanted.has(String(invoice || "").trim().toUpperCase());
+    });
+    if (!hasConflictingInvoice) return row;
   }
 
   for (var k = 0; k < rows.length; k++) {
@@ -194,6 +205,7 @@ function scanAndImportWmsTruckingOrdersV2() {
         dateInfo: targetDateInfo,
         invoices: splitWmsInvoices_(invoiceCell),
         active: isWmsActiveStatus_(status),
+        operationallyLocked: !shouldWmsOverwriteShipDate_(targetRow, targetMap),
         status: status
       });
     }
@@ -202,6 +214,7 @@ function scanAndImportWmsTruckingOrdersV2() {
     var updated = 0;
     var repaired = 0;
     var skippedTerminal = 0;
+    var skippedOperational = 0;
     var pendingRows = [];
     var width = Math.max(targetLastColumn, 24);
 
@@ -213,6 +226,10 @@ function scanAndImportWmsTruckingOrdersV2() {
       if (match) {
         if (!match.active) {
           skippedTerminal++;
+          return;
+        }
+        if (match.operationallyLocked && match.key !== key) {
+          skippedOperational++;
           return;
         }
 
@@ -299,6 +316,7 @@ function scanAndImportWmsTruckingOrdersV2() {
       ", updated=" + updated +
       ", repaired=" + repaired +
       ", skippedTerminal=" + skippedTerminal +
+      ", skippedOperational=" + skippedOperational +
       ", skippedBeforeCutoff=" + skippedBeforeCutoff
     );
 
@@ -310,6 +328,7 @@ function scanAndImportWmsTruckingOrdersV2() {
       updated: updated,
       repaired: repaired,
       skippedTerminal: skippedTerminal,
+      skippedOperational: skippedOperational,
       skippedBeforeCutoff: skippedBeforeCutoff,
       nextRow: lastBusinessRow + pendingRows.length + 1
     };
