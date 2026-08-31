@@ -4,6 +4,7 @@
  * Safeguards:
  *  - never imports source ship dates before 2026-08-01
  *  - groups by canonical customer + exact ship date + explicit destination when present
+ *  - blocks duplicate customer/date/invoice signatures across existing and same-run rows
  *  - cross-date invoice matching rejects rows that contain conflicting invoices
  *  - repairs legacy nearby-date merges by removing source-known invoices that
  *    belong to another exact source group before updating the matched row
@@ -52,6 +53,19 @@ function wmsExactGroupKey_(customer, dateInfo, destinationHint) {
   var key = normalizeWmsCustomerKey_(canonicalWmsCustomer_(customer)) + "___" + String(dateInfo && dateInfo.key || "");
   var destination = normalizeWmsCustomerKey_(destinationHint || "");
   return destination ? key + "___DEST_" + destination : key;
+}
+
+/**
+ * Idempotency key deliberately ignores the destination suffix. A single WMS
+ * invoice may be encountered more than once with noisy/different destination
+ * hints, but it must still produce at most one target row for a given
+ * canonical customer and ship date.
+ */
+function wmsInvoiceSignatureFromKey_(groupKey, invoice) {
+  var baseKey = String(groupKey || "").split("___DEST_")[0];
+  var cleanInvoice = String(invoice || "").trim().toUpperCase();
+  if (!baseKey || !cleanInvoice) return "";
+  return baseKey + "___INV_" + cleanInvoice;
 }
 
 function shouldWmsOverwriteShipDate_(currentRow, map) {
@@ -185,6 +199,7 @@ function scanAndImportWmsTruckingOrdersV2() {
     });
 
     var targetRows = [];
+    var existingInvoiceSignatures = new Set();
     var lastBusinessRow = targetHeader.rowIndex + 1;
 
     for (var t = targetHeader.rowIndex + 1; t < targetData.length; t++) {
@@ -198,12 +213,17 @@ function scanAndImportWmsTruckingOrdersV2() {
 
       var targetDateInfo = normalizeWmsShipDate_(targetShipDate);
       var targetKey = wmsExactGroupKey_(targetCustomer, targetDateInfo);
+      var targetInvoices = splitWmsInvoices_(invoiceCell);
+      targetInvoices.forEach(function (targetInvoice) {
+        var signature = wmsInvoiceSignatureFromKey_(targetKey, targetInvoice);
+        if (signature) existingInvoiceSignatures.add(signature);
+      });
       targetRows.push({
         rowNumber: t + 1,
         key: targetKey,
         customer: targetCustomer,
         dateInfo: targetDateInfo,
-        invoices: splitWmsInvoices_(invoiceCell),
+        invoices: targetInvoices,
         active: isWmsActiveStatus_(status),
         operationallyLocked: !shouldWmsOverwriteShipDate_(targetRow, targetMap),
         status: status
@@ -215,6 +235,7 @@ function scanAndImportWmsTruckingOrdersV2() {
     var repaired = 0;
     var skippedTerminal = 0;
     var skippedOperational = 0;
+    var skippedDuplicateSignature = 0;
     var pendingRows = [];
     var width = Math.max(targetLastColumn, 24);
 
@@ -267,8 +288,22 @@ function scanAndImportWmsTruckingOrdersV2() {
 
         match.invoices = mergedInvoices.slice();
         match.key = key;
+        mergedInvoices.forEach(function (mergedInvoice) {
+          var signature = wmsInvoiceSignatureFromKey_(key, mergedInvoice);
+          if (signature) existingInvoiceSignatures.add(signature);
+        });
         if (removedCount > 0) repaired++;
         if (changed) updated++;
+        return;
+      }
+
+      var hasDuplicateSignature = group.invoices.some(function (groupInvoice) {
+        var signature = wmsInvoiceSignatureFromKey_(key, groupInvoice);
+        return signature && existingInvoiceSignatures.has(signature);
+      });
+      if (hasDuplicateSignature) {
+        skippedDuplicateSignature++;
+        Logger.log("WMS duplicate invoice signature blocked: " + key + " :: " + group.invoices.join(", "));
         return;
       }
 
@@ -283,6 +318,10 @@ function scanAndImportWmsTruckingOrdersV2() {
       } else {
         pendingRows.push({ row: newRow, group: group });
       }
+      group.invoices.forEach(function (groupInvoice) {
+        var signature = wmsInvoiceSignatureFromKey_(key, groupInvoice);
+        if (signature) existingInvoiceSignatures.add(signature);
+      });
       imported++;
     });
 
@@ -317,6 +356,7 @@ function scanAndImportWmsTruckingOrdersV2() {
       ", repaired=" + repaired +
       ", skippedTerminal=" + skippedTerminal +
       ", skippedOperational=" + skippedOperational +
+      ", skippedDuplicateSignature=" + skippedDuplicateSignature +
       ", skippedBeforeCutoff=" + skippedBeforeCutoff
     );
 
@@ -329,6 +369,7 @@ function scanAndImportWmsTruckingOrdersV2() {
       repaired: repaired,
       skippedTerminal: skippedTerminal,
       skippedOperational: skippedOperational,
+      skippedDuplicateSignature: skippedDuplicateSignature,
       skippedBeforeCutoff: skippedBeforeCutoff,
       nextRow: lastBusinessRow + pendingRows.length + 1
     };
