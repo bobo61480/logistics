@@ -15,6 +15,7 @@ import { ThemeToggle } from "./theme-toggle";
 import { DataGrids } from "./data-grids";
 import { IngestionRoadmapCard } from "./ingestion-roadmap-card";
 import { LOGISTICS_STATUS_OPTIONS } from "../lib/domain/status";
+import { airlineNameFromFlight } from "../lib/domain/airlines";
 
 const SHEET_ID =
   process.env.NEXT_PUBLIC_LOGISTICS_MASTER_SHEET_ID ??
@@ -107,12 +108,14 @@ type KpiSnapshot = {
   }>;
   ltlPercent: number;
   ftlPercent: number;
-  avgLocal: number;
-  avgCalifornia: number;
-  avgOutOfState: number;
-  avgLocalMtd: number;
-  avgCaliforniaMtd: number;
-  avgOutOfStateMtd: number;
+  truckingMtd: number;
+  truckingYtd: number;
+  totalLocal: number;
+  totalCalifornia: number;
+  totalOutOfState: number;
+  totalLocalMtd: number;
+  totalCaliforniaMtd: number;
+  totalOutOfStateMtd: number;
 };
 
 export type InventoryItem = {
@@ -147,12 +150,14 @@ const EMPTY_KPIS: KpiSnapshot = {
   topCarriers: [],
   ltlPercent: 0,
   ftlPercent: 0,
-  avgLocal: 0,
-  avgCalifornia: 0,
-  avgOutOfState: 0,
-  avgLocalMtd: 0,
-  avgCaliforniaMtd: 0,
-  avgOutOfStateMtd: 0,
+  truckingMtd: 0,
+  truckingYtd: 0,
+  totalLocal: 0,
+  totalCalifornia: 0,
+  totalOutOfState: 0,
+  totalLocalMtd: 0,
+  totalCaliforniaMtd: 0,
+  totalOutOfStateMtd: 0,
 };
 
 const SOURCE_LEGEND = [
@@ -2625,6 +2630,7 @@ type CountEntry = [string, number];
 
 function scheduleCarrierName(item: ScheduleItem): string {
   const name = clean(item.carrier) || (item.isSmallParcel ? clean(item.shippingMethod) : "");
+  if (item.mode === "Air") return airlineNameFromFlight(name) || name;
   // "Trucking" is a freight mode stylekorean sometimes falls back to as a carrier value,
   // not an actual named carrier — exclude it so it can't displace a real carrier in the ranking.
   return /^trucking$/i.test(name) ? "" : name;
@@ -3287,11 +3293,12 @@ export default function Home() {
             <div><small>FTL</small><strong>{kpis.ftlPercent}%</strong></div>
           </article>
           <article className="kpi-card kpi-average">
-            <span>AVG TRUCKING COST · MTD / YTD</span>
+            <span>TOTAL TRUCKING COST · MTD / YTD</span>
             <div className="average-head" aria-hidden="true"><small>Lane</small><small>MTD</small><small>YTD</small></div>
-            <div><small>LOCAL / REGIONAL HEURISTIC</small><strong>{money(kpis.avgLocalMtd)}</strong><strong>{money(kpis.avgLocal)}</strong></div>
-            <div><small>CALIFORNIA</small><strong>{money(kpis.avgCaliforniaMtd)}</strong><strong>{money(kpis.avgCalifornia)}</strong></div>
-            <div><small>OUT OF STATE</small><strong>{money(kpis.avgOutOfStateMtd)}</strong><strong>{money(kpis.avgOutOfState)}</strong></div>
+            <div><small>ALL TRUCKING</small><strong>{money(kpis.truckingMtd)}</strong><strong>{money(kpis.truckingYtd)}</strong></div>
+            <div><small>LOCAL / REGIONAL HEURISTIC</small><strong>{money(kpis.totalLocalMtd)}</strong><strong>{money(kpis.totalLocal)}</strong></div>
+            <div><small>CALIFORNIA</small><strong>{money(kpis.totalCaliforniaMtd)}</strong><strong>{money(kpis.totalCalifornia)}</strong></div>
+            <div><small>OUT OF STATE</small><strong>{money(kpis.totalOutOfStateMtd)}</strong><strong>{money(kpis.totalOutOfState)}</strong></div>
           </article>
         </div>
         <details className="kpi-method">
@@ -3302,8 +3309,8 @@ export default function Home() {
             Order Date (column G) and Amount (column E), expand K values, and exclude cancelled
             orders. WMS wholesale sales use Date (column A) and numeric INVOICE AMOUNT (column G);
             text entries such as “FREE SAMPLE,” “FOC,” “Sample,” and operational notes are excluded.
-            MTD is the current month through today; YTD begins January 1, 2026. Trucking averages
-            exclude transfers and unclassified destinations; local / regional uses a destination city/ZIP heuristic for the Southern California operating area and is not a measured mileage radius.
+            MTD is the current month through today; YTD begins January 1, 2026. Trucking totals
+            sum freight Invoice first, then Rate when Invoice is blank, and exclude transfers. Lane totals exclude unclassified destinations; local / regional uses a destination city/ZIP heuristic for the Southern California operating area and is not a measured mileage radius.
             The NJ transfer card includes only TRANSFERS rows whose TO field is NJ or New Jersey.
             Carrier freight spend uses the same freight Invoice-first, Rate-fallback cost, and shipment share
             is each carrier’s moves divided by all YTD moves with a named carrier.{" "}

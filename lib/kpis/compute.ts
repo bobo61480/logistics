@@ -19,12 +19,14 @@ export type KpiSnapshot = {
   topCarriers: CarrierKpi[];
   ltlPercent: number;
   ftlPercent: number;
-  avgLocal: number;
-  avgCalifornia: number;
-  avgOutOfState: number;
-  avgLocalMtd: number;
-  avgCaliforniaMtd: number;
-  avgOutOfStateMtd: number;
+  truckingMtd: number;
+  truckingYtd: number;
+  totalLocal: number;
+  totalCalifornia: number;
+  totalOutOfState: number;
+  totalLocalMtd: number;
+  totalCaliforniaMtd: number;
+  totalOutOfStateMtd: number;
 };
 
 export function dateCode(value: string) {
@@ -155,6 +157,8 @@ export function computeKpisFromRows(input: Input): KpiSnapshot {
   });
   const freight = [...trucking, ...transfer].filter((r) => r.date >= yearStart && r.date <= today.code);
   const freightMtd = freight.filter((r) => r.date >= monthStart);
+  const truckingYtd = freight.filter((r) => !r.isTransfer);
+  const truckingMtd = freightMtd.filter((r) => !r.isTransfer);
   const transferYtd = freight.filter((r) => r.isTransfer);
   const transferMtd = freightMtd.filter((r) => r.isTransfer);
   const njTransferYtd = transferYtd.filter((r) => isNewJerseyDestination(r.destination));
@@ -174,9 +178,9 @@ export function computeKpisFromRows(input: Input): KpiSnapshot {
   const ltl = classified.filter((r) => r.loadType === "LTL").length;
   const ftl = classified.filter((r) => r.loadType === "FTL").length;
   const splitTotal = ltl + ftl;
-  const average = (records: typeof freight, band: "local" | "california" | "out-of-state") => {
+  const laneTotal = (records: typeof freight, band: "local" | "california" | "out-of-state") => {
     const matching = records.filter((r) => !r.isTransfer && r.cost > 0 && distanceBand(r.destination) === band);
-    return matching.length ? matching.reduce((total, r) => total + r.cost, 0) / matching.length : 0;
+    return matching.reduce((total, r) => total + r.cost, 0);
   };
   return {
     nationalsSalesMtd: sum(nationalSales, monthStart), nationalsSalesYtd: sum(nationalSales, yearStart),
@@ -185,7 +189,8 @@ export function computeKpisFromRows(input: Input): KpiSnapshot {
     transfersMtd: transferMtd.reduce((t, r) => t + r.cost, 0), transfersYtd: transferYtd.reduce((t, r) => t + r.cost, 0),
     njTransferMtd: njTransferMtd.reduce((t, r) => t + r.cost, 0), njTransferYtd: njTransferYtd.reduce((t, r) => t + r.cost, 0),
     topCarriers, ltlPercent: splitTotal ? Math.round((ltl / splitTotal) * 100) : 0, ftlPercent: splitTotal ? Math.round((ftl / splitTotal) * 100) : 0,
-    avgLocal: average(freight, "local"), avgCalifornia: average(freight, "california"), avgOutOfState: average(freight, "out-of-state"),
-    avgLocalMtd: average(freightMtd, "local"), avgCaliforniaMtd: average(freightMtd, "california"), avgOutOfStateMtd: average(freightMtd, "out-of-state"),
+    truckingMtd: truckingMtd.reduce((t, r) => t + r.cost, 0), truckingYtd: truckingYtd.reduce((t, r) => t + r.cost, 0),
+    totalLocal: laneTotal(freight, "local"), totalCalifornia: laneTotal(freight, "california"), totalOutOfState: laneTotal(freight, "out-of-state"),
+    totalLocalMtd: laneTotal(freightMtd, "local"), totalCaliforniaMtd: laneTotal(freightMtd, "california"), totalOutOfStateMtd: laneTotal(freightMtd, "out-of-state"),
   };
 }
