@@ -7,6 +7,14 @@ workers_dev = true
 [vars]
 CMS_UPSTREAM_MCP_URL = "https://cms.mcp.siliconii.com/mcp/"
 
+[[durable_objects.bindings]]
+name = "CMS_SESSION_STORE"
+class_name = "CmsSessionStore"
+
+[exports.CmsSessionStore]
+type = "durable-object"
+storage = "sqlite"
+
 [observability]
 enabled = true
 head_sampling_rate = 0.1
