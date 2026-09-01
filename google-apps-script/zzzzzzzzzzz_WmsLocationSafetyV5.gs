@@ -10,12 +10,12 @@
  *    Chinatown locations are four distinct delivery identities;
  *  - repeated copies of the same invoice/date/location are removed without
  *    collapsing split loads with different PROs or different locations;
- *  - a 15-minute safety sweep protects the sheet even if a legacy/external
- *    writer appends a duplicate outside the canonical V2 importer.
+ *  - snapshot traffic self-repairs the canonical trigger plan so this guard
+ *    cannot wait indefinitely for another Gmail/XPO run after deployment.
  */
 /* eslint-disable no-unused-vars */
 
-var WMS_LOCATION_SAFETY_V5_VERSION = "2026-08-31-v5-yixi-location-aware";
+var WMS_LOCATION_SAFETY_V5_VERSION = "2026-08-31-v5-yixi-location-aware-r2";
 var WMS_LOCATION_TARGET_BY_ROW_INVOICE_V5 = {};
 
 function whLocationNormV5_(value) {
@@ -274,11 +274,32 @@ if (WMS_LOCATION_BASE_SCAN_V5) {
 
 if (typeof TRIGGER_PLAN !== "undefined") {
   var hasLocationDedupeV5 = TRIGGER_PLAN.some(function (item) { return item.handler === "dedupeWhTruckingLocationSafeV5"; });
-  if (!hasLocationDedupeV5) TRIGGER_PLAN.push({ handler: "dedupeWhTruckingLocationSafeV5", minutes: 15 });
+  if (!hasLocationDedupeV5) TRIGGER_PLAN.push({ handler: "dedupeWhTruckingLocationSafeV5", minutes: 1 });
 }
 if (typeof TRIGGER_CLEANUP_HANDLERS !== "undefined" && TRIGGER_CLEANUP_HANDLERS.indexOf("dedupeWhTruckingLocationSafeV5") === -1) {
   TRIGGER_CLEANUP_HANDLERS.push("dedupeWhTruckingLocationSafeV5");
 }
 if (typeof GMAIL_PIPELINE_TRIGGER_SYNC_VERSION !== "undefined") {
-  GMAIL_PIPELINE_TRIGGER_SYNC_VERSION = "2026-08-31-central-v6-yixi-location-safe";
+  GMAIL_PIPELINE_TRIGGER_SYNC_VERSION = "2026-08-31-central-v7-yixi-location-selfheal";
+}
+
+/*
+ * The production deployment smoke test and Worker both call action=snapshot.
+ * Use that already-authorized web-app execution to ensure the trigger plan is
+ * installed immediately after every version change. The property check inside
+ * ensureCanonicalTriggersForVersion_ makes this a no-op after the first repair.
+ */
+var WMS_LOCATION_BASE_DOGET_V5 = typeof doGet === "function" ? doGet : null;
+if (WMS_LOCATION_BASE_DOGET_V5) {
+  doGet = function (e) {
+    try {
+      var action = String(e && e.parameter && e.parameter.action || "").trim().toLowerCase();
+      if (action === "snapshot" && typeof ensureCanonicalTriggersForVersion_ === "function") {
+        ensureCanonicalTriggersForVersion_();
+      }
+    } catch (triggerRepairError) {
+      Logger.log("Snapshot trigger-plan repair failed: " + triggerRepairError.message);
+    }
+    return WMS_LOCATION_BASE_DOGET_V5(e);
+  };
 }
