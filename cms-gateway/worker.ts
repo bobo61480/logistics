@@ -1,5 +1,5 @@
 import { CmsAuthError } from "./auth";
-import type { SessionHealth } from "./session-store";
+import { unattendedAuthConfigured, type SessionHealth } from "./session-store";
 
 export { CmsSessionStore } from "./session-store";
 
@@ -361,6 +361,26 @@ function createCmsSessionClient(env: Env): CmsSessionClient {
   };
 }
 
+function fallbackSessionHealth(env: Env, state?: SessionHealth["cmsSessionState"]): SessionHealth {
+  const configured = unattendedAuthConfigured(env);
+  return {
+    unattendedAuthConfigured: configured,
+    cmsSessionState: state ?? (configured ? "error" : "missing"),
+    cmsSessionCreatedAt: null,
+    cmsSessionExpiresAt: null,
+    cmsSessionLastValidatedAt: null,
+  };
+}
+
+async function readSafeSessionHealth(env: Env): Promise<SessionHealth> {
+  if (!env.CMS_SESSION_STORE) return fallbackSessionHealth(env);
+  try {
+    return await createCmsSessionClient(env).health();
+  } catch {
+    return fallbackSessionHealth(env);
+  }
+}
+
 function summarizeInvoiceRows(rows: Record<string, unknown>[], month: string) {
   const { start, next } = monthBounds(month);
   const groups = new Map<string, { invoiceIds: Set<string>; count: number; total: number }>();
@@ -506,6 +526,7 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/health") {
+      const sessionHealth = await readSafeSessionHealth(env);
       return json({
         ok: true,
         service: "stylekorean-cms-gateway",
@@ -513,6 +534,7 @@ export default {
         upstreamConfigured: Boolean(env.CMS_UPSTREAM_MCP_URL),
         authForwardingConfigured: Boolean(env.CMS_MCP_AUTH_TOKEN),
         directInvoiceConfigured: Boolean(env.CMS_SESSION_STORE),
+        ...sessionHealth,
         checkedAt: new Date().toISOString(),
       });
     }
