@@ -145,10 +145,10 @@ export function IngestionRoadmapCard({
       <div className="border-y border-neutral-100 bg-neutral-50/70 px-5 py-4">
         <ol className="grid gap-3 lg:grid-cols-3" aria-label="Ingestion pipeline">
           {[
-            ["mail" as const, "1 · Receive", "Gmail intake", summary.total + " messages in feed"],
-            ["extract" as const, "2 · Extract", "Classify & match", summary.committed + " schedule matches"],
-            ["archive" as const, "3 · Archive", "Drive + canonical row", summary.filed + " files linked"],
-          ].map(([kind, step, title, detail], index) => (
+            { kind: "mail" as const, step: "1 · Receive", title: "Gmail intake", detail: summary.total + " messages in feed" },
+            { kind: "extract" as const, step: "2 · Extract", title: "Classify & match", detail: summary.committed + " schedule matches" },
+            { kind: "archive" as const, step: "3 · Archive", title: "Drive + canonical row", detail: summary.filed + " files linked" },
+          ].map(({ kind, step, title, detail }, index) => (
             <li key={step} className="relative flex items-center gap-3 rounded-lg border border-neutral-200 bg-white px-3.5 py-3">
               <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-blue-50 text-blue-700"><PipelineIcon kind={kind} /></span>
               <span className="min-w-0">
