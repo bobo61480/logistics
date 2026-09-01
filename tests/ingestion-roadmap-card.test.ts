@@ -1,30 +1,28 @@
 import fs from "node:fs";
 import path from "node:path";
-import test from "node:test";
-import assert from "node:assert/strict";
+import { expect, test } from "vitest";
 
 const root = process.cwd();
 const card = fs.readFileSync(path.join(root, "app", "ingestion-roadmap-card.tsx"), "utf8");
 const page = fs.readFileSync(path.join(root, "app", "page.tsx"), "utf8");
 
 test("shipping document ingestion is a live dashboard, not a roadmap placeholder", () => {
-  assert.match(card, /Shipping Document Ingestion/);
-  assert.match(card, /Emails processed/);
-  assert.match(card, /Documents filed/);
-  assert.match(card, /Needs review/);
-  assert.doesNotMatch(card, /Roadmap · Design Placeholder/);
-  assert.doesNotMatch(card, /Not built yet/);
-  assert.doesNotMatch(card, /Not connected/);
+  expect(card).toMatch(/Shipping Document Ingestion/);
+  expect(card).toMatch(/Emails processed/);
+  expect(card).toMatch(/Documents filed/);
+  expect(card).toMatch(/Needs review/);
+  expect(card).not.toMatch(/Roadmap · Design Placeholder/);
+  expect(card).not.toMatch(/Not built yet/);
+  expect(card).not.toMatch(/Not connected/);
 });
 
 test("dashboard derives document state from the shared Gmail ingestion feed", () => {
-  assert.match(card, /GmailIngestionEvent/);
-  assert.match(card, /classifyDocument/);
-  assert.match(card, /driveFileUrl/);
-  assert.doesNotMatch(card, /\bfetch\s*\(/);
-  assert.doesNotMatch(card, /XMLHttpRequest|axios/);
-  assert.match(
-    page,
+  expect(card).toMatch(/GmailIngestionEvent/);
+  expect(card).toMatch(/classifyDocument/);
+  expect(card).toMatch(/driveFileUrl/);
+  expect(card).not.toMatch(/\bfetch\s*\(/);
+  expect(card).not.toMatch(/XMLHttpRequest|axios/);
+  expect(page).toMatch(
     /<IngestionRoadmapCard events=\{gmailIngestion\} loading=\{loading\} sheetUrl=\{SHEET_URL\} \/>/
   );
 });
