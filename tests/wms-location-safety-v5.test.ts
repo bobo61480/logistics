@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 type Helpers = {
   whYixiLocationAliasV5_: (value: unknown) => string;
+  whYixiLocationFromEvidenceV6_: (address: unknown, store: unknown, note: unknown) => string;
   whLocationIdentityV5_: (customer: unknown, address: unknown, store: unknown, note: unknown) => string;
   whCanonicalYixiCustomerNameV6_: (customer: unknown, address: unknown, store: unknown, note: unknown) => string;
   whDedupeKeyV5_: (row: unknown[], map: Record<string, number>) => string;
@@ -13,7 +14,7 @@ function loadHelpers(): Helpers {
   const source = readFileSync("google-apps-script/zzzzzzzzzzz_WmsLocationSafetyV5.gs", "utf8");
   const context = vm.createContext({ console });
   vm.runInContext(
-    `${source}\n;globalThis.__helpers = { whYixiLocationAliasV5_, whLocationIdentityV5_, whCanonicalYixiCustomerNameV6_, whDedupeKeyV5_ };`,
+    `${source}\n;globalThis.__helpers = { whYixiLocationAliasV5_, whYixiLocationFromEvidenceV6_, whLocationIdentityV5_, whCanonicalYixiCustomerNameV6_, whDedupeKeyV5_ };`,
     context,
   );
   return context.__helpers as Helpers;
@@ -30,13 +31,14 @@ const map = {
   "LOCATION STORE": 24,
 };
 
-function row(invoice: string, address: string, location: string, pro = "", customer = "YIXI TRADING LLC, DBA FANLOLI BEAUTY") {
+function row(invoice: string, address: string, location: string, pro = "", customer = "YIXI TRADING LLC, DBA FANLOLI BEAUTY", note = "") {
   const values = new Array(25).fill("");
   values[0] = customer;
   values[1] = invoice;
   values[2] = address;
   values[3] = "09/04/2026";
   values[18] = pro;
+  values[19] = note;
   values[24] = location;
   return values;
 }
@@ -67,6 +69,20 @@ describe("WH Trucking location safety V5", () => {
       .toBe("YIXI Trading LLC (dba Fanloli) (CHINATOWN)");
     expect(helpers.whCanonicalYixiCustomerNameV6_("Yixi Trading", "1737 Post St #323, San Francisco, CA 94115", "", ""))
       .toBe("YIXI Trading LLC (dba Fanloli) (JAPAN CENTER)");
+  });
+
+  it("gives a proven street address precedence over a conflicting store label", () => {
+    expect(helpers.whYixiLocationFromEvidenceV6_("1737 Post St #323, San Francisco, CA 94115", "CHINATOWN", ""))
+      .toBe("JAPAN CENTER");
+    expect(helpers.whCanonicalYixiCustomerNameV6_("Yixi Trading", "1737 Post St #323, San Francisco, CA 94115", "CHINATOWN", ""))
+      .toBe("YIXI Trading LLC (dba Fanloli) (JAPAN CENTER)");
+  });
+
+  it("uses an explicit Address: note before a conflicting store label when the address cell is blank", () => {
+    const note = "WMS destination: Japan Center.\nAddress: 953 Grant Ave\nSan Francisco CA 94108";
+    expect(helpers.whYixiLocationFromEvidenceV6_("", "JAPAN CENTER", note)).toBe("CHINATOWN");
+    expect(helpers.whCanonicalYixiCustomerNameV6_("Yixi Trading", "", "JAPAN CENTER", note))
+      .toBe("YIXI Trading LLC (dba Fanloli) (CHINATOWN)");
   });
 
   it("does not guess a Yixi customer location when the address is unknown", () => {
