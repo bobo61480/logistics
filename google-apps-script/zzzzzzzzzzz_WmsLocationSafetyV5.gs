@@ -57,12 +57,12 @@ function whInvoiceTokensV5_(value) {
 
 function whDedupeKeyV5_(row, map) {
   var customer = map["CUSTOMER"] !== undefined ? row[map["CUSTOMER"]] : "";
-  var invoice = map["INVOICE NO."] !== undefined ? row[map["INVOICE NO."]] : "";
+  var invoice = map["INVOICE NO"] !== undefined ? row[map["INVOICE NO"]] : "";
   var shipDate = map["SHIP DATE"] !== undefined ? row[map["SHIP DATE"]] : "";
   var address = map["ADDRESS"] !== undefined ? row[map["ADDRESS"]] : "";
-  var store = map["LOCATION / STORE"] !== undefined ? row[map["LOCATION / STORE"]] : "";
+  var store = map["LOCATION STORE"] !== undefined ? row[map["LOCATION STORE"]] : "";
   var note = map["NOTE"] !== undefined ? row[map["NOTE"]] : "";
-  var pro = map["PRO#"] !== undefined ? row[map["PRO#"]] : "";
+  var pro = map["PRO"] !== undefined ? row[map["PRO"]] : "";
   var invoices = whInvoiceTokensV5_(invoice);
   if (!customer || !shipDate || !invoices.length) return "";
   var location = whLocationIdentityV5_(customer, address, store, note);
@@ -99,7 +99,6 @@ function whFindHeaderIndexV5_(data) {
   for (var r = 0; r < Math.min(data.length, 8); r++) {
     var normalized = (data[r] || []).map(whLocationNormV5_);
     if (normalized.indexOf("CUSTOMER") !== -1 && normalized.indexOf("INVOICE NO") !== -1 && normalized.indexOf("SHIP DATE") !== -1) return r;
-    if (normalized.indexOf("CUSTOMER") !== -1 && normalized.indexOf("INVOICE NO.") !== -1 && normalized.indexOf("SHIP DATE") !== -1) return r;
   }
   return 1;
 }
@@ -169,15 +168,60 @@ function whBuildTargetLocationIndexV5_() {
     var row = data[r];
     var customer = map["CUSTOMER"] !== undefined ? row[map["CUSTOMER"]] : "";
     var address = map["ADDRESS"] !== undefined ? row[map["ADDRESS"]] : "";
-    var store = map["LOCATION STORE"] !== undefined ? row[map["LOCATION STORE"]] : (map["LOCATION / STORE"] !== undefined ? row[map["LOCATION / STORE"]] : "");
+    var store = map["LOCATION STORE"] !== undefined ? row[map["LOCATION STORE"]] : "";
     var note = map["NOTE"] !== undefined ? row[map["NOTE"]] : "";
     var location = whLocationIdentityV5_(customer, address, store, note);
-    var invoiceCell = map["INVOICE NO"] !== undefined ? row[map["INVOICE NO"]] : (map["INVOICE NO."] !== undefined ? row[map["INVOICE NO."]] : "");
+    var invoiceCell = map["INVOICE NO"] !== undefined ? row[map["INVOICE NO"]] : "";
     whInvoiceTokensV5_(invoiceCell).forEach(function (invoice) {
       WMS_LOCATION_TARGET_BY_ROW_INVOICE_V5[(r + 1) + "|" + invoice] = location;
     });
   }
   return WMS_LOCATION_TARGET_BY_ROW_INVOICE_V5;
+}
+
+function whBackfillLocationStoreV5_() {
+  if (typeof WMS_SPREADSHEET_ID === "undefined" || typeof SPREADSHEET_ID === "undefined") return 0;
+  var sourceSpreadsheet = SpreadsheetApp.openById(WMS_SPREADSHEET_ID);
+  var targetSpreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var sourceSheet = sourceSpreadsheet.getSheetByName("Stylekorean");
+  var targetSheet = targetSpreadsheet.getSheetByName("WH Trucking Request");
+  if (!sourceSheet || !targetSheet) return 0;
+
+  var sourceData = sourceSheet.getDataRange().getDisplayValues();
+  var sourceHeader = findWmsTruckingHeader_(sourceData);
+  var sourceMap = sourceHeader.map;
+  var destinationByInvoice = {};
+  for (var s = sourceHeader.rowIndex + 1; s < sourceData.length; s++) {
+    var sourceRow = sourceData[s];
+    var method = sourceMap["SHIPPING METHOD"] !== undefined ? String(sourceRow[sourceMap["SHIPPING METHOD"]] || "").trim().toUpperCase() : "";
+    if (typeof isWmsFreightMethod_ === "function" && !isWmsFreightMethod_(method)) continue;
+    var invoice = sourceMap["INVOICE#"] !== undefined ? String(sourceRow[sourceMap["INVOICE#"]] || "").trim().toUpperCase() : "";
+    if (!invoice) continue;
+    var destination = wmsDestinationHint_(sourceRow, sourceMap);
+    if (destination) destinationByInvoice[invoice] = destination;
+  }
+
+  var targetData = targetSheet.getDataRange().getDisplayValues();
+  var headerIndex = whFindHeaderIndexV5_(targetData);
+  var targetMap = whHeaderMapV5_(targetData[headerIndex] || []);
+  if (targetMap["LOCATION STORE"] === undefined || targetMap["INVOICE NO"] === undefined) return 0;
+  var changed = 0;
+  for (var t = headerIndex + 1; t < targetData.length; t++) {
+    var targetRow = targetData[t];
+    if (String(targetRow[targetMap["LOCATION STORE"]] || "").trim()) continue;
+    var invoices = whInvoiceTokensV5_(targetRow[targetMap["INVOICE NO"]]);
+    var destinations = {};
+    invoices.forEach(function (invoiceNo) {
+      var destination = destinationByInvoice[invoiceNo];
+      if (destination) destinations[destination] = true;
+    });
+    var keys = Object.keys(destinations);
+    if (keys.length !== 1) continue;
+    targetSheet.getRange(t + 1, targetMap["LOCATION STORE"] + 1).setValue(keys[0]);
+    changed++;
+  }
+  if (changed) SpreadsheetApp.flush();
+  return changed;
 }
 
 var WMS_LOCATION_BASE_DEST_NORMALIZER_V5 = typeof normalizeWmsDestinationHint_ === "function" ? normalizeWmsDestinationHint_ : null;
@@ -222,7 +266,8 @@ if (WMS_LOCATION_BASE_SCAN_V5) {
   scanAndImportWmsTruckingOrdersV2 = function () {
     whBuildTargetLocationIndexV5_();
     var result = WMS_LOCATION_BASE_SCAN_V5.apply(this, arguments);
-    try { dedupeWhTruckingLocationSafeV5_(); } catch (error) { Logger.log("Location-safe dedupe failed: " + error.message); }
+    try { whBackfillLocationStoreV5_(); } catch (backfillError) { Logger.log("Location backfill failed: " + backfillError.message); }
+    try { dedupeWhTruckingLocationSafeV5_(); } catch (dedupeError) { Logger.log("Location-safe dedupe failed: " + dedupeError.message); }
     return result;
   };
 }
