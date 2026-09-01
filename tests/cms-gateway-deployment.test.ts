@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import worker from "../cms-gateway/worker";
+import worker from "../cms-gateway/bootstrap-worker";
 
 describe("CMS gateway unattended auth deployment", () => {
   it("provisions unattended-auth and bootstrap-session secrets through GitHub Actions without command-line values", () => {
