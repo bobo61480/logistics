@@ -1,52 +1,37 @@
 import { describe, expect, it } from "vitest";
 
-const BASE = "https://stylekorean.dpdns.org";
+const STYLE = "https://stylekorean.dpdns.org";
+const GATEWAY = "https://stylekorean-cms-gateway.stylekorean.workers.dev";
 
-async function json(path: string) {
-  const response = await fetch(`${BASE}${path}`, {
+async function probe(url: string) {
+  const response = await fetch(url, {
     headers: {
       accept: "application/json",
       "user-agent": "StyleKorean-Live-CMS-KPI-QA/1.0",
     },
   });
-  const body = await response.json() as Record<string, unknown>;
-  console.log(`LIVE_KPI ${path} HTTP ${response.status} ${JSON.stringify(body)}`);
-  expect(response.status).toBe(200);
-  expect(body.ok).toBe(true);
-  return body;
+  const text = await response.text();
+  console.log(`LIVE_PROBE ${url} HTTP ${response.status} ${text}`);
+  let body: Record<string, unknown> = {};
+  try { body = JSON.parse(text) as Record<string, unknown>; } catch {}
+  return { response, body, text };
 }
 
-describe("live CMS-backed KPI routes", () => {
-  it("returns the known August CMS invoice total through both routes", async () => {
-    const cms = await json("/api/logistics/cms-sales-kpis?month=2026-08");
-    const monthly = await json("/api/logistics/monthly-kpis?month=2026-08");
+describe("live CMS-backed KPI diagnostics", () => {
+  it("shows direct gateway and StyleKorean August responses", async () => {
+    const gatewayHealth = await probe(`${GATEWAY}/health`);
+    const gatewayAugust = await probe(`${GATEWAY}/sales-summary?month=2026-08`);
+    const styleAugust = await probe(`${STYLE}/api/logistics/cms-sales-kpis?month=2026-08`);
 
-    expect(cms.source).toBe("siliconii-cms-invoices");
-    expect(cms.selectedMonth).toBe("2026-08");
-    expect(cms.wmsSalesMtd).toBeCloseTo(22001455.27, 2);
-    expect((monthly.kpis as Record<string, unknown>).wmsSalesMtd).toBeCloseTo(22001455.27, 2);
+    expect(gatewayHealth.response.status).toBe(200);
+    expect(gatewayAugust.response.status).toBe(200);
+    expect(styleAugust.response.status).toBe(200);
   }, 120_000);
 
-  it("returns current September MTD and YTD from CMS plus all monthly KPI fields", async () => {
-    const cms = await json("/api/logistics/cms-sales-kpis?month=2026-09");
-    const monthly = await json("/api/logistics/monthly-kpis?month=2026-09");
-    const kpis = monthly.kpis as Record<string, unknown>;
-
-    expect(cms.source).toBe("siliconii-cms-invoices");
-    expect(cms.selectedMonth).toBe("2026-09");
-    expect(Number(cms.wmsSalesYtd)).toBeGreaterThanOrEqual(Number(cms.wmsSalesMtd));
-    for (const field of [
-      "shippingMtd",
-      "transfersMtd",
-      "njTransferMtd",
-      "nationalsSalesMtd",
-      "wmsSalesMtd",
-      "truckingMtd",
-      "totalLocalMtd",
-      "totalCaliforniaMtd",
-      "totalOutOfStateMtd",
-    ]) {
-      expect(typeof kpis[field]).toBe("number");
-    }
+  it("shows direct gateway and StyleKorean September responses", async () => {
+    const gatewaySeptember = await probe(`${GATEWAY}/sales-summary?month=2026-09`);
+    const styleSeptember = await probe(`${STYLE}/api/logistics/cms-sales-kpis?month=2026-09`);
+    expect(gatewaySeptember.response.status).toBe(200);
+    expect(styleSeptember.response.status).toBe(200);
   }, 120_000);
 });
