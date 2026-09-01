@@ -34,3 +34,8 @@ function logPipeline_(event, subject, detail) {
     if (log.getLastRow() > 2000) log.deleteRows(2, 500);
   } catch (e) { /* logging must never break the pipeline */ }
 }
+
+/** Canonical alias used by Gmail V2 and safety modules. */
+function writeLog_(event, subject, detail) {
+  return logPipeline_(event, subject, detail);
+}

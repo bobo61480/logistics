@@ -31,9 +31,10 @@ type Helpers = {
 
 function loadHelpers(): Helpers {
   const source = readFileSync("google-apps-script/WmsTruckingSyncV2.gs", "utf8");
+  const locationSafety = readFileSync("google-apps-script/zzzzzzzzzzz_WmsLocationSafetyV5.gs", "utf8");
   const context = vm.createContext({ Map, Set, console });
   vm.runInContext(
-    `${source}\n;globalThis.__helpers = {wmsImportEligible_,wmsInvoiceSignatureFromKey_,chooseWmsTargetRow_,filterWmsInvoicesForGroup_};`,
+    `${locationSafety}\n${source}\n;globalThis.__helpers = {wmsImportEligible_,wmsInvoiceSignatureFromKey_,chooseWmsTargetRow_,filterWmsInvoicesForGroup_};`,
     context,
   );
   return context.__helpers as Helpers;
@@ -49,7 +50,7 @@ describe("WMS trucking importer v2 safeguards", () => {
     expect(helpers.wmsImportEligible_({ key: "2026-08-10" }, "2026-08-11")).toBe(false);
   });
 
-  it("normalizes destination-specific WMS keys to an invoice idempotency signature", () => {
+  it("keeps destination-specific invoice signatures separate", () => {
     const sourceSignature = helpers.wmsInvoiceSignatureFromKey_(
       "YIXI TRADING LLC DBA FANLOLI BEAUTY___2026-09-04___DEST_CHINATOWN",
       "in00471237",
@@ -60,9 +61,9 @@ describe("WMS trucking importer v2 safeguards", () => {
     );
 
     expect(sourceSignature).toBe(
-      "YIXI TRADING LLC DBA FANLOLI BEAUTY___2026-09-04___INV_IN00471237",
+      "YIXI TRADING LLC DBA FANLOLI BEAUTY___2026-09-04___DEST_CHINATOWN___INV_IN00471237",
     );
-    expect(targetSignature).toBe(sourceSignature);
+    expect(targetSignature).not.toBe(sourceSignature);
     expect(
       helpers.wmsInvoiceSignatureFromKey_(
         "YIXI TRADING LLC DBA FANLOLI BEAUTY___2026-09-04___DEST_JAPAN CENTER",

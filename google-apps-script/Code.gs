@@ -47,6 +47,7 @@ function doGet(e) {
   try {
     const action = String((e && e.parameter && e.parameter.action) || "").trim().toLowerCase();
     if (action !== "snapshot") return json_({ ok: false, error: "Unsupported action." });
+    ensureCanonicalTriggersForVersion_();
     const master = SpreadsheetApp.openById(SPREADSHEET_ID);
     const national = SpreadsheetApp.openById(NATIONAL_SPREADSHEET_ID);
     const wms = SpreadsheetApp.openById(WMS_SPREADSHEET_ID);

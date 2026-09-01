@@ -101,11 +101,11 @@ function processLogisticsEmailsV2() {
 
     if (stats.inserted || stats.updated) {
       SpreadsheetApp.flush();
-      if (Date.now() - runStarted < GMAIL_V2_RUNTIME_BUDGET_MS - 45000) {
-        try { syncInventoryModule(); } catch (syncErr) { writeLog_("GMAIL V2 INVENTORY FOLLOWUP", "warn", String(syncErr)); }
-      } else {
-        writeLog_("GMAIL V2 INVENTORY FOLLOWUP", "deferred", "Hourly inventory sync will pick up Gmail source updates.");
-      }
+      gmailSafetyV4RefreshD1_("processLogisticsEmailsV2");
+      // syncInventoryModule owns the same script lock as this Gmail run. A
+      // nested call can only time out or hide lock starvation, so the canonical
+      // hourly trigger owns inventory/KPI refresh while D1 is refreshed here.
+      writeLog_("GMAIL V2 INVENTORY FOLLOWUP", "deferred", "Hourly inventory sync will pick up Gmail source updates.");
     }
     stats.elapsedMs = Date.now() - runStarted;
     writeLog_("GMAIL V2 RUN", GMAIL_PIPELINE_V2_VERSION, JSON.stringify(stats));
@@ -465,7 +465,7 @@ function mergeRecordContextV2_(record, context, meta) {
   if (!out.note) out.note = context.note || "";
   out._sourceEmail = meta.permalink;
   out._emailSubject = meta.subject;
-  return out;
+  return gmailSafetyV4ApplyRecord_(out, meta || {});
 }
 
 function extractAttachmentRecordsV2_(attachment, name, context, meta) {
@@ -649,35 +649,11 @@ function xlsxTablesV2_(blob) {
 }
 
 function pdfTextV2_(blob) {
-  var id = convertBlobWithDriveRestV2_(blob, "application/vnd.google-apps.document");
-  try {
-    var url = "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(id) + "/export?mimeType=text%2Fplain";
-    var response = UrlFetchApp.fetch(url, { headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() }, muteHttpExceptions: true });
-    if (response.getResponseCode() >= 300) throw new Error("PDF text export failed HTTP " + response.getResponseCode());
-    return response.getContentText();
-  } finally {
-    try { DriveApp.getFileById(id).setTrashed(true); } catch (e) {}
-  }
+  return gmailSafetyV4PdfText_(blob);
 }
 
 function convertBlobWithDriveRestV2_(blob, targetMime) {
-  var boundary = "sklogistics_" + Date.now() + "_" + Math.floor(Math.random() * 1000000);
-  var metadata = JSON.stringify({ name: "TMP-email-import-" + Date.now(), mimeType: targetMime });
-  var prefix = "--" + boundary + "\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n" + metadata +
-    "\r\n--" + boundary + "\r\nContent-Type: " + (blob.getContentType() || "application/octet-stream") + "\r\n\r\n";
-  var suffix = "\r\n--" + boundary + "--\r\n";
-  var bytes = Utilities.newBlob(prefix).getBytes().concat(blob.getBytes()).concat(Utilities.newBlob(suffix).getBytes());
-  var response = UrlFetchApp.fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id", {
-    method: "post",
-    contentType: "multipart/related; boundary=" + boundary,
-    payload: bytes,
-    headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
-    muteHttpExceptions: true
-  });
-  if (response.getResponseCode() >= 300) throw new Error("Drive conversion failed HTTP " + response.getResponseCode() + ": " + response.getContentText().slice(0, 250));
-  var parsed = JSON.parse(response.getContentText());
-  if (!parsed.id) throw new Error("Drive conversion returned no file id.");
-  return parsed.id;
+  return gmailSafetyV4ConvertBlob_(blob, targetMime);
 }
 
 function pdfTextRecordV2_(text, context, sourceName) {

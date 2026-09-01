@@ -303,13 +303,7 @@ function reconcileCustomerBackfill() {
 }
 
 function findBackfillCustomerDbHeader_(rows) {
-  for (var r = 0; r < Math.min(rows.length, 5); r++) {
-    var map = headerMap_(rows[r]);
-    if (map["CUSTOMER NAME"] !== undefined && map["ADDRESS"] !== undefined) {
-      return { rowIndex: r, map: map };
-    }
-  }
-  throw new Error("Could not locate the TRUCKING customer database header row.");
+  return findCustomerDatabaseHeader_(rows, "TRUCKING customer database");
 }
 
 function buildBackfillCustomerRecords_(rows, header) {
@@ -321,8 +315,8 @@ function buildBackfillCustomerRecords_(rows, header) {
     records.push({
       rowNumber: r + 1,
       name: name,
-      exactKey: name.toUpperCase().replace(/\s+/g, " "),
-      canonicalKey: normalizeWmsCustomerKey_(canonicalWmsCustomer_(name)),
+      exactKey: customerExactKey_(name),
+      canonicalKey: customerCanonicalKey_(name),
       address: header.map["ADDRESS"] !== undefined ? String(row[header.map["ADDRESS"]] || "").trim() : ""
     });
   }
@@ -336,15 +330,7 @@ function buildBackfillCustomerRecords_(rows, header) {
  * CustomerLookup.gs's matchCustomerRecord_ uses.
  */
 function matchBackfillCustomerRecord_(customerValue, records) {
-  var exactKey = customerValue.toUpperCase().replace(/\s+/g, " ").trim();
-  var exact = records.filter(function (r) { return r.exactKey === exactKey; });
-  if (exact.length === 1) return exact[0];
-  if (exact.length > 1) return null;
-
-  var canonicalKey = normalizeWmsCustomerKey_(canonicalWmsCustomer_(customerValue));
-  if (!canonicalKey) return null;
-  var canonical = records.filter(function (r) { return r.canonicalKey === canonicalKey; });
-  return canonical.length === 1 ? canonical[0] : null;
+  return matchUniqueCustomerRecord_(customerValue, records);
 }
 
 /**
@@ -559,7 +545,7 @@ function familyAddressesFor_(name, records) {
  * the same predicate to tell the two paths apart after the fact.
  */
 function matchedByExactBackfillName_(customerValue, record) {
-  return customerValue.toUpperCase().replace(/\s+/g, " ").trim() === record.exactKey;
+  return customerExactKey_(customerValue) === record.exactKey;
 }
 
 /**
@@ -769,8 +755,8 @@ function makeBackfillRecord_(rowNumber, name, address) {
   return {
     rowNumber: rowNumber,
     name: name,
-    exactKey: name.toUpperCase().replace(/\s+/g, " "),
-    canonicalKey: normalizeWmsCustomerKey_(canonicalWmsCustomer_(name)),
+    exactKey: customerExactKey_(name),
+    canonicalKey: customerCanonicalKey_(name),
     address: address || ""
   };
 }

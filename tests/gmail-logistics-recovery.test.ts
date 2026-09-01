@@ -14,6 +14,7 @@ function loadInboundInsertHelper() {
 
 function loadWmsHelpers() {
   const code = readFileSync("google-apps-script/Code.gs", "utf8");
+  const locationSafety = readFileSync("google-apps-script/zzzzzzzzzzz_WmsLocationSafetyV5.gs", "utf8");
   const sync = readFileSync("google-apps-script/WmsTruckingSyncV2.gs", "utf8");
   const context = vm.createContext({
     console,
@@ -31,7 +32,7 @@ function loadWmsHelpers() {
     },
   });
   vm.runInContext(
-    `${code}\n${sync}\n;globalThis.__wmsRecovery = { wmsDestinationHint_, wmsExactGroupKey_, shouldWmsOverwriteShipDate_, wmsImportEligible_ };`,
+    `${code}\n${locationSafety}\n${sync}\n;globalThis.__wmsRecovery = { wmsDestinationHint_, wmsExactGroupKey_, shouldWmsOverwriteShipDate_, wmsImportEligible_ };`,
     context,
   );
   return context.__wmsRecovery as {
@@ -65,7 +66,7 @@ describe("Gmail logistics recovery safeguards", () => {
     const hintA = helpers.wmsDestinationHint_(stonestown, map);
     const hintB = helpers.wmsDestinationHint_(chinatown, map);
     expect(hintA).toBe("STONESTOWN GALLERIA");
-    expect(hintB).toBe("FANLOLI CHINATOWN");
+    expect(hintB).toBe("CHINATOWN");
     expect(helpers.wmsExactGroupKey_("Yixi Trading llc, DBA Fanloli Beauty", { key: "2026-09-04" }, hintA))
       .not.toBe(helpers.wmsExactGroupKey_("Yixi Trading llc, DBA Fanloli Beauty", { key: "2026-09-04" }, hintB));
   });

@@ -30,6 +30,8 @@ function wmsImportEligible_(dateInfo, todayKey) {
 
 function normalizeWmsDestinationHint_(value) {
   var text = String(value || "").trim();
+  var knownLocation = whYixiLocationAliasV5_(text);
+  if (knownLocation) return knownLocation;
   if (!text || /^(?:YES|NO|TRUE|FALSE|Y|N)$/i.test(text)) return "";
   if (/\b(?:OOS|ADD[ -]?ON|FREE SAMPLE|TOTAL|SKU)\b|A-SKU|총량|재고|문제/i.test(text)) return "";
   if (/^IN\d{6,}$/i.test(text)) return "";
@@ -56,16 +58,14 @@ function wmsExactGroupKey_(customer, dateInfo, destinationHint) {
 }
 
 /**
- * Idempotency key deliberately ignores the destination suffix. A single WMS
- * invoice may be encountered more than once with noisy/different destination
- * hints, but it must still produce at most one target row for a given
- * canonical customer and ship date.
+ * The destination remains part of the signature. The same customer/date can
+ * have separate physical deliveries, and location-aware grouping must not be
+ * undone by a broader invoice signature.
  */
 function wmsInvoiceSignatureFromKey_(groupKey, invoice) {
-  var baseKey = String(groupKey || "").split("___DEST_")[0];
   var cleanInvoice = String(invoice || "").trim().toUpperCase();
-  if (!baseKey || !cleanInvoice) return "";
-  return baseKey + "___INV_" + cleanInvoice;
+  if (!groupKey || !cleanInvoice) return "";
+  return String(groupKey) + "___INV_" + cleanInvoice;
 }
 
 function shouldWmsOverwriteShipDate_(currentRow, map) {
@@ -76,6 +76,7 @@ function shouldWmsOverwriteShipDate_(currentRow, map) {
 }
 
 function chooseWmsTargetRow_(groupKey, invoices, rows) {
+  rows = whFilterTargetRowsForLocationV5_(groupKey, invoices, rows);
   var wanted = new Set((invoices || []).map(function (invoice) {
     return String(invoice || "").trim().toUpperCase();
   }).filter(Boolean));
@@ -123,6 +124,7 @@ function scanAndImportWmsTruckingOrdersV2() {
   if (!lock.tryLock(10000)) return { ok: false, error: "Lock timeout" };
 
   try {
+    whBuildTargetLocationIndexV5_();
     var sourceSpreadsheet = SpreadsheetApp.openById(WMS_SPREADSHEET_ID);
     var targetSpreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
     var sourceSheet = sourceSpreadsheet.getSheetByName("Stylekorean");
@@ -360,6 +362,9 @@ function scanAndImportWmsTruckingOrdersV2() {
       ", skippedBeforeCutoff=" + skippedBeforeCutoff
     );
 
+    try { whBackfillLocationStoreV5_(); } catch (backfillError) { Logger.log("Location backfill failed: " + backfillError.message); }
+    try { dedupeWhTruckingLocationSafeV5_(); } catch (dedupeError) { Logger.log("Location-safe dedupe failed: " + dedupeError.message); }
+
     return {
       ok: true,
       dryRun: WMS_TRUCKING_DRY_RUN,
@@ -379,6 +384,11 @@ function scanAndImportWmsTruckingOrdersV2() {
   } finally {
     lock.releaseLock();
   }
+}
+
+/** Compatibility alias for any stale manually-installed legacy trigger. */
+function scanAndImportWmsTruckingOrders() {
+  return scanAndImportWmsTruckingOrdersV2();
 }
 
 /** Non-mutating twin of writeMappedValue_ — reports whether a write would

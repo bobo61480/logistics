@@ -101,6 +101,7 @@ function processXpoTrackingEmailsV2() {
         logPipeline_("XPO INGEST ERROR", id, String(error && error.stack || error));
       }
     });
+    if (stats.updated) gmailSafetyV4RefreshD1_("processXpoTrackingEmailsV2");
     logPipeline_("XPO V2 RUN", GMAIL_XPO_V2_VERSION, JSON.stringify(stats));
     return stats;
   } finally {
