@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildAuthenticatedInvoiceRequest,
+  createCmsSessionClient,
   fetchSessionInvoiceRows,
   isCmsSessionExpiredResponse,
   type CmsSessionClient,
@@ -22,6 +23,17 @@ describe("session-backed CMS invoice transport", () => {
     expect(headers.get("x-requested-with")).toBe("XMLHttpRequest");
     expect(headers.get("accept")).toContain("application/json");
     expect(headers.has("x-api-key")).toBe(false);
+  });
+
+  it("uses CMS_SESSION_COOKIE as a bootstrap session when unattended credentials are absent", async () => {
+    const cookie = "CMS_E=bootstrap-cookie; CSMS=bootstrap-context";
+    const client = createCmsSessionClient({
+      CMS_UPSTREAM_MCP_URL: "https://cms.mcp.siliconii.com/mcp/",
+      CMS_SESSION_COOKIE: cookie,
+    });
+
+    expect(await client.getSession()).toEqual({ cookieHeader: cookie });
+    await expect(client.renew()).rejects.toThrow("CMS_AUTH_NOT_CONFIGURED");
   });
 
   it("classifies redirects and login HTML as an expired CMS session", async () => {
