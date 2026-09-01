@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import bootstrapWorker from "../cms-gateway/bootstrap-worker";
 import {
   buildAuthenticatedInvoiceRequest,
-  createCmsSessionClient,
   fetchSessionInvoiceRows,
   isCmsSessionExpiredResponse,
   type CmsSessionClient,
@@ -25,15 +25,34 @@ describe("session-backed CMS invoice transport", () => {
     expect(headers.has("x-api-key")).toBe(false);
   });
 
-  it("uses CMS_SESSION_COOKIE as a bootstrap session when unattended credentials are absent", async () => {
+  it("uses CMS_SESSION_COOKIE as a bootstrap session for direct invoice reads", async () => {
     const cookie = "CMS_E=bootstrap-cookie; CSMS=bootstrap-context";
-    const client = createCmsSessionClient({
-      CMS_UPSTREAM_MCP_URL: "https://cms.mcp.siliconii.com/mcp/",
-      CMS_SESSION_COOKIE: cookie,
-    });
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        err: 0,
+        rows: 1,
+        data: [{ invc_no: "INV-BOOT", invc_dt: "2026-08-15", invc_atot: 125, biz_curr: "USD" }],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchImpl);
 
-    expect(await client.getSession()).toEqual({ cookieHeader: cookie });
-    await expect(client.renew()).rejects.toThrow("CMS_AUTH_NOT_CONFIGURED");
+    try {
+      const response = await bootstrapWorker.fetch(
+        new Request("https://gateway.example/sales-summary?month=2026-08"),
+        {
+          CMS_UPSTREAM_MCP_URL: "https://cms.mcp.siliconii.com/mcp/",
+          CMS_SESSION_COOKIE: cookie,
+        },
+      );
+      const body = await response.json() as { ok?: boolean; rows?: Array<{ totalSales?: number }> };
+
+      expect(response.status).toBe(200);
+      expect(body.ok).toBe(true);
+      expect(body.rows?.[0]?.totalSales).toBe(125);
+      expect(new Headers(fetchImpl.mock.calls[0]?.[1]?.headers).get("cookie")).toBe(cookie);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("classifies redirects and login HTML as an expired CMS session", async () => {
