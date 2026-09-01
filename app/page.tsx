@@ -463,7 +463,13 @@ export function computeInventoryAlerts(
     return products;
   };
   const stockProducts = aggregate(available, "available");
-  const inboundProducts = aggregate(inbound, "inbound");
+  // Drop non-positive inbound placeholders (blank/zero QTY EA on unfinished
+  // SKW_Inbound rows) so an unmatched empty inbound row can't materialize as a
+  // phantom product with available 0 / inbound 0 and read as a CRIT stockout.
+  const inboundProducts = aggregate(
+    inbound.filter((item) => item.quantity > 0),
+    "inbound",
+  );
   // Fold each inbound product into the matching available product (alias match,
   // not just exact key), the way the Low Stock panel matches inbound to a stock
   // row. Inbound with no available match at all is a fully out-of-stock product.
@@ -546,7 +552,17 @@ function InventoryAlerts({
           <span>alerts</span>
         </div>
       </div>
-      {alerts.length ? (
+      {loading ? (
+        <p className="inventory-alerts-empty">Syncing inventory…</p>
+      ) : !dataAvailable ? (
+        // Degraded takes precedence over any alerts: with no stock source loaded,
+        // inbound-only rows can still classify as zero-available, which must not
+        // be shown as real stockouts when current stock is unknown.
+        <p className="inventory-alerts-empty inventory-alerts-degraded">
+          Inventory data unavailable — the stock and inbound sheets did not load this sync, so
+          stock levels can&apos;t be checked. This does not mean stock is healthy.
+        </p>
+      ) : alerts.length ? (
         <ul className="inv-list">
           {alerts.map((alert) => (
             <li className="inv-item" key={alert.id}>
@@ -568,16 +584,9 @@ function InventoryAlerts({
             </li>
           ))}
         </ul>
-      ) : loading ? (
-        <p className="inventory-alerts-empty">Syncing inventory…</p>
-      ) : dataAvailable ? (
+      ) : (
         <p className="inventory-alerts-empty">
           No low-stock alerts. Every tracked product has healthy available cover.
-        </p>
-      ) : (
-        <p className="inventory-alerts-empty inventory-alerts-degraded">
-          Inventory data unavailable — the stock and inbound sheets did not load this sync, so
-          stock levels can&apos;t be checked. This does not mean stock is healthy.
         </p>
       )}
     </section>
@@ -3003,7 +3012,12 @@ export default function Home() {
           (s) => !alertInputs.available.some((a) => inventoryProductsMatch(a, s)),
         ),
       ];
-      setAlertAvailable(uniqueInventoryItems(availableSource, false));
+      // Pass the raw merged rows (not the display-oriented uniqueInventoryItems
+      // dedup, which ignores SOURCE_IB_ID/batch and would collapse two distinct
+      // SKW receipts for the same SKU/expiry/location into one). computeInventory-
+      // Alerts aggregates quantities per product, so distinct receipts sum
+      // (150 + 100 = 250) instead of one being dropped into a false LOW.
+      setAlertAvailable(availableSource);
       // Classify stock only when an actual STOCK source loaded (dashboard
       // availability or SKW on-hand). Inbound alone must NOT enable alerts, or
       // inbound-only SKUs would be reported as zero-available stockouts while

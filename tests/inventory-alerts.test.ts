@@ -136,4 +136,27 @@ describe("computeInventoryAlerts: severity + cross-identifier reconciliation", (
     );
     expect(alerts.map((a) => a.severity)).toEqual(["crit", "low", "inb"]);
   });
+
+  it("ignores a zero-quantity inbound placeholder that matches no stock", () => {
+    // A blank/zero QTY EA inbound row with no matching stock must not become a
+    // phantom product (available 0 / inbound 0) reported as a CRIT stockout.
+    const alerts = computeInventoryAlerts(
+      [item({ sku: "REAL", quantity: 4000 })],
+      [item({ sku: "PLACEHOLDER", quantity: 0 })],
+    );
+    expect(alerts).toHaveLength(0);
+  });
+
+  it("sums distinct stock receipts for the same product instead of dropping one", () => {
+    // Two SKW receipts (same SKU/expiry/location) sum to a healthy 250 rather
+    // than collapsing to a single 150 that would trip a false LOW.
+    const alerts = computeInventoryAlerts(
+      [
+        item({ id: "r1", sku: "S9", expirationDate: "2027-01-01", location: "A1", quantity: 150 }),
+        item({ id: "r2", sku: "S9", expirationDate: "2027-01-01", location: "A1", quantity: 100 }),
+      ],
+      [],
+    );
+    expect(alerts).toHaveLength(0);
+  });
 });
