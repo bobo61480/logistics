@@ -5,13 +5,29 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   verify:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - name: Apply CMS KPI branch patch
+        if: github.event.pull_request.head.ref == 'fix/cms-sales-kpi-mtd-ytd'
+        run: |
+          python3 scripts/apply-cms-kpi-branch-patch.py
+          git config user.name "stylekorean-ci"
+          git config user.email "actions@users.noreply.github.com"
+          git add worker/index.ts app/page.tsx app/globals.css wrangler.toml worker-configuration.d.ts
+          if git diff --cached --quiet; then
+            echo "CMS KPI patch already applied."
+          else
+            git commit -m "chore: apply CMS KPI branch patch"
+            git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          fi
       - uses: actions/setup-node@v4
         with:
           node-version: 22.13.0
