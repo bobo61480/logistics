@@ -15,7 +15,11 @@ degrades gracefully: when `TB_PNFM` yields nothing for an invoice, the actual
 arrival / received qty columns come back empty and `STATUS` falls back to the
 `ow_yn`-derived value. The `TB_INVC` columns are unaffected.
 
-**Runner:** `node scripts/cms-imports-map.mjs` (CSV to stdout; `--json` for JSON).
+**Runner:** `node scripts/cms-imports-map.mjs --prompt "<your question>"` (CSV to
+stdout; add `--json` for JSON). `--prompt` is **required** — it is written
+verbatim to the CMS operator audit log, so it must carry the requesting user's
+actual question and is never defaulted. Optional env: `CMS_MCP_URL`,
+`CMS_MCP_AUTH_TOKEN` (bearer token for a protected gateway).
 
 ## Where the data lives
 

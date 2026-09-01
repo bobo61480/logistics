@@ -149,11 +149,19 @@ async function mcpCall(tool, toolArgs) {
   const curlArgs = ["-sS", "--max-time", "60", "-X", "POST", MCP_URL,
     "-H", "Content-Type: application/json",
     "-H", "Accept: application/json, text/event-stream"];
-  if (AUTH_TOKEN) curlArgs.push("-H", `Authorization: Bearer ${AUTH_TOKEN}`);
+  // Pass the bearer header via a stdin config (`--config -`), never as an argv
+  // flag — execFileSync includes the full argv in any thrown error, which would
+  // otherwise leak the token into terminal/CI logs. `-d` reads from argv, so
+  // stdin is free for the config.
+  if (AUTH_TOKEN) curlArgs.push("--config", "-");
   curlArgs.push("-d", body);
   const viaCurl = () =>
     parseRpc(
-      execFileSync("curl", curlArgs, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }),
+      execFileSync("curl", curlArgs, {
+        encoding: "utf8",
+        maxBuffer: 64 * 1024 * 1024,
+        input: AUTH_TOKEN ? `header = "Authorization: Bearer ${AUTH_TOKEN}"\n` : undefined,
+      }),
     );
 
   let rpc;
@@ -217,9 +225,15 @@ const todayIso = new Intl.DateTimeFormat("en-CA", {
   timeZone: "America/Los_Angeles",
 }).format(new Date());
 
+// The gateway may serialize a SQL date as a full ISO timestamp
+// (2026-09-01T00:00:00.000Z); keep only the YYYY-MM-DD portion so lexical date
+// comparison and display stay correct.
+const dateOnly = (v) => (v ? String(v).slice(0, 10) : "");
+
 function suggestedStatus(invc, pnfm) {
   if (pnfm?.iw_yn === "Y") return "RECEIVED";
-  if (pnfm?.arrv_dt && pnfm.arrv_dt <= todayIso) return "DELIVERED";
+  const arrv = dateOnly(pnfm?.arrv_dt);
+  if (arrv && arrv <= todayIso) return "DELIVERED";
   if (invc.ow_yn === "Y") return "SHIPPING";
   return "SCHEDULED";
 }
@@ -242,14 +256,14 @@ const rows = invoices.map((invoiceNo) => {
     "INVOICE (C)": invc.invc_no,
     "MBL/AWB (D)": invc.airway_bill ?? "",
     "VESSEL (M)": invc.carrier ?? "",
-    "ETD (N)": invc.sailing_dt ?? "",
-    "ETA (O)": invc.eta_dt ?? "",
-    "DELIVERY EXPECTED (Q)": pnfm?.arrv_dt ?? "",
+    "ETD (N)": dateOnly(invc.sailing_dt),
+    "ETA (O)": dateOnly(invc.eta_dt),
+    "DELIVERY EXPECTED (Q)": dateOnly(pnfm?.arrv_dt),
     "STATUS (AB)": suggestedStatus(invc, pnfm),
     MODE: invc.ship_via ?? "",
     "SHIP PORT": invc.ship_port ?? "",
     "ARRV PORT": invc.arrv_port ?? "",
-    "OUTBOUND DT": invc.ow_dt ?? "",
+    "OUTBOUND DT": dateOnly(invc.ow_dt),
     QTY: invc.invc_qtot ?? "",
     "RECEIVED QTY": pnfm?.iw_qtot ?? "",
     ITEMS: invc.invc_icnt ?? "",
