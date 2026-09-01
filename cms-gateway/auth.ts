@@ -56,23 +56,33 @@ function decodeBase32(input: string): Uint8Array {
 }
 
 export async function generateTotp(secret: string, nowMs = Date.now()): Promise<string> {
-  const keyBytes = decodeBase32(secret);
-  const counter = BigInt(Math.floor(nowMs / 1000 / 30));
+  const decoded = decodeBase32(secret);
+  const keyBytes = new Uint8Array(decoded.length);
+  keyBytes.set(decoded);
+
+  const counter = Math.floor(nowMs / 1000 / 30);
+  const high = Math.floor(counter / 0x1_0000_0000);
+  const low = counter >>> 0;
   const counterBytes = new Uint8Array(8);
-  let value = counter;
-  for (let index = 7; index >= 0; index -= 1) {
-    counterBytes[index] = Number(value & 0xffn);
-    value >>= 8n;
-  }
+  counterBytes[0] = (high >>> 24) & 0xff;
+  counterBytes[1] = (high >>> 16) & 0xff;
+  counterBytes[2] = (high >>> 8) & 0xff;
+  counterBytes[3] = high & 0xff;
+  counterBytes[4] = (low >>> 24) & 0xff;
+  counterBytes[5] = (low >>> 16) & 0xff;
+  counterBytes[6] = (low >>> 8) & 0xff;
+  counterBytes[7] = low & 0xff;
 
   const key = await crypto.subtle.importKey(
     "raw",
-    keyBytes,
+    keyBytes.buffer as ArrayBuffer,
     { name: "HMAC", hash: "SHA-1" },
     false,
     ["sign"],
   );
-  const signature = new Uint8Array(await crypto.subtle.sign("HMAC", key, counterBytes));
+  const signature = new Uint8Array(
+    await crypto.subtle.sign("HMAC", key, counterBytes.buffer as ArrayBuffer),
+  );
   const offset = signature[signature.length - 1]! & 0x0f;
   const binary =
     ((signature[offset]! & 0x7f) << 24) |
