@@ -1,13 +1,33 @@
+import { CmsAuthError } from "./auth";
+import { unattendedAuthConfigured, type SessionHealth } from "./session-store";
+
+export { CmsSessionStore } from "./session-store";
+
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 25_000;
 const DIRECT_TIMEOUT_MS = 15_000;
 const MAX_QUERY_LIMIT = 10_000;
 const DIRECT_INVOICE_URL = "https://cms.siliconii.com/SalesProcess/INVCList";
+const CMS_ORIGIN = "https://cms.siliconii.com";
+const SESSION_OBJECT_NAME = "cms-session";
+
+type DurableObjectStubLike = {
+  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
+};
+
+type DurableObjectNamespaceLike = {
+  idFromName(name: string): unknown;
+  get(id: unknown): DurableObjectStubLike;
+};
 
 type Env = {
   CMS_UPSTREAM_MCP_URL: string;
   CMS_MCP_AUTH_TOKEN?: string;
   CMS_IMS_API_KEY?: string;
+  CMS_AUTH_USER?: string;
+  CMS_AUTH_PASSWORD?: string;
+  CMS_TOTP_SECRET?: string;
+  CMS_SESSION_STORE?: DurableObjectNamespaceLike;
 };
 
 type RpcRequest = {
@@ -22,6 +42,20 @@ type RpcRequest = {
       prompt?: string;
     };
   };
+};
+
+type CmsSessionView = {
+  cookieHeader: string;
+  createdAt?: string;
+  expiresAt?: string | null;
+  lastValidatedAt?: string | null;
+};
+
+export type CmsSessionClient = {
+  getSession(): Promise<CmsSessionView>;
+  invalidate(): Promise<void>;
+  renew(): Promise<CmsSessionView>;
+  health(): Promise<SessionHealth>;
 };
 
 function json(value: unknown, status = 200) {
@@ -161,12 +195,12 @@ function extractRows(payload: unknown): Record<string, unknown>[] {
   return [];
 }
 
-async function fetchDirectInvoiceRows(env: Env, month: string) {
-  if (!env.CMS_IMS_API_KEY) throw new Error("Direct CMS API key is not configured");
+function buildInvoiceUrl(month: string): URL {
   const { start, end } = monthBounds(month);
   const url = new URL(DIRECT_INVOICE_URL);
   url.search = new URLSearchParams({
-    mode: "LIST",
+    mode: "R01",
+    list_gbn: "I",
     key_val: "",
     appr_yn: "",
     block_gbn: "",
@@ -189,36 +223,161 @@ async function fetchDirectInvoiceRows(env: Env, month: string) {
     biz_curr: "",
     pay_curr: "",
     pkng_gbn: "",
+    creq_yn: "",
     ow_yn: "",
     ow_sdt: "",
     ow_edt: "",
     invc_no: "",
     curr_lang: "ENG",
   }).toString();
+  return url;
+}
+
+export function buildAuthenticatedInvoiceRequest(sessionCookie: string): RequestInit {
+  return {
+    method: "GET",
+    redirect: "manual",
+    cache: "no-store",
+    headers: {
+      Accept: "application/json, text/javascript, */*; q=0.01",
+      Cookie: sessionCookie,
+      Referer: `${CMS_ORIGIN}/Sales/InvcList`,
+      "X-Requested-With": "XMLHttpRequest",
+      "User-Agent": "StyleKorean-CMS-Gateway/2026-09-01",
+    },
+  };
+}
+
+export async function isCmsSessionExpiredResponse(response: Response): Promise<boolean> {
+  if (response.status >= 300 && response.status < 400) return true;
+  const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
+  if (contentType.includes("text/html")) return true;
+  if (contentType.includes("json")) return false;
+  try {
+    const preview = (await response.clone().text()).slice(0, 2048);
+    return /<html|<form|\/Logon\/|CheckLogin|TotpVerify/i.test(preview);
+  } catch {
+    return false;
+  }
+}
+
+async function fetchInvoiceRowsOnce(
+  month: string,
+  sessionCookie: string,
+  fetchImpl: typeof fetch,
+): Promise<Record<string, unknown>[]> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), DIRECT_TIMEOUT_MS);
   try {
-    const response = await fetch(url, {
-      headers: {
-        Accept: "application/json, text/plain, */*",
-        "x-api-key": env.CMS_IMS_API_KEY,
-        Origin: "https://cms.siliconii.com",
-        Referer: "https://cms.siliconii.com/SalesProcess/INVCList",
-        "User-Agent": "StyleKorean-CMS-Gateway/2026-09-01",
-      },
-      signal: controller.signal,
-    });
-    const contentType = response.headers.get("content-type") || "";
-    const raw = await response.text();
-    if (!response.ok) throw new Error(`Direct CMS invoice HTTP ${response.status}`);
-    if (!contentType.toLowerCase().includes("json") && !raw.trim().startsWith("{") && !raw.trim().startsWith("[")) {
-      throw new Error("Direct CMS invoice endpoint did not return JSON");
+    let response: Response;
+    try {
+      response = await fetchImpl(buildInvoiceUrl(month), {
+        ...buildAuthenticatedInvoiceRequest(sessionCookie),
+        signal: controller.signal,
+      });
+    } catch {
+      throw new Error("CMS_DIRECT_REQUEST_FAILED");
     }
-    const rows = extractRows(JSON.parse(raw));
-    if (!rows.length) throw new Error("Direct CMS invoice endpoint returned no readable rows");
-    return rows;
+
+    if (await isCmsSessionExpiredResponse(response)) {
+      throw new CmsAuthError("CMS_AUTH_SESSION_INVALID");
+    }
+    if (!response.ok) throw new Error("CMS_DIRECT_REQUEST_FAILED");
+
+    const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
+    const raw = await response.text();
+    if (new TextEncoder().encode(raw).byteLength > MAX_RESPONSE_BYTES) {
+      throw new Error("CMS_DIRECT_RESPONSE_TOO_LARGE");
+    }
+    if (!contentType.includes("json") && !raw.trim().startsWith("{") && !raw.trim().startsWith("[")) {
+      throw new CmsAuthError("CMS_AUTH_SESSION_INVALID");
+    }
+
+    let payload: unknown;
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      throw new Error("CMS_DIRECT_RESPONSE_INVALID");
+    }
+    const envelope = payload && typeof payload === "object" ? payload as Record<string, unknown> : null;
+    if (envelope && "err" in envelope && Number(envelope.err) !== 0) {
+      throw new Error("CMS_DIRECT_RESPONSE_REJECTED");
+    }
+    return extractRows(payload);
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+export async function fetchSessionInvoiceRows(
+  month: string,
+  sessionClient: CmsSessionClient,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Record<string, unknown>[]> {
+  const current = await sessionClient.getSession();
+  try {
+    return await fetchInvoiceRowsOnce(month, current.cookieHeader, fetchImpl);
+  } catch (error) {
+    if (!(error instanceof CmsAuthError) || error.code !== "CMS_AUTH_SESSION_INVALID") throw error;
+  }
+
+  await sessionClient.invalidate();
+  const renewed = await sessionClient.renew();
+  return fetchInvoiceRowsOnce(month, renewed.cookieHeader, fetchImpl);
+}
+
+function createCmsSessionClient(env: Env): CmsSessionClient {
+  if (!env.CMS_SESSION_STORE) throw new CmsAuthError("CMS_AUTH_NOT_CONFIGURED");
+  const id = env.CMS_SESSION_STORE.idFromName(SESSION_OBJECT_NAME);
+  const stub = env.CMS_SESSION_STORE.get(id);
+
+  async function call<T>(path: string, method: "GET" | "POST"): Promise<T> {
+    let response: Response;
+    try {
+      response = await stub.fetch(`https://cms-session.internal${path}`, { method });
+    } catch {
+      throw new CmsAuthError("CMS_AUTH_RENEWAL_FAILED");
+    }
+    let payload: Record<string, unknown>;
+    try {
+      payload = await response.json<Record<string, unknown>>();
+    } catch {
+      throw new CmsAuthError("CMS_AUTH_RENEWAL_FAILED");
+    }
+    if (!response.ok) {
+      const code = text(payload.error) || "CMS_AUTH_RENEWAL_FAILED";
+      throw new CmsAuthError(code);
+    }
+    return payload as T;
+  }
+
+  return {
+    getSession: () => call<CmsSessionView>("/session", "GET"),
+    renew: () => call<CmsSessionView>("/renew", "POST"),
+    invalidate: async () => {
+      await call<{ ok: boolean }>("/invalidate", "POST");
+    },
+    health: () => call<SessionHealth>("/health", "GET"),
+  };
+}
+
+function fallbackSessionHealth(env: Env, state?: SessionHealth["cmsSessionState"]): SessionHealth {
+  const configured = unattendedAuthConfigured(env);
+  return {
+    unattendedAuthConfigured: configured,
+    cmsSessionState: state ?? (configured ? "error" : "missing"),
+    cmsSessionCreatedAt: null,
+    cmsSessionExpiresAt: null,
+    cmsSessionLastValidatedAt: null,
+  };
+}
+
+async function readSafeSessionHealth(env: Env): Promise<SessionHealth> {
+  if (!env.CMS_SESSION_STORE) return fallbackSessionHealth(env);
+  try {
+    return await createCmsSessionClient(env).health();
+  } catch {
+    return fallbackSessionHealth(env);
   }
 }
 
@@ -310,25 +469,36 @@ async function handleSalesSummary(url: URL, env: Env) {
   try {
     monthBounds(month);
     let directError = "";
-    if (env.CMS_IMS_API_KEY) {
-      try {
-        const directRows = await fetchDirectInvoiceRows(env, month);
-        const rows = summarizeInvoiceRows(directRows, month);
-        if (rows.length) {
-          return json({
-            ok: true,
-            month,
-            source: { endpoint: DIRECT_INVOICE_URL, transport: "direct-api" },
-            rows,
-            generatedAt: new Date().toISOString(),
-            notes: "Totals are grouped by CMS currency and are not combined across currencies.",
-          });
-        }
-        directError = "Direct CMS invoice data contained no numeric invoice totals for the requested month";
-      } catch (error) {
-        directError = error instanceof Error ? error.message : String(error);
+    try {
+      const directRows = await fetchSessionInvoiceRows(month, createCmsSessionClient(env));
+      const rows = summarizeInvoiceRows(directRows, month);
+      if (rows.length) {
+        return json({
+          ok: true,
+          month,
+          source: { endpoint: DIRECT_INVOICE_URL, transport: "browser-session" },
+          rows,
+          generatedAt: new Date().toISOString(),
+          notes: "Totals are grouped by CMS currency and are not combined across currencies.",
+        });
       }
+      directError = "CMS_DIRECT_NO_SALES_DATA";
+    } catch (error) {
+      directError = error instanceof CmsAuthError
+        ? error.code
+        : error instanceof Error
+          ? error.message
+          : "CMS_DIRECT_REQUEST_FAILED";
     }
+
+    if (directError === "CMS_AUTH_NOT_CONFIGURED") {
+      return json({
+        ok: false,
+        error: directError,
+        transportsTried: ["browser-session"],
+      }, 503);
+    }
+
     try {
       const result = await fetchMcpSalesSummary(env, month);
       return json({
@@ -344,7 +514,7 @@ async function handleSalesSummary(url: URL, env: Env) {
         ok: false,
         error: mcpError,
         directError: directError || undefined,
-        transportsTried: [env.CMS_IMS_API_KEY ? "direct-api" : null, "mcp"].filter(Boolean),
+        transportsTried: ["browser-session", "mcp"],
       }, 502);
     }
   } catch (error) {
@@ -356,13 +526,15 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/health") {
+      const sessionHealth = await readSafeSessionHealth(env);
       return json({
         ok: true,
         service: "stylekorean-cms-gateway",
         mode: "read-only",
         upstreamConfigured: Boolean(env.CMS_UPSTREAM_MCP_URL),
         authForwardingConfigured: Boolean(env.CMS_MCP_AUTH_TOKEN),
-        directInvoiceConfigured: Boolean(env.CMS_IMS_API_KEY),
+        directInvoiceConfigured: Boolean(env.CMS_SESSION_STORE),
+        ...sessionHealth,
         checkedAt: new Date().toISOString(),
       });
     }

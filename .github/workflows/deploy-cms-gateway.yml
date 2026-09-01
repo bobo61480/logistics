@@ -40,6 +40,9 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CMS_MCP_AUTH_TOKEN: ${{ secrets.CMS_MCP_AUTH_TOKEN }}
           CMS_IMS_API_KEY: ${{ secrets.CMS_IMS_API_KEY }}
+          CMS_AUTH_USER: ${{ secrets.CMS_AUTH_USER }}
+          CMS_AUTH_PASSWORD: ${{ secrets.CMS_AUTH_PASSWORD }}
+          CMS_TOTP_SECRET: ${{ secrets.CMS_TOTP_SECRET }}
         run: |
           set -euo pipefail
           if [ -n "${CMS_MCP_AUTH_TOKEN:-}" ]; then
@@ -50,7 +53,22 @@ jobs:
           if [ -n "${CMS_IMS_API_KEY:-}" ]; then
             printf '%s' "$CMS_IMS_API_KEY" | npx wrangler secret put CMS_IMS_API_KEY --name stylekorean-cms-gateway --config wrangler.cms-gateway.toml
           else
-            echo "CMS_IMS_API_KEY is not configured; direct invoice fallback will be unavailable."
+            echo "CMS_IMS_API_KEY is not configured; IMS inventory access will remain unavailable."
+          fi
+          if [ -n "${CMS_AUTH_USER:-}" ]; then
+            printf '%s' "$CMS_AUTH_USER" | npx wrangler secret put CMS_AUTH_USER --name stylekorean-cms-gateway --config wrangler.cms-gateway.toml
+          else
+            echo "CMS_AUTH_USER is not configured; unattended CMS authentication will remain disabled."
+          fi
+          if [ -n "${CMS_AUTH_PASSWORD:-}" ]; then
+            printf '%s' "$CMS_AUTH_PASSWORD" | npx wrangler secret put CMS_AUTH_PASSWORD --name stylekorean-cms-gateway --config wrangler.cms-gateway.toml
+          else
+            echo "CMS_AUTH_PASSWORD is not configured; unattended CMS authentication will remain disabled."
+          fi
+          if [ -n "${CMS_TOTP_SECRET:-}" ]; then
+            printf '%s' "$CMS_TOTP_SECRET" | npx wrangler secret put CMS_TOTP_SECRET --name stylekorean-cms-gateway --config wrangler.cms-gateway.toml
+          else
+            echo "CMS_TOTP_SECRET is not configured; unattended CMS authentication will remain disabled."
           fi
 
       - name: Deploy CMS gateway Worker
