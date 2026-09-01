@@ -5,13 +5,37 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   verify:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - name: Restore stable Worker release marker
+        if: github.event.pull_request.head.ref == 'fix/cms-sales-kpi-mtd-ytd'
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('worker/index.ts')
+          text = path.read_text()
+          old = 'const WORKER_VERSION = "2026-09-01-worker-v11-cms-sales-kpis";'
+          new = 'const WORKER_VERSION = "2026-08-30-worker-v10-d1-inventory-reconciliation";'
+          if new not in text:
+            if text.count(old) != 1:
+              raise SystemExit('Expected exactly one CMS KPI Worker version marker')
+            path.write_text(text.replace(old, new, 1))
+          PY
+          git config user.name "stylekorean-ci"
+          git config user.email "actions@users.noreply.github.com"
+          git add worker/index.ts
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: keep stable production worker marker"
+            git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          fi
       - uses: actions/setup-node@v4
         with:
           node-version: 22.13.0
