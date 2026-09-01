@@ -64,16 +64,31 @@ jobs:
           set -euo pipefail
           gateway_url="$(cat /tmp/cms-gateway-url.txt)"
           test -n "$gateway_url"
-          curl -fsSL --max-time 30 "$gateway_url/health" -o /tmp/cms-health.json
-          grep -Fq '"ok":true' /tmp/cms-health.json
-          # Sales verification may return 502 if the upstream CMS is unavailable,
-          # but the route itself must exist and return JSON rather than a 404.
+
+          health_ok=0
+          for attempt in 1 2 3 4 5 6; do
+            status="$(curl -sS --max-time 30 -o /tmp/cms-health.json -w '%{http_code}' "$gateway_url/health" || true)"
+            if [ "$status" = "200" ] && grep -Fq '"ok":true' /tmp/cms-health.json; then
+              health_ok=1
+              break
+            fi
+            echo "Gateway health attempt ${attempt} returned HTTP ${status}"
+            cat /tmp/cms-health.json 2>/dev/null || true
+            sleep 10
+          done
+          if [ "$health_ok" -ne 1 ]; then
+            echo "CMS gateway health never became reachable"
+            exit 1
+          fi
+
           status="$(curl -sS --max-time 60 -o /tmp/cms-sales.json -w '%{http_code}' "$gateway_url/sales-summary?month=2026-08" || true)"
           if [ "$status" = "404" ] || [ -z "$status" ]; then
             echo "CMS sales route is not deployed"
             exit 1
           fi
+          echo "Gateway health:"
           cat /tmp/cms-health.json
           echo
+          echo "August sales route HTTP ${status}:"
           cat /tmp/cms-sales.json
           echo
