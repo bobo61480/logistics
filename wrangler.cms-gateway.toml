@@ -1,5 +1,5 @@
 name = "stylekorean-cms-gateway"
-main = "cms-gateway/worker.ts"
+main = "cms-gateway/bootstrap-worker.ts"
 compatibility_date = "2026-08-31"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = true

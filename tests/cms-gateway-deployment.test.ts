@@ -1,12 +1,12 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import worker from "../cms-gateway/worker";
+import worker from "../cms-gateway/bootstrap-worker";
 
 describe("CMS gateway unattended auth deployment", () => {
-  it("provisions all unattended-auth secrets through GitHub Actions without command-line values", () => {
+  it("provisions unattended-auth and bootstrap-session secrets through GitHub Actions without command-line values", () => {
     const workflow = readFileSync(".github/workflows/deploy-cms-gateway.yml", "utf8");
 
-    for (const name of ["CMS_AUTH_USER", "CMS_AUTH_PASSWORD", "CMS_TOTP_SECRET"]) {
+    for (const name of ["CMS_AUTH_USER", "CMS_AUTH_PASSWORD", "CMS_TOTP_SECRET", "CMS_SESSION_COOKIE"]) {
       expect(workflow).toContain(`${name}: \${{ secrets.${name} }}`);
       expect(workflow).toContain(`printf '%s' "$${name}" | npx wrangler secret put ${name}`);
       expect(workflow).not.toMatch(new RegExp(`wrangler secret put ${name}[^\\n]*--value`, "i"));
@@ -18,6 +18,7 @@ describe("CMS gateway unattended auth deployment", () => {
       new Request("https://gateway.example/health"),
       {
         CMS_UPSTREAM_MCP_URL: "https://cms.mcp.siliconii.com/mcp/",
+        CMS_SESSION_COOKIE: "CMS_E=bootstrap-secret; CSMS=context-secret",
       },
     );
     const body = await response.json() as Record<string, unknown>;
@@ -26,6 +27,7 @@ describe("CMS gateway unattended auth deployment", () => {
     expect(body).toMatchObject({
       ok: true,
       unattendedAuthConfigured: false,
+      bootstrapSessionConfigured: true,
       cmsSessionState: "missing",
       cmsSessionCreatedAt: null,
       cmsSessionExpiresAt: null,
@@ -34,6 +36,8 @@ describe("CMS gateway unattended auth deployment", () => {
 
     const serialized = JSON.stringify(body).toLowerCase();
     for (const forbidden of [
+      "bootstrap-secret",
+      "context-secret",
       "cookieheader",
       "password",
       "totpsecret",
@@ -41,6 +45,7 @@ describe("CMS gateway unattended auth deployment", () => {
       "pending_token",
       "guid",
       "cms_auth_user",
+      "cms_session_cookie",
     ]) {
       expect(serialized).not.toContain(forbidden);
     }

@@ -43,6 +43,7 @@ jobs:
           CMS_AUTH_USER: ${{ secrets.CMS_AUTH_USER }}
           CMS_AUTH_PASSWORD: ${{ secrets.CMS_AUTH_PASSWORD }}
           CMS_TOTP_SECRET: ${{ secrets.CMS_TOTP_SECRET }}
+          CMS_SESSION_COOKIE: ${{ secrets.CMS_SESSION_COOKIE }}
         run: |
           set -euo pipefail
           if [ -n "${CMS_MCP_AUTH_TOKEN:-}" ]; then
@@ -69,6 +70,11 @@ jobs:
             printf '%s' "$CMS_TOTP_SECRET" | npx wrangler secret put CMS_TOTP_SECRET --name stylekorean-cms-gateway --config wrangler.cms-gateway.toml
           else
             echo "CMS_TOTP_SECRET is not configured; unattended CMS authentication will remain disabled."
+          fi
+          if [ -n "${CMS_SESSION_COOKIE:-}" ]; then
+            printf '%s' "$CMS_SESSION_COOKIE" | npx wrangler secret put CMS_SESSION_COOKIE --name stylekorean-cms-gateway --config wrangler.cms-gateway.toml
+          else
+            echo "CMS_SESSION_COOKIE is not configured in GitHub Actions; any existing Worker secret is left unchanged."
           fi
 
       - name: Deploy CMS gateway Worker
