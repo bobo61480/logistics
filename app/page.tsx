@@ -14,7 +14,6 @@ import { useParcelTracking, type TrackableShipment, type TrackingResult } from "
 import { ThemeToggle } from "./theme-toggle";
 import { DataGrids } from "./data-grids";
 import { IngestionRoadmapCard } from "./ingestion-roadmap-card";
-import { LOGISTICS_STATUS_OPTIONS } from "../lib/domain/status";
 import { airlineNameFromFlight } from "../lib/domain/airlines";
 
 const SHEET_ID =
@@ -38,12 +37,12 @@ const SALES_SHEET_URL = `https://docs.google.com/spreadsheets/d/${SALES_SHEET_ID
 // A direct Apps Script URL can be supplied only as a temporary static-host fallback.
 const DATA_ENDPOINT =
   process.env.NEXT_PUBLIC_LOGISTICS_SNAPSHOT_URL ?? "/api/logistics/snapshot";
-const STATUS_ENDPOINT =
-  process.env.NEXT_PUBLIC_LOGISTICS_STATUS_URL ?? "/api/logistics/status";
 const PENDING_REVIEW_ENDPOINT =
   process.env.NEXT_PUBLIC_LOGISTICS_PENDING_REVIEW_URL ?? "/api/logistics/pending-review";
-const LEGACY_WRITE_ENDPOINT =
-  process.env.NEXT_PUBLIC_APPS_SCRIPT_WRITE_URL ?? "";
+// Status writes have been removed from this UI. The schedule is now read-only:
+// statuses are shown as color-coded pills only, never edited from the browser.
+// The Worker /api/logistics/status endpoint and the bound Apps Script remain in
+// place but are no longer called from here.
 const AUTO_REFRESH_MS = 30 * 60 * 1000;
 
 type Direction = "inbound" | "outbound";
@@ -361,34 +360,178 @@ export function statusClass(status: string) {
   return "status neutral";
 }
 
-/**
- * Every canonical status this app recognizes (lib/domain/status.ts), each
- * shown through the same statusClass() pill classifier the schedule cards
- * and Data Grids use — so this legend can never silently drift from what
- * those actually render, and can never omit a real status the way a
- * hand-maintained list could.
- */
-function StatusLegend() {
+// Compact, scannable one-line shipment notice for schedule cards, e.g.
+// "🙂 OSL10 · ACME · PRO 08120718885 · SHIPPED". Replaces the older free-text
+// secondary line with a fixed shape: emoji, shipment# (or customer),
+// PRO/Tracking#, status. The emoji mirrors the statusClass() pill bucket so it
+// stays consistent with the color-coded status pill on the same card.
+export function shipmentNoticeLine(item: ScheduleItem) {
+  const bucket = statusClass(item.status);
+  const emoji = bucket.includes("stop")
+    ? "❌"
+    : bucket.includes("warn")
+      ? "⏳"
+      : bucket.includes("hold")
+        ? "🛃"
+        : bucket.includes("good")
+          ? "🙂"
+          : "🚚";
+  const primary =
+    clean(item.shipmentNo) || clean(item.customer) || clean(item.customerNo) || clean(item.title);
+  const customer = clean(item.customer);
+  const proOrTracking = clean(item.pro)
+    ? `PRO ${clean(item.pro)}`
+    : clean(item.trackingNumber)
+      ? `TRACKING ${clean(item.trackingNumber)}`
+      : "";
+  const status = clean(item.status).toUpperCase();
+  const parts = [primary];
+  if (customer && normalizedIdentifier(customer) !== normalizedIdentifier(primary)) {
+    parts.push(customer);
+  }
+  if (proOrTracking) parts.push(proOrTracking);
+  if (status) parts.push(status);
+  return { emoji, text: parts.filter(Boolean).join(" · ") };
+}
+
+type InventorySeverity = "crit" | "low" | "inb";
+
+export type InventoryAlert = {
+  id: string;
+  productName: string;
+  sku: string;
+  available: number;
+  inbound: number;
+  severity: InventorySeverity;
+};
+
+// Any product whose current warehouse on-hand is below this is flagged LOW.
+// Matches the Low Stock panel's own "under 200" convention so the two agree.
+const LOW_STOCK_ALERT_THRESHOLD = 200;
+
+// Roll current warehouse on-hand and inbound-in-transit into one alert list,
+// modelled on the HQ dashboard's Inventory Alerts panel. Products are keyed by
+// SKU (falling back to UPC, then product name) so on-hand and inbound rows for
+// the same product combine into a single available/inbound pair. Severity:
+//   CRIT — oversold (available < 0) or out of stock with nothing inbound
+//   INB  — out of stock but replenishment is inbound
+//   LOW  — some stock on hand, but under the low-stock threshold
+// Products with healthy on-hand cover produce no alert.
+export function computeInventoryAlerts(
+  stock: InventoryItem[],
+  inbound: InventoryItem[],
+): InventoryAlert[] {
+  const productKey = (item: InventoryItem) =>
+    normalizedIdentifier(item.sku) ||
+    normalizedIdentifier(item.upc) ||
+    normalizedIdentifier(item.productName);
+  const rows = new Map<string, InventoryAlert>();
+  const ensure = (item: InventoryItem) => {
+    const key = productKey(item);
+    if (!key) return null;
+    let row = rows.get(key);
+    if (!row) {
+      row = {
+        id: key,
+        productName: item.productName || item.sku || item.upc,
+        sku: item.sku || item.upc,
+        available: 0,
+        inbound: 0,
+        severity: "inb",
+      };
+      rows.set(key, row);
+    }
+    if (!row.productName && item.productName) row.productName = item.productName;
+    if (!row.sku && (item.sku || item.upc)) row.sku = item.sku || item.upc;
+    return row;
+  };
+  for (const item of stock) {
+    const row = ensure(item);
+    if (row) row.available += item.quantity;
+  }
+  for (const item of inbound) {
+    const row = ensure(item);
+    if (row) row.inbound += item.quantity;
+  }
+  const alerts: InventoryAlert[] = [];
+  for (const row of rows.values()) {
+    let severity: InventorySeverity | null = null;
+    if (row.available < 0) severity = "crit";
+    else if (row.available === 0) severity = row.inbound > 0 ? "inb" : "crit";
+    else if (row.available < LOW_STOCK_ALERT_THRESHOLD) severity = "low";
+    if (!severity) continue;
+    alerts.push({ ...row, severity });
+  }
+  const rank: Record<InventorySeverity, number> = { crit: 0, low: 1, inb: 2 };
+  return alerts.sort(
+    (a, b) => rank[a.severity] - rank[b.severity] || a.available - b.available,
+  );
+}
+
+const INVENTORY_SEVERITY_LABEL: Record<InventorySeverity, string> = {
+  crit: "CRIT",
+  low: "LOW",
+  inb: "INB",
+};
+
+// Replaces the former "Status Workflow" legend. Sourced live from the same
+// warehouse-stock and inbound-inventory collections the inventory panels use;
+// when neither is available it shows a clean empty state instead of inventing
+// data.
+function InventoryAlerts({
+  stock,
+  inbound,
+  loading,
+}: {
+  stock: InventoryItem[];
+  inbound: InventoryItem[];
+  loading: boolean;
+}) {
+  const alerts = useMemo(() => computeInventoryAlerts(stock, inbound), [stock, inbound]);
   return (
-    <section className="status-legend-panel" aria-labelledby="status-legend-heading">
-      <div className="panel-heading status-legend-heading">
+    <section
+      className="inventory-panel inventory-alerts-panel"
+      aria-labelledby="inventory-alerts-heading"
+    >
+      <div className="panel-heading inventory-heading">
         <div>
-          <p className="eyebrow">Shared Vocabulary</p>
-          <h2 id="status-legend-heading">Status Workflow</h2>
+          <p className="eyebrow">Out of stock · low stock · inbound cover</p>
+          <h2 id="inventory-alerts-heading">Inventory Alerts</h2>
+        </div>
+        <div className="inventory-total">
+          <strong>{alerts.length}</strong>
+          <span>alerts</span>
         </div>
       </div>
-      <div className="status-legend-row">
-        {LOGISTICS_STATUS_OPTIONS.map((option) => (
-          <span key={option} className={statusClass(option)}>
-            {option}
-          </span>
-        ))}
-      </div>
-      <p className="panel-note status-legend-note">
-        Normalized from raw sheet text (lib/domain/status.ts). The five colors group statuses by
-        what they mean operationally — complete, needs attention now, delayed/pending, held for
-        review, or in progress — not by which department&apos;s sheet a row came from.
-      </p>
+      {alerts.length ? (
+        <ul className="inv-list">
+          {alerts.map((alert) => (
+            <li className="inv-item" key={alert.id}>
+              <div className={`inv-sev sev-${alert.severity}`}>
+                {INVENTORY_SEVERITY_LABEL[alert.severity]}
+              </div>
+              <div className="inv-info">
+                <div className="inv-name">{alert.productName || "—"}</div>
+                <div className="inv-sku">{alert.sku || "—"}</div>
+              </div>
+              <div className="inv-qty">
+                <div className={`inv-avail qty-${alert.severity}`}>
+                  {alert.available.toLocaleString()}
+                </div>
+                {alert.inbound > 0 ? (
+                  <div className="inv-inbound">+{alert.inbound.toLocaleString()} inbound</div>
+                ) : null}
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="inventory-alerts-empty">
+          {loading
+            ? "Syncing inventory…"
+            : "No low-stock alerts. Every tracked product has healthy on-hand cover."}
+        </p>
+      )}
     </section>
   );
 }
@@ -570,12 +713,7 @@ function firstDatedValue(...values: string[]) {
   return null;
 }
 
-function lastDateToken(value: string) { const matches = clean(value).match(/\d{1,2}\/\d{1,2}(?:\/\d{2,4})?/g); return matches ? matches[matches.length - 1] : clean(value); } function sanitizeSecondary(value: string) {
-  return clean(value)
-    .split(/\s*·\s*/)
-    .filter((part) => part && !/^imported from\b/i.test(part))
-    .join(" · ");
-}
+function lastDateToken(value: string) { const matches = clean(value).match(/\d{1,2}\/\d{1,2}(?:\/\d{2,4})?/g); return matches ? matches[matches.length - 1] : clean(value); }
 
 function splitValues(value: string) {
   return clean(value)
@@ -1726,14 +1864,10 @@ function inboundItems(table: any, importsRows: string[][]): ScheduleItem[] {
 function ImportSchedules({
   items,
   loading,
-  savingId,
-  onStatus,
   selectedInventory,
 }: {
   items: ScheduleItem[];
   loading: boolean;
-  savingId: string;
-  onStatus: (item: ScheduleItem, status: string) => void;
   selectedInventory: InventoryItem | null;
 }) {
   const sortedItems = useMemo(
@@ -1842,21 +1976,7 @@ function ImportSchedules({
                 <td>{item.pod || "—"}</td>
                 <td><time dateTime={dayKey(item.date)}>{item.eta || item.dateText || "—"}</time></td>
                 <td>
-                  {item.editable ? (
-                    <select
-                      className="compact-status-select"
-                      aria-label={`Update ${item.title} status`}
-                      disabled={savingId === item.id}
-                      value={INBOUND_STATUS_OPTIONS.includes(item.status) ? item.status : "Scheduled"}
-                      onChange={(event) => onStatus(item, event.target.value)}
-                    >
-                      {INBOUND_STATUS_OPTIONS.map((option) => (
-                        <option key={option}>{option}</option>
-                      ))}
-                    </select>
-                  ) : (
-                    <span className={statusClass(item.status)}>{item.status}</span>
-                  )}
+                  <span className={statusClass(item.status)}>{item.status}</span>
                 </td>
               </tr>
             )})}
@@ -2168,75 +2288,10 @@ function consolidateTruckingItems(records: ScheduleItem[]) {
   return [...ungrouped, ...consolidated];
 }
 
-async function postStatus(item: ScheduleItem, status: string) {
-  const payload = {
-    kind: item.direction,
-    sourceSheet: item.sourceSheet,
-    sourceRow: item.sourceRow,
-    shipmentNo: item.shipmentNo ?? "",
-    container: item.container ?? "",
-    mbl: item.mbl ?? "",
-    hbl: item.hbl ?? "",
-    pro: item.pro ?? "",
-    invoice: item.invoice ?? "",
-    customer: item.customer ?? "",
-    shipDate: item.shipDate ?? "",
-    currentStatus: item.status,
-    // findInboundTarget_ (Code.gs) needs isSmallParcel to route the write into the
-    // IMPORTS sheet's PARCELS section instead of validating it as a regular import row.
-    isSmallParcel: item.isSmallParcel ?? false,
-    trackingNumber: item.trackingNumber ?? "",
-    status,
-  };
-
-  const parseConfirmation = async (response: Response) => {
-    const result = (await response.json().catch(() => null)) as
-      | { ok?: boolean; error?: string; status?: string }
-      | null;
-    if (!response.ok || result?.ok === false) {
-      const error = new Error(result?.error || `Status update failed (${response.status}).`);
-      (error as Error & { status?: number }).status = response.status;
-      throw error;
-    }
-    if (!result || result.ok !== true) {
-      throw new Error("The status service returned an invalid confirmation.");
-    }
-    if (normalizeStatus(String(result.status ?? "")) !== normalizeStatus(status)) {
-      throw new Error("The persisted status did not match the requested status.");
-    }
-    return result;
-  };
-
-  try {
-    const response = await fetch(STATUS_ENDPOINT, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    return await parseConfirmation(response);
-  } catch (error) {
-    const statusCode = (error as Error & { status?: number })?.status;
-    const mayUseLegacy =
-      Boolean(LEGACY_WRITE_ENDPOINT) &&
-      (statusCode === 404 || statusCode === 405 || statusCode === undefined);
-
-    // Static-host migration fallback only. Do not fall back on validation or
-    // concurrency errors, because doing so could overwrite a newer status.
-    if (!mayUseLegacy) throw error;
-
-    const response = await fetch(LEGACY_WRITE_ENDPOINT, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(payload),
-    });
-    return await parseConfirmation(response);
-  }
-}
-
 /**
- * Approve or reject one Gmail-ingestion review row. No legacy-endpoint
- * fallback (unlike postStatus) — this is a brand-new action with no prior
- * static-host caller to stay compatible with.
+ * Approve or reject one Gmail-ingestion review row. This is the only remaining
+ * write path from this UI (schedule status writes have been removed); it posts
+ * to the same-origin pending-review endpoint with no legacy-endpoint fallback.
  */
 async function postPendingReview(event: GmailIngestionEvent, decision: "approve" | "reject") {
   if (!event.reviewKey) {
@@ -2258,16 +2313,7 @@ async function postPendingReview(event: GmailIngestionEvent, decision: "approve"
   return result;
 }
 
-function ScheduleCard({
-  item,
-  saving,
-  onStatus,
-}: {
-  item: ScheduleItem;
-  saving: boolean;
-  onStatus: (item: ScheduleItem, status: string) => void;
-}) {
-  const options = item.direction === "inbound" ? INBOUND_STATUS_OPTIONS : STATUS_OPTIONS;
+function ScheduleCard({ item }: { item: ScheduleItem }) {
   const sourceCellUrl = sourceRowUrl(item);
   const valueLink = (label: string, value: string, href?: string, blankWhenMissing = false) => (
     <div className="data-field">
@@ -2304,7 +2350,7 @@ function ScheduleCard({
         ? item.containerUrl
         : item.shipmentUrl
       : undefined;
-  const secondary = sanitizeSecondary(item.secondary);
+  const notice = shipmentNoticeLine(item);
 
   return (
     <details
@@ -2373,25 +2419,12 @@ function ScheduleCard({
               : null}
           </dl>
         )}
-        {secondary ? <p className="secondary">{secondary}</p> : null}
+        {notice.text ? (
+          <p className="secondary shipment-notice">
+            <span aria-hidden="true">{notice.emoji}</span> {notice.text}
+          </p>
+        ) : null}
         <div className="card-actions">
-          {item.editable ? (
-            <label className="status-field">
-              <span>Status</span>
-              <select
-                aria-label={`Update ${item.title} status`}
-                disabled={saving}
-                value={options.includes(item.status) ? item.status : "Scheduled"}
-                onChange={(event) => onStatus(item, event.target.value)}
-              >
-                {options.map((option) => (
-                  <option key={option}>{option}</option>
-                ))}
-              </select>
-            </label>
-          ) : (
-            <span className="read-only-label">READ ONLY</span>
-          )}
           <a
             className="source-link"
             href={sourceCellUrl}
@@ -2410,14 +2443,10 @@ function ScheduleCard({
 function ParcelCard({
   direction,
   item,
-  savingId,
-  onStatus,
   tracking,
 }: {
   direction: Direction;
   item: ScheduleItem;
-  savingId: string;
-  onStatus: (item: ScheduleItem, status: string) => void;
   tracking?: Record<string, TrackingResult>;
 }) {
   const trackingNumber = item.trackingNumber || item.pro || "";
@@ -2463,25 +2492,6 @@ function ParcelCard({
             </a>
           )}
         </div>
-        {item.editable ? (
-          <label className="status-field parcel-status-field">
-            <span>Status</span>
-            <select
-              aria-label={`Update ${item.title} status`}
-              disabled={savingId === item.id}
-              value={
-                (direction === "inbound" ? INBOUND_STATUS_OPTIONS : STATUS_OPTIONS).includes(item.status)
-                  ? item.status
-                  : "Scheduled"
-              }
-              onChange={(event) => onStatus(item, event.target.value)}
-            >
-              {(direction === "inbound" ? INBOUND_STATUS_OPTIONS : STATUS_OPTIONS).map((option) => (
-                <option key={option}>{option}</option>
-              ))}
-            </select>
-          </label>
-        ) : null}
       </div>
     </details>
   );
@@ -2492,16 +2502,12 @@ function SmallParcelSchedule({
   days,
   items,
   loading,
-  savingId,
-  onStatus,
   tracking,
 }: {
   direction: Direction;
   days: Date[];
   items: ScheduleItem[];
   loading: boolean;
-  savingId: string;
-  onStatus: (item: ScheduleItem, status: string) => void;
   tracking?: Record<string, TrackingResult>;
 }) {
   const isInbound = direction === "inbound";
@@ -2551,8 +2557,6 @@ function SmallParcelSchedule({
                       key={`parcel-${item.id}`}
                       direction={direction}
                       item={item}
-                      savingId={savingId}
-                      onStatus={onStatus}
                       tracking={tracking}
                     />
                   ))}
@@ -2578,15 +2582,11 @@ function ScheduleBoard({
   days,
   items,
   loading,
-  savingId,
-  onStatus,
 }: {
   direction: Direction;
   days: Date[];
   items: ScheduleItem[];
   loading: boolean;
-  savingId: string;
-  onStatus: (item: ScheduleItem, status: string) => void;
 }) {
   const isInbound = direction === "inbound";
   return (
@@ -2628,12 +2628,7 @@ function ScheduleBoard({
                 </header>
                 <div className="day-items">
                   {dayItems.map((item) => (
-                    <ScheduleCard
-                      key={item.id}
-                      item={item}
-                      saving={savingId === item.id}
-                      onStatus={onStatus}
-                    />
+                    <ScheduleCard key={item.id} item={item} />
                   ))}
                   {!loading && dayItems.length === 0 && (
                     <div className="empty-day">
@@ -2805,7 +2800,6 @@ export default function Home() {
   const [includeFinished, setIncludeFinished] = useState(false);
   const [period, setPeriod] = useState<"mtd" | "ytd">("mtd");
   const [selectedMtdMonth, setSelectedMtdMonth] = useState(currentMtdMonth);
-  const [savingId, setSavingId] = useState("");
   const [reviewingKey, setReviewingKey] = useState("");
   const [notice, setNotice] = useState("");
   const [kpis, setKpis] = useState<KpiSnapshot>(EMPTY_KPIS);
@@ -3096,27 +3090,6 @@ export default function Home() {
       direction: item.direction, status: item.status }];
   }), [activeItems]);
   const { tracking: parcelTracking } = useParcelTracking(parcelTrackable);
-
-  const handleStatus = async (item: ScheduleItem, status: string) => {
-    setSavingId(item.id);
-    setNotice(`Saving ${item.title}…`);
-    try {
-      await postStatus(item, status);
-      setItems((current) =>
-        current.map((record) => (record.id === item.id ? { ...record, status } : record)),
-      );
-      setNotice(`${item.title} updated to ${status}.`);
-      window.setTimeout(() => setNotice(""), 4500);
-    } catch (statusError) {
-      setNotice(
-        statusError instanceof Error
-          ? statusError.message
-          : "Status was not saved. Sign in with your StyleKorean Google account and try again.",
-      );
-    } finally {
-      setSavingId("");
-    }
-  };
 
   const handleReview = async (event: GmailIngestionEvent, decision: "approve" | "reject") => {
     const key = event.reviewKey ?? "";
@@ -3440,8 +3413,6 @@ export default function Home() {
       <ImportSchedules
         items={importScheduleItems}
         loading={loading}
-        savingId={savingId}
-        onStatus={handleStatus}
         selectedInventory={selectedInventory}
       />
 
@@ -3474,16 +3445,12 @@ export default function Home() {
           days={days}
           items={inboundScheduleVisibleItems}
           loading={loading}
-          savingId={savingId}
-          onStatus={handleStatus}
         />
         <SmallParcelSchedule
           direction="inbound"
           days={days}
           items={inboundParcelVisibleItems}
           loading={loading}
-          savingId={savingId}
-          onStatus={handleStatus}
           tracking={parcelTracking}
         />
         <ScheduleBoard
@@ -3491,8 +3458,6 @@ export default function Home() {
           days={days}
           items={outboundVisibleItems}
           loading={loading}
-          savingId={savingId}
-          onStatus={handleStatus}
         />
         <FulfillmentTkOrders />
         <SmallParcelSchedule
@@ -3500,8 +3465,6 @@ export default function Home() {
           days={days}
           items={outboundParcelVisibleItems}
           loading={loading}
-          savingId={savingId}
-          onStatus={handleStatus}
           tracking={parcelTracking}
         />
       </div>
@@ -3526,13 +3489,13 @@ export default function Home() {
 
       <IngestionRoadmapCard />
 
-      <StatusLegend />
+      <InventoryAlerts stock={warehouseStock} inbound={inboundInventory} loading={loading} />
 
       <ShipmentEventTrackerCard />
 
       <footer>
         <p><strong>SK</strong> STYLEKOREAN LOGISTICS · COMPANY OPERATIONS</p>
-        <p className="mono">AUTO-REFRESH 30 MIN · STATUS EDITS SYNC TO SOURCE ROWS</p>
+        <p className="mono">AUTO-REFRESH 30 MIN · READ-ONLY VIEW · STATUS SHOWN FROM SOURCE ROWS</p>
       </footer>
 
       {notice && <div className="toast" role="status">{notice}</div>}
