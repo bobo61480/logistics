@@ -31,15 +31,17 @@
  * weeks optimistic vs TB_PNFM.arrv_dt on every ocean shipment — treat eta_dt
  * as the carrier's plan and arrv_dt as ground truth.
  *
- * Usage:
- *   node scripts/cms-imports-map.mjs                      # invoices from app/inbound-invoice-links.ts
- *   node scripts/cms-imports-map.mjs IN00450138 IN...     # explicit invoice numbers
- *   node scripts/cms-imports-map.mjs --json               # JSON instead of CSV
- *   node scripts/cms-imports-map.mjs --prompt "..."       # audit-log text sent with every CMS call
+ * Usage (--prompt is REQUIRED):
+ *   node scripts/cms-imports-map.mjs --prompt "<question>"                 # invoices from app/inbound-invoice-links.ts
+ *   node scripts/cms-imports-map.mjs --prompt "<question>" IN00450138 ...  # explicit invoice numbers
+ *   node scripts/cms-imports-map.mjs --prompt "<question>" --json          # JSON instead of CSV
  *
- * The CMS server requires the requesting user's question verbatim in a
- * `prompt` argument on every tool call (operator audit log) — pass --prompt
- * with the user's actual request when running this on someone's behalf.
+ * The CMS server records the `prompt` argument verbatim in its operator audit
+ * log, so --prompt is mandatory and must carry the requesting user's actual
+ * question — it is never defaulted or left empty.
+ *
+ * Optional env: CMS_MCP_URL (gateway URL), CMS_MCP_AUTH_TOKEN (bearer token for
+ * a protected gateway — forwarded on both the fetch and curl transports).
  *
  * Not part of the Next.js build. Requires network access to
  * https://cms.mcp.siliconii.com/mcp/ (via HTTPS_PROXY when set — falls back
@@ -52,17 +54,41 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const MCP_URL = process.env.CMS_MCP_URL || "https://cms.mcp.siliconii.com/mcp/";
-const DEFAULT_PROMPT =
-  "cms-imports-map.mjs: map Imports invoice numbers to IMPORTS tab fields (logistics data)";
+// Optional bearer token for a protected gateway (mirrors worker/cms-client.ts).
+const AUTH_TOKEN = process.env.CMS_MCP_AUTH_TOKEN;
+const FETCH_TIMEOUT_MS = 20_000;
+
+// The Imports invoices all share this scope (see docs/cms-imports-mapping.md):
+// SELF intercompany, Stylekorean Inc. (CU000731), 미주 warehouse (WH000095), USD.
+const EXPECTED_SCOPE = {
+  biz_type: "SELF",
+  cust_cd: "CU000731",
+  whouse_cd: "WH000095",
+  biz_curr: "2", // BASE_DB TB_CODE C005: 2 = USD
+};
+// biz_curr numeric codes → ISO (BASE_DB.dbo.TB_CODE gbn_cd='C005').
+const CURRENCY = {
+  1: "KRW", 2: "USD", 6: "EUR", 7: "GBP", 8: "SGD", 9: "CAD",
+  12: "MYR", 13: "RUB", 15: "AUD", 16: "MXN", 17: "VND", 18: "AED",
+};
 
 // ─── CLI ──────────────────────────────────────────────────────────────────────
 
 const args = process.argv.slice(2);
 const asJson = args.includes("--json");
 const promptIndex = args.indexOf("--prompt");
-const auditPrompt = promptIndex !== -1 ? args[promptIndex + 1] : DEFAULT_PROMPT;
+// The gateway records `prompt` verbatim in its operator audit log, so it must
+// be a real, explicit question — never a silent default or an empty value.
+const auditPrompt = promptIndex !== -1 ? args[promptIndex + 1] : undefined;
+if (!auditPrompt || auditPrompt.startsWith("--")) {
+  console.error(
+    'Missing required --prompt "<your verbatim question>" — it is written to the\n' +
+      "CMS operator audit log and must not be defaulted or left empty.",
+  );
+  process.exit(1);
+}
 const invoiceArgs = args.filter(
-  (a, i) => !a.startsWith("--") && (promptIndex === -1 || i !== promptIndex + 1),
+  (a, i) => !a.startsWith("--") && i !== promptIndex + 1,
 );
 
 function invoicesFromRepo() {
@@ -96,6 +122,7 @@ async function mcpCall(tool, toolArgs) {
   const headers = {
     "Content-Type": "application/json",
     Accept: "application/json, text/event-stream",
+    ...(AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {}),
   };
 
   // Server may reply as plain JSON or a single SSE data: frame. Proxies can
@@ -108,20 +135,25 @@ async function mcpCall(tool, toolArgs) {
     return JSON.parse(payload ?? raw);
   };
   const viaFetch = async () => {
-    const res = await fetch(MCP_URL, { method: "POST", headers, body });
+    // Bound the attempt so a blackholed connection can't hang forever before
+    // the loop advances to the proxy-aware curl fallback.
+    const res = await fetch(MCP_URL, {
+      method: "POST",
+      headers,
+      body,
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
     return parseRpc(await res.text());
   };
   // Node's fetch ignores HTTPS_PROXY; curl honors it (sandboxed environments).
+  const curlArgs = ["-sS", "--max-time", "60", "-X", "POST", MCP_URL,
+    "-H", "Content-Type: application/json",
+    "-H", "Accept: application/json, text/event-stream"];
+  if (AUTH_TOKEN) curlArgs.push("-H", `Authorization: Bearer ${AUTH_TOKEN}`);
+  curlArgs.push("-d", body);
   const viaCurl = () =>
     parseRpc(
-      execFileSync(
-        "curl",
-        ["-sS", "--max-time", "60", "-X", "POST", MCP_URL,
-          "-H", "Content-Type: application/json",
-          "-H", "Accept: application/json, text/event-stream",
-          "-d", body],
-        { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
-      ),
+      execFileSync("curl", curlArgs, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }),
     );
 
   let rpc;
@@ -150,8 +182,8 @@ async function mcpCall(tool, toolArgs) {
 const inList = invoices.map((n) => `'${n}'`).join(",");
 
 const invcSql = `SELECT i.invc_no, i.invc_dt, i.biz_type, i.cust_cd, i.whouse_cd,
-  i.invc_icnt, i.invc_qtot, i.invc_atot, i.ship_dt, i.ship_via, i.carrier,
-  i.airway_bill, i.ship_port, i.arrv_port, i.sailing_dt, i.eta_dt,
+  i.biz_curr, i.invc_icnt, i.invc_qtot, i.invc_atot, i.ship_dt, i.ship_via,
+  i.carrier, i.airway_bill, i.ship_port, i.arrv_port, i.sailing_dt, i.eta_dt,
   i.ow_dt, i.ow_yn, i.ow_qtot, i.pallet_height
   FROM CSMS.dbo.TB_INVC i WITH (NOLOCK) WHERE i.invc_no IN (${inList})`;
 
@@ -162,7 +194,18 @@ const limit = Math.max(invoices.length, 50);
 // Sequential on purpose — parallel calls have tripped upstream connection
 // resets at the gateway.
 const invcRes = await mcpCall("run_readonly_query", { sql: invcSql, limit });
-const pnfmRes = await mcpCall("run_readonly_query", { sql: pnfmSql, limit });
+// TB_PNFM enrichment is access-grade dependent (see docs): if the caller's
+// grade denies it outright, keep the TB_INVC mapping working instead of
+// aborting the whole run.
+let pnfmRes = { rows: [] };
+try {
+  pnfmRes = await mcpCall("run_readonly_query", { sql: pnfmSql, limit });
+} catch (error) {
+  console.error(
+    `TB_PNFM enrichment unavailable (${error.message}); ` +
+      "emitting TB_INVC columns only (no actual-arrival / received-qty / confirmation).",
+  );
+}
 
 const pnfmByInvoice = new Map(pnfmRes.rows.map((r) => [r.invc_no, r]));
 
@@ -181,10 +224,20 @@ function suggestedStatus(invc, pnfm) {
   return "SCHEDULED";
 }
 
+// A syntactically valid invoice number can resolve to a row outside the IMPORTS
+// scope (a typo landing on a neighboring customer/warehouse/currency). Flag
+// those rather than silently emitting unrelated invoices as IMPORTS data.
+function scopeMismatch(invc) {
+  return Object.entries(EXPECTED_SCOPE)
+    .filter(([field, want]) => String(invc[field] ?? "") !== want)
+    .map(([field]) => field);
+}
+
 const rows = invoices.map((invoiceNo) => {
   const invc = invcRes.rows.find((r) => r.invc_no === invoiceNo);
   if (!invc) return { "INVOICE (C)": invoiceNo, "STATUS (AB)": "NOT IN CMS" };
   const pnfm = pnfmByInvoice.get(invoiceNo);
+  const mismatch = scopeMismatch(invc);
   return {
     "INVOICE (C)": invc.invc_no,
     "MBL/AWB (D)": invc.airway_bill ?? "",
@@ -200,9 +253,11 @@ const rows = invoices.map((invoiceNo) => {
     QTY: invc.invc_qtot ?? "",
     "RECEIVED QTY": pnfm?.iw_qtot ?? "",
     ITEMS: invc.invc_icnt ?? "",
-    "AMOUNT USD": invc.invc_atot ?? "",
+    AMOUNT: invc.invc_atot ?? "",
+    CURRENCY: CURRENCY[Number(invc.biz_curr)] ?? String(invc.biz_curr ?? ""),
     "PALLET HT": invc.pallet_height ?? "",
     "CMS CONFIRM NO": pnfm?.pnfm_no ?? "",
+    SCOPE: mismatch.length ? `OUT-OF-SCOPE:${mismatch.join("/")}` : "",
   };
 });
 
@@ -221,7 +276,15 @@ if (asJson) {
 }
 
 const missing = rows.filter((r) => r["STATUS (AB)"] === "NOT IN CMS");
+const outOfScope = rows.filter((r) => r.SCOPE);
 console.error(
   `\n${rows.length - missing.length}/${invoices.length} invoices resolved in CMS` +
     (missing.length ? `; not found: ${missing.map((r) => r["INVOICE (C)"]).join(", ")}` : ""),
 );
+if (outOfScope.length) {
+  console.error(
+    `⚠ ${outOfScope.length} invoice(s) outside the expected IMPORTS scope ` +
+      `(SELF / CU000731 / WH000095 / USD): ` +
+      outOfScope.map((r) => `${r["INVOICE (C)"]} [${r.SCOPE}]`).join(", "),
+  );
+}
