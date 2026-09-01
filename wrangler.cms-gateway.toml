@@ -1,0 +1,12 @@
+name = "stylekorean-cms-gateway"
+main = "cms-gateway/worker.ts"
+compatibility_date = "2026-08-31"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[vars]
+CMS_UPSTREAM_MCP_URL = "https://cms.mcp.siliconii.com/mcp/"
+
+[observability]
+enabled = true
+head_sampling_rate = 0.1
