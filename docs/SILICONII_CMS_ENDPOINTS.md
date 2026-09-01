@@ -25,9 +25,26 @@ The CMS stock report UI also exposes warehouse, product, barcode, department, bu
 
 The UI also calls `/Sys/GetAlramList`, `/Sys/GetSessionValue`, `/Sys/GetGlobalCurrWithComp`, `/Sys/GetList`, `/Scripts/jsonDatas/cmsCode.json`, and `/Sys/Resources`. These are supporting menu/code/session resources, not authoritative inventory datasets. `/Sys/GetList` is parameterized by stored-procedure name/mode and should not be exposed as a general public proxy.
 
+## Unattended CSMS session renewal
+
+Invoice reads use the authenticated CSMS browser-session model rather than the IMS `x-api-key`. The production gateway reproduces the observed read-only login handoff server-side:
+
+1. `POST https://auth.siliconii.com/Logon/CheckLogin` with the Worker-secret username/password and `sys_gbn: "CSMS"`.
+2. Generate the six-digit RFC 6238 code from the Base32 Worker secret `CMS_TOTP_SECRET` and call `POST /Logon/VerifyTotp`.
+3. Use the successful response GUID as the `.siliconii.com` `appKey` handoff cookie.
+4. Visit the returned CSMS `/Sys/SessionTrans` URL, following only redirects whose origin is exactly `https://cms.siliconii.com`, and capture the Siliconii-generated CMS cookies.
+5. Validate the finished cookie session with a minimal read-only `GET /SalesProcess/INVCList` request using `X-Requested-With: XMLHttpRequest`.
+
+The long-lived credentials are Cloudflare Worker secrets named `CMS_AUTH_USER`, `CMS_AUTH_PASSWORD`, and `CMS_TOTP_SECRET`. They must never be stored in this file, `wrangler.cms-gateway.toml`, source control, logs, API responses, or D1/Durable Object state.
+
+The generated cookie session is stored in the SQLite-backed `CmsSessionStore` Durable Object. It renews proactively when an explicit cookie expiration has 15 minutes or less remaining. If no explicit expiration is available, the session is validated no more than once every 10 minutes. A recognized redirect/login HTML response invalidates the current session, performs one serialized renewal, and retries the invoice request exactly once.
+
+`GET /health` may expose only whether unattended authentication is configured plus the session state and timestamps. It never exposes a username, password, TOTP seed/code, pending token, GUID, or cookie value.
+
 ## Integration guidance
 
-- Use the direct IMS stock route for the inventory comparison when `CMS_IMS_API_KEY` is configured; retain the MCP adapter as a fallback for environments where only MCP is permitted.
+- Use the direct IMS stock route for inventory comparison when `CMS_IMS_API_KEY` is configured. That key is specific to the IMS stock APIs and is not valid browser-session authentication for CSMS invoices.
+- Use the gateway’s renewed browser session for CSMS invoice reads. Keep the MCP adapter only as a temporary diagnostic fallback until the direct session path is verified in production.
 - Keep invoice/product reads server-side and reduced to allowlisted fields. Do not replay the POST invoice operation from the dashboard.
 - Preserve Google Sheets as the operational write authority; CMS data is comparison/enrichment input only.
 - The supplied HAR contains authenticated traffic. Treat it as sensitive evidence and do not commit it, its headers, or response bodies.
