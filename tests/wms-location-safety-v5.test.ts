@@ -81,11 +81,13 @@ describe("WH Trucking location safety V5", () => {
   });
 
   it("installs a one-minute recovery sweep and self-heals it from snapshot traffic", () => {
-    const source = readFileSync("google-apps-script/zzzzzzzzzzz_WmsLocationSafetyV5.gs", "utf8");
-    expect(source).toContain('handler: "dedupeWhTruckingLocationSafeV5", minutes: 1');
-    expect(source).toContain('2026-08-31-central-v7-yixi-location-selfheal');
-    expect(source).toContain('whBackfillLocationStoreV5_');
-    expect(source).toContain('action === "snapshot"');
-    expect(source).toContain('ensureCanonicalTriggersForVersion_()');
+    const safety = readFileSync("google-apps-script/zzzzzzzzzzz_WmsLocationSafetyV5.gs", "utf8");
+    const triggers = readFileSync("google-apps-script/Triggers.gs", "utf8");
+    expect(safety).toContain('action === "snapshot"');
+    expect(safety).toContain('ensureCanonicalTriggersForVersion_()');
+    expect(safety).toContain('whBackfillLocationStoreV5_');
+    expect(triggers).toContain('var GMAIL_PIPELINE_TRIGGER_SYNC_VERSION = "2026-08-31-central-v7-yixi-location-selfheal";');
+    expect(triggers).toContain('{ handler: "dedupeWhTruckingLocationSafeV5", minutes: 1 }');
+    expect(triggers).toContain('"dedupeWhTruckingLocationSafeV5"');
   });
 });
