@@ -145,7 +145,8 @@ export class SessionCoordinator {
         };
         await this.storage.put(SESSION_KEY, stored);
         return stored;
-      } catch {
+      } catch (error) {
+        if (error instanceof CmsAuthError) throw error;
         throw new CmsAuthError("CMS_AUTH_RENEWAL_FAILED");
       }
     })();
