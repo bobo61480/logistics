@@ -190,30 +190,30 @@ function commitApprovedPendingRow_(sheet, rowIndex1based, data, col) {
 function processApprovedPending() {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(5000)) return;
+  var result = { committed: 0 };
   try {
     var sheet = ensurePendingSheet_();
     var data = sheet.getDataRange().getDisplayValues();
-    if (data.length < 2) return { committed: 0 };
-    var col = {};
-    VALIDATION.pendingHeaders.forEach(function (h, i) { col[h] = i; });
+    if (data.length >= 2) {
+      var col = {};
+      VALIDATION.pendingHeaders.forEach(function (h, i) { col[h] = i; });
 
-    var committed = 0;
-    for (var r = 1; r < data.length; r++) {
-      var status = String(data[r][col["Status"]] || "").trim().toUpperCase();
-      var rowRange = sheet.getRange(r + 1, 1, 1, VALIDATION.pendingHeaders.length);
-      if (status === "APPROVED") {
-        var commitResult = commitApprovedPendingRow_(sheet, r + 1, data[r], col);
-        if (commitResult && commitResult.committed) committed++;
-      } else if (status === "REJECTED") {
-        rowRange.setBackground(VALIDATION.colors.rejected).setFontColor("#999999");
+      for (var r = 1; r < data.length; r++) {
+        var status = String(data[r][col["Status"]] || "").trim().toUpperCase();
+        var rowRange = sheet.getRange(r + 1, 1, 1, VALIDATION.pendingHeaders.length);
+        if (status === "APPROVED") {
+          var commitResult = commitApprovedPendingRow_(sheet, r + 1, data[r], col);
+          if (commitResult && commitResult.committed) result.committed++;
+        } else if (status === "REJECTED") {
+          rowRange.setBackground(VALIDATION.colors.rejected).setFontColor("#999999");
+        }
       }
     }
-    var result = { committed: committed };
-    if (committed) gmailSafetyV4RefreshD1_("processApprovedPending");
-    return result;
   } finally {
     lock.releaseLock();
   }
+  if (result.committed) gmailSafetyV4RefreshD1_("processApprovedPending");
+  return result;
 }
 
 /**
@@ -247,6 +247,8 @@ function reviewPendingRow_(payload) {
 
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(15000)) throw new Error("Server busy, please retry.");
+  var result;
+  var shouldRefreshD1 = false;
   try {
     var sheet = ensurePendingSheet_();
     var data = sheet.getDataRange().getDisplayValues();
@@ -274,23 +276,26 @@ function reviewPendingRow_(payload) {
       sheet.getRange(rowIndex1based, col["Status"] + 1).setValue("APPROVED");
       var commitResult = commitApprovedPendingRow_(sheet, rowIndex1based, data[r0], col);
       SpreadsheetApp.flush();
-      if (commitResult && commitResult.committed) gmailSafetyV4RefreshD1_("reviewPendingRow_");
+      shouldRefreshD1 = Boolean(commitResult && commitResult.committed);
       var actualStatus = String(sheet.getRange(rowIndex1based, col["Status"] + 1).getDisplayValue() || "").trim();
-      return {
+      result = {
         ok: actualStatus === "COMMITTED",
         action: "approved",
         row: rowIndex1based,
         status: actualStatus,
         error: actualStatus === "COMMITTED" ? "" : "Approved review could not be committed safely; row moved to " + actualStatus + "."
       };
+    } else {
+      sheet.getRange(rowIndex1based, col["Status"] + 1).setValue("REJECTED");
+      rowRange.setBackground(VALIDATION.colors.rejected).setFontColor("#999999");
+      SpreadsheetApp.flush();
+      result = { ok: true, action: "rejected", row: rowIndex1based, status: "REJECTED" };
     }
-    sheet.getRange(rowIndex1based, col["Status"] + 1).setValue("REJECTED");
-    rowRange.setBackground(VALIDATION.colors.rejected).setFontColor("#999999");
-    SpreadsheetApp.flush();
-    return { ok: true, action: "rejected", row: rowIndex1based, status: "REJECTED" };
   } finally {
     lock.releaseLock();
   }
+  if (shouldRefreshD1) gmailSafetyV4RefreshD1_("reviewPendingRow_");
+  return result;
 }
 
 /** Count of rows still needing review — consumed by the KPI dashboard. */

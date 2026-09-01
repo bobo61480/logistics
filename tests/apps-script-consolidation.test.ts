@@ -47,4 +47,20 @@ describe("Apps Script consolidation", () => {
     expect(lookup).toContain("return matchUniqueCustomerRecord_(customerValue, records)");
     expect(backfill).toContain("return matchUniqueCustomerRecord_(customerValue, records)");
   });
+
+  it("refreshes D1 only after Gmail and review handlers release the script lock", () => {
+    const sources = [read("GmailPipelineV2.gs"), read("GmailXpoV2.gs"), read("Validation.gs")];
+    for (const source of sources) {
+      const refreshes = [...source.matchAll(/gmailSafetyV4RefreshD1_\(/g)].map((match) => match.index ?? -1);
+      for (const refresh of refreshes) {
+        expect(source.lastIndexOf("lock.releaseLock();", refresh)).toBeGreaterThan(-1);
+      }
+    }
+  });
+
+  it("keeps anonymous snapshots available when trigger-plan repair fails", () => {
+    const code = read("Code.gs");
+    expect(code).toMatch(/try\s*{\s*ensureCanonicalTriggersForVersion_\(\);\s*}\s*catch \(triggerRepairError\)/);
+    expect(code).toContain("Snapshot trigger-plan repair failed:");
+  });
 });

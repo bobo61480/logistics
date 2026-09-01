@@ -75,6 +75,14 @@ function shouldWmsOverwriteShipDate_(currentRow, map) {
   return true;
 }
 
+function wmsLocationStoreIndex_(map) {
+  var aliases = ["LOCATION STORE", "LOCATION/STORE", "LOCATION"];
+  for (var i = 0; i < aliases.length; i++) {
+    if (map[aliases[i]] !== undefined) return map[aliases[i]];
+  }
+  return undefined;
+}
+
 function chooseWmsTargetRow_(groupKey, invoices, rows) {
   rows = whFilterTargetRowsForLocationV5_(groupKey, invoices, rows);
   var wanted = new Set((invoices || []).map(function (invoice) {
@@ -196,6 +204,7 @@ function scanAndImportWmsTruckingOrdersV2() {
     var targetData = targetSheet.getRange(1, 1, targetLastRow, targetLastColumn).getDisplayValues();
     var targetHeader = findWhTruckingHeader_(targetData);
     var targetMap = targetHeader.map;
+    var targetLocationIndex = wmsLocationStoreIndex_(targetMap);
     ["CUSTOMER", "INVOICE NO.", "SHIP DATE"].forEach(function (name) {
       if (targetMap[name] === undefined) throw new Error("WH Trucking Request is missing header: " + name);
     });
@@ -268,6 +277,7 @@ function scanAndImportWmsTruckingOrdersV2() {
           changed = wouldChangeMappedValue_(current, targetMap, "CUSTOMER", group.customer) ||
             wouldChangeMappedValue_(current, targetMap, "INVOICE NO.", mergedInvoices.join("\n")) ||
             (mayUpdateShipDate && wouldChangeMappedValue_(current, targetMap, "SHIP DATE", group.shipDate)) ||
+            (group.destinationHint && targetLocationIndex !== undefined && !current[targetLocationIndex]) ||
             (totalAmount > 0 && targetMap["VALUE"] !== undefined && !current[targetMap["VALUE"]]) ||
             (targetMap["STATUS"] !== undefined && !current[targetMap["STATUS"]]);
           logWmsDryRun_("update", match.rowNumber, group, mergedInvoices, totalAmount);
@@ -276,6 +286,10 @@ function scanAndImportWmsTruckingOrdersV2() {
           changed = writeMappedValue_(targetSheet, match.rowNumber, targetMap, "INVOICE NO.", mergedInvoices.join("\n")) || changed;
           if (shouldWmsOverwriteShipDate_(current, targetMap)) {
             changed = writeMappedValue_(targetSheet, match.rowNumber, targetMap, "SHIP DATE", group.shipDate) || changed;
+          }
+          if (group.destinationHint && targetLocationIndex !== undefined && !current[targetLocationIndex]) {
+            targetSheet.getRange(match.rowNumber, targetLocationIndex + 1).setValue(group.destinationHint);
+            changed = true;
           }
 
           if (totalAmount > 0 && targetMap["VALUE"] !== undefined && !current[targetMap["VALUE"]]) {
@@ -313,6 +327,7 @@ function scanAndImportWmsTruckingOrdersV2() {
       newRow[targetMap["CUSTOMER"]] = group.customer;
       newRow[targetMap["INVOICE NO."]] = group.invoices.join("\n");
       newRow[targetMap["SHIP DATE"]] = group.shipDate;
+      if (group.destinationHint && targetLocationIndex !== undefined) newRow[targetLocationIndex] = group.destinationHint;
       if (targetMap["VALUE"] !== undefined && totalAmount > 0) newRow[targetMap["VALUE"]] = totalAmount;
       if (targetMap["STATUS"] !== undefined) newRow[targetMap["STATUS"]] = "WORK IN PROGRESS";
       if (WMS_TRUCKING_DRY_RUN) {

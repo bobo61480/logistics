@@ -29,7 +29,7 @@ function loadCommit(upsertResult: { matched: boolean; action: string; row?: numb
     row: number,
     data: string[],
     columns: Record<string, number>,
-  ) => { committed: boolean; action: string };
+  ) => { committed: boolean; matched: boolean; action: string; row?: number; changes?: string[] };
 }
 
 function fakePendingRow() {

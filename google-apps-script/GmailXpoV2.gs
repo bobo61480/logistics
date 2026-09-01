@@ -28,6 +28,8 @@ function processXpoTrackingEmailsV2() {
     recordTriggerLockSkip_("processXpoTrackingEmailsV2");
     return { skipped: "locked" };
   }
+  var stats;
+  var shouldRefreshD1 = false;
   try {
     ensureCanonicalTriggersForVersion_();
     var query = "newer_than:" + GMAIL_XPO_V2_LOOKBACK_DAYS +
@@ -43,7 +45,7 @@ function processXpoTrackingEmailsV2() {
     messages.sort(function (a, b) { return a.getDate().getTime() - b.getDate().getTime(); });
     messages = messages.slice(-GMAIL_XPO_V2_MAX_MESSAGES);
 
-    var stats = { messages: 0, updated: 0, noop: 0, pending: 0, errors: 0, priorLockSkips: consumeTriggerLockSkips_("processXpoTrackingEmailsV2") };
+    stats = { messages: 0, updated: 0, noop: 0, pending: 0, errors: 0, priorLockSkips: consumeTriggerLockSkips_("processXpoTrackingEmailsV2") };
     messages.forEach(function (message) {
       var id = message.getId();
       if (gmailXpoSeenV2_(id)) return;
@@ -101,12 +103,13 @@ function processXpoTrackingEmailsV2() {
         logPipeline_("XPO INGEST ERROR", id, String(error && error.stack || error));
       }
     });
-    if (stats.updated) gmailSafetyV4RefreshD1_("processXpoTrackingEmailsV2");
+    shouldRefreshD1 = stats.updated > 0;
     logPipeline_("XPO V2 RUN", GMAIL_XPO_V2_VERSION, JSON.stringify(stats));
-    return stats;
   } finally {
     lock.releaseLock();
   }
+  if (shouldRefreshD1) gmailSafetyV4RefreshD1_("processXpoTrackingEmailsV2");
+  return stats;
 }
 
 function gmailXpoSeenV2_(messageId) {

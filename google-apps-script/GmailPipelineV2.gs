@@ -30,6 +30,8 @@ function processLogisticsEmailsV2() {
     return { skipped: "locked" };
   }
   var runStarted = Date.now();
+  var stats;
+  var shouldRefreshD1 = false;
   try {
     ensureCanonicalTriggersForVersion_();
     var labels = gmailV2Labels_();
@@ -41,7 +43,7 @@ function processLogisticsEmailsV2() {
       });
     });
 
-    var stats = {
+    stats = {
       threads: 0, messages: 0, inserted: 0, updated: 0, noop: 0,
       pending: 0, errors: 0, deferredThreads: 0, retryDeferred: 0, budgetHit: false,
       priorLockSkips: consumeTriggerLockSkips_("processLogisticsEmailsV2")
@@ -101,7 +103,7 @@ function processLogisticsEmailsV2() {
 
     if (stats.inserted || stats.updated) {
       SpreadsheetApp.flush();
-      gmailSafetyV4RefreshD1_("processLogisticsEmailsV2");
+      shouldRefreshD1 = true;
       // syncInventoryModule owns the same script lock as this Gmail run. A
       // nested call can only time out or hide lock starvation, so the canonical
       // hourly trigger owns inventory/KPI refresh while D1 is refreshed here.
@@ -109,10 +111,11 @@ function processLogisticsEmailsV2() {
     }
     stats.elapsedMs = Date.now() - runStarted;
     writeLog_("GMAIL V2 RUN", GMAIL_PIPELINE_V2_VERSION, JSON.stringify(stats));
-    return stats;
   } finally {
     lock.releaseLock();
   }
+  if (shouldRefreshD1) gmailSafetyV4RefreshD1_("processLogisticsEmailsV2");
+  return stats;
 }
 
 function gmailV2Queries_() {
