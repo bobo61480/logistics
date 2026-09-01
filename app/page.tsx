@@ -3524,7 +3524,7 @@ export default function Home() {
         <DriveArchiveCard />
       </div>
 
-      <IngestionRoadmapCard />
+      <IngestionRoadmapCard events={gmailIngestion} loading={loading} sheetUrl={SHEET_URL} />
 
       <StatusLegend />
 
