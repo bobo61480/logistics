@@ -126,25 +126,43 @@ export function pacificToday(): KpiToday {
   return { year: values.year, month: values.month, day: values.day, code: values.year * 10_000 + values.month * 100 + values.day };
 }
 
+export function selectedMonthBounds(today: KpiToday, selectedMonth?: string) {
+  const fallback = `${today.year}-${String(today.month).padStart(2, "0")}`;
+  const monthKey = String(selectedMonth ?? fallback).trim();
+  const match = monthKey.match(/^(\d{4})-(\d{2})$/);
+  if (!match) throw new Error("KPI_MONTH_INVALID");
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (year !== today.year || month < 1 || month > today.month) throw new Error("KPI_MONTH_INVALID");
+  const lastDay = new Date(year, month, 0).getDate();
+  const endDay = month === today.month ? today.day : lastDay;
+  return {
+    monthKey,
+    monthStart: year * 10_000 + month * 100 + 1,
+    monthEnd: year * 10_000 + month * 100 + endDay,
+  };
+}
+
 type Input = {
   nationalRows: string[][];
   wmsRows: string[][];
   truckingRows: string[][];
   transferRows: string[][];
   today?: KpiToday;
+  selectedMonth?: string;
 };
 
 export function computeKpisFromRows(input: Input): KpiSnapshot {
   const today = input.today ?? pacificToday();
   const yearStart = today.year * 10_000 + 101;
-  const monthStart = today.year * 10_000 + today.month * 100 + 1;
+  const { monthStart, monthEnd } = selectedMonthBounds(today, input.selectedMonth);
   const nationalSales = nationalSalesRecords(input.nationalRows, yearStart, today.code);
   const wmsSales = input.wmsRows.slice(1).flatMap((row) => {
     const date = dateCode(row[0] ?? "");
     const value = amount(row[6] ?? "", false);
     return date >= yearStart && date <= today.code && value !== null ? [{ date, value }] : [];
   });
-  const sum = (records: Array<{ date: number; value: number }>, start: number) => records.filter((r) => r.date >= start).reduce((total, r) => total + r.value, 0);
+  const sum = (records: Array<{ date: number; value: number }>, start: number, end = today.code) => records.filter((r) => r.date >= start && r.date <= end).reduce((total, r) => total + r.value, 0);
   const trucking = input.truckingRows.slice(2).flatMap((row) => {
     const date = freightDateCode(row[3] ?? "", today);
     if (!date) return [];
@@ -156,7 +174,7 @@ export function computeKpisFromRows(input: Input): KpiSnapshot {
     return [{ date, cost: freightAmount(row[9] ?? "") || freightAmount(row[8] ?? ""), carrier: (row[6] ?? "").trim().replace(/\s+/g, " "), destination: (row[4] ?? "").trim(), loadType: loadType(row[1] ?? ""), isTransfer: true }];
   });
   const freight = [...trucking, ...transfer].filter((r) => r.date >= yearStart && r.date <= today.code);
-  const freightMtd = freight.filter((r) => r.date >= monthStart);
+  const freightMtd = freight.filter((r) => r.date >= monthStart && r.date <= monthEnd);
   const truckingYtd = freight.filter((r) => !r.isTransfer);
   const truckingMtd = freightMtd.filter((r) => !r.isTransfer);
   const transferYtd = freight.filter((r) => r.isTransfer);
@@ -183,8 +201,8 @@ export function computeKpisFromRows(input: Input): KpiSnapshot {
     return matching.reduce((total, r) => total + r.cost, 0);
   };
   return {
-    nationalsSalesMtd: sum(nationalSales, monthStart), nationalsSalesYtd: sum(nationalSales, yearStart),
-    wmsSalesMtd: sum(wmsSales, monthStart), wmsSalesYtd: sum(wmsSales, yearStart),
+    nationalsSalesMtd: sum(nationalSales, monthStart, monthEnd), nationalsSalesYtd: sum(nationalSales, yearStart),
+    wmsSalesMtd: sum(wmsSales, monthStart, monthEnd), wmsSalesYtd: sum(wmsSales, yearStart),
     shippingMtd: freightMtd.reduce((t, r) => t + r.cost, 0), shippingYtd: freight.reduce((t, r) => t + r.cost, 0),
     transfersMtd: transferMtd.reduce((t, r) => t + r.cost, 0), transfersYtd: transferYtd.reduce((t, r) => t + r.cost, 0),
     njTransferMtd: njTransferMtd.reduce((t, r) => t + r.cost, 0), njTransferYtd: njTransferYtd.reduce((t, r) => t + r.cost, 0),

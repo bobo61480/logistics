@@ -11,6 +11,7 @@ import { handleStatusCommand } from "./status-command";
 import { handlePendingReviewCommand } from "./pending-review-command";
 import { handleTrackingCommand } from "./tracking-command";
 import { fetchCmsInventory } from "./cms-inventory";
+import { fetchCmsSalesKpis } from "./cms-sales-kpis";
 
 const WORKER_VERSION = "2026-08-30-worker-v10-d1-inventory-reconciliation";
 const SNAPSHOT_CACHE_URL = "https://stylekorean.internal/api/logistics/snapshot";
@@ -97,9 +98,15 @@ function dedupeOperationalPayload(snapshot: Awaited<ReturnType<typeof fetchOpera
 
 async function buildSnapshotPayload(env: Env): Promise<OperationalSnapshot> {
   const generatedAt = new Date().toISOString();
-  const [raw, cmsInventory] = await Promise.all([
+  const [raw, cmsInventory, cmsSalesResult] = await Promise.all([
     fetchOperationalSources(env.APPS_SCRIPT_WRITE_URL),
     fetchCmsInventory(env),
+    fetchCmsSalesKpis(env)
+      .then((value) => ({ ok: true as const, value }))
+      .catch((error) => ({
+        ok: false as const,
+        error: error instanceof Error ? error.message : String(error),
+      })),
   ]);
   raw.sourceHealth.push(cmsInventory.health);
   const rawSources = raw.sources as Record<string, unknown>;
@@ -116,6 +123,17 @@ async function buildSnapshotPayload(env: Env): Promise<OperationalSnapshot> {
   let kpiError = "";
   try {
     kpis = computeKpisFromRows(snapshot.kpiRows);
+    if (cmsSalesResult.ok) {
+      kpis = {
+        ...kpis,
+        wmsSalesMtd: cmsSalesResult.value.wmsSalesMtd,
+        wmsSalesYtd: cmsSalesResult.value.wmsSalesYtd,
+      };
+      rawSources.cmsSalesKpis = cmsSalesResult.value;
+    } else {
+      rawSources.cmsSalesKpis = { ok: false, error: cmsSalesResult.error };
+      kpiError = `CMS sales unavailable; WMS sheet fallback active (${cmsSalesResult.error})`;
+    }
   } catch (error) {
     kpiError = error instanceof Error ? error.message : String(error);
   }
@@ -265,6 +283,49 @@ async function handleReconciliation(env: Env) {
   }
 }
 
+function cmsSalesError(error: unknown) {
+  const code = error instanceof Error ? error.message : String(error);
+  return json({ ok: false, error: code }, code === "KPI_MONTH_INVALID" ? 400 : 502);
+}
+
+async function handleCmsSalesKpis(request: Request, env: Env) {
+  try {
+    const month = new URL(request.url).searchParams.get("month")?.trim() || undefined;
+    const result = await fetchCmsSalesKpis(env, new Date(), fetch, month);
+    return json({ ok: true, ...result });
+  } catch (error) {
+    return cmsSalesError(error);
+  }
+}
+
+async function handleMonthlyKpis(request: Request, env: Env) {
+  try {
+    const month = new URL(request.url).searchParams.get("month")?.trim() || undefined;
+    const [raw, cmsSales] = await Promise.all([
+      fetchOperationalSources(env.APPS_SCRIPT_WRITE_URL),
+      fetchCmsSalesKpis(env, new Date(), fetch, month),
+    ]);
+    const snapshot = dedupeOperationalPayload(raw);
+    const kpis = computeKpisFromRows({
+      ...snapshot.kpiRows,
+      selectedMonth: cmsSales.selectedMonth,
+    });
+    return json({
+      ok: true,
+      month: cmsSales.selectedMonth,
+      currency: cmsSales.currency,
+      source: cmsSales.source,
+      kpis: {
+        ...kpis,
+        wmsSalesMtd: cmsSales.wmsSalesMtd,
+        wmsSalesYtd: cmsSales.wmsSalesYtd,
+      },
+    });
+  } catch (error) {
+    return cmsSalesError(error);
+  }
+}
+
 function withSecurityHeaders(response: Response) {
   const secured = new Response(response.body, response);
   secured.headers.set("content-security-policy", "base-uri 'self'; frame-ancestors 'none'; object-src 'none'");
@@ -295,6 +356,10 @@ export default {
           response = await handleSnapshot(env, context, false);
         }
       }
+    } else if (url.pathname === "/api/logistics/cms-sales-kpis") {
+      response = request.method === "GET" ? await handleCmsSalesKpis(request, env) : json({ ok: false, error: "Method not allowed" }, 405);
+    } else if (url.pathname === "/api/logistics/monthly-kpis") {
+      response = request.method === "GET" ? await handleMonthlyKpis(request, env) : json({ ok: false, error: "Method not allowed" }, 405);
     } else if (url.pathname === "/api/logistics/reconciliation") {
       response = request.method === "GET" ? await handleReconciliation(env) : json({ ok: false, error: "Method not allowed" }, 405);
     } else if (url.pathname === "/api/logistics/status") {

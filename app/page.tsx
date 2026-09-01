@@ -1152,6 +1152,32 @@ async function fetchLiveKpis() {
   return (await computeLiveKpis()) as unknown as KpiSnapshot;
 }
 
+function currentMtdMonth() {
+  const today = startOfToday();
+  return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function availableMtdMonths() {
+  const [yearText, monthText] = currentMtdMonth().split("-");
+  const year = Number(yearText);
+  const month = Number(monthText);
+  return Array.from({ length: month }, (_, index) => {
+    const value = `${year}-${String(index + 1).padStart(2, "0")}`;
+    const label = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric", timeZone: "UTC" })
+      .format(new Date(Date.UTC(year, index, 1)));
+    return { value, label };
+  }).reverse();
+}
+
+async function fetchMonthlyKpis(month: string): Promise<KpiSnapshot> {
+  const response = await fetch(`/api/logistics/monthly-kpis?month=${encodeURIComponent(month)}`, { cache: "no-store" });
+  const payload = await response.json().catch(() => null) as { ok?: boolean; error?: string; kpis?: KpiSnapshot } | null;
+  if (!response.ok || payload?.ok !== true || !payload.kpis) {
+    throw new Error(payload?.error || `Monthly KPI request failed (${response.status}).`);
+  }
+  return payload.kpis;
+}
+
 type WorkerSnapshot = {
   ok: true;
   generatedAt?: string;
@@ -2778,6 +2804,7 @@ export default function Home() {
   const [query, setQuery] = useState("");
   const [includeFinished, setIncludeFinished] = useState(false);
   const [period, setPeriod] = useState<"mtd" | "ytd">("mtd");
+  const [selectedMtdMonth, setSelectedMtdMonth] = useState(currentMtdMonth);
   const [savingId, setSavingId] = useState("");
   const [reviewingKey, setReviewingKey] = useState("");
   const [notice, setNotice] = useState("");
@@ -2880,6 +2907,23 @@ export default function Home() {
       window.removeEventListener("focus", refreshIfStale);
     };
   }, [load]);
+
+  useEffect(() => {
+    if (period !== "mtd") return;
+    let cancelled = false;
+    fetchMonthlyKpis(selectedMtdMonth)
+      .then((nextKpis) => {
+        if (!cancelled) setKpis(nextKpis);
+      })
+      .catch((monthlyError) => {
+        if (!cancelled) {
+          setNotice(monthlyError instanceof Error ? monthlyError.message : "Monthly KPI data is unavailable.");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [period, selectedMtdMonth]);
 
   const visibleItems = useMemo(() => {
     const first = days[0].getTime();
@@ -3234,13 +3278,25 @@ export default function Home() {
             <p className="eyebrow">2026 ACTUALS · INVOICE FIRST / RATE FALLBACK</p>
             <h2 id="kpi-heading">KPI Control Tower</h2>
           </div>
-          <div className="period-toggle" role="group" aria-label="KPI period">
-            <button type="button" className={period === "mtd" ? "active" : ""} onClick={() => setPeriod("mtd")}>
-              MTD
-            </button>
-            <button type="button" className={period === "ytd" ? "active" : ""} onClick={() => setPeriod("ytd")}>
-              YTD
-            </button>
+          <div className="kpi-period-controls">
+            <div className="period-toggle" role="group" aria-label="KPI period">
+              <button type="button" className={period === "mtd" ? "active" : ""} onClick={() => setPeriod("mtd")}>
+                MTD
+              </button>
+              <button type="button" className={period === "ytd" ? "active" : ""} onClick={() => setPeriod("ytd")}>
+                YTD
+              </button>
+            </div>
+            {period === "mtd" && (
+              <label className="mtd-month-select">
+                <span>Month</span>
+                <select aria-label="MTD month" value={selectedMtdMonth} onChange={(event) => setSelectedMtdMonth(event.target.value)}>
+                  {availableMtdMonths().map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+            )}
           </div>
         </div>
         <div className="kpi-grid">
