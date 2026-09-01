@@ -248,6 +248,8 @@ export async function computeLiveKpis(): Promise<Record<string, number | string 
       (record) => record.date >= yearStart && record.date <= today.code,
     );
     const freightMtd = freight.filter((record) => record.date >= monthStart);
+    const truckingYtd = freight.filter((record) => !record.isTransfer);
+    const truckingMtd = freightMtd.filter((record) => !record.isTransfer);
     const transferYtd = freight.filter((record) => record.isTransfer);
     const transferMtd = freightMtd.filter((record) => record.isTransfer);
     const njTransferYtd = transferYtd.filter((record) =>
@@ -282,7 +284,7 @@ export async function computeLiveKpis(): Promise<Record<string, number | string 
     const ltl = classified.filter((record) => record.loadType === "LTL").length;
     const ftl = classified.filter((record) => record.loadType === "FTL").length;
     const splitTotal = ltl + ftl;
-    const average = (
+    const laneTotal = (
       records: typeof freight,
       band: "local" | "california" | "out-of-state",
     ) => {
@@ -292,9 +294,7 @@ export async function computeLiveKpis(): Promise<Record<string, number | string 
           record.cost > 0 &&
           distanceBand(record.destination) === band,
       );
-      return matching.length
-        ? matching.reduce((total, record) => total + record.cost, 0) / matching.length
-        : 0;
+      return matching.reduce((total, record) => total + record.cost, 0);
     };
 
     return {
@@ -311,12 +311,14 @@ export async function computeLiveKpis(): Promise<Record<string, number | string 
         topCarriers,
         ltlPercent: splitTotal ? Math.round((ltl / splitTotal) * 100) : 0,
         ftlPercent: splitTotal ? Math.round((ftl / splitTotal) * 100) : 0,
-        avgLocal: average(freight, "local"),
-        avgCalifornia: average(freight, "california"),
-        avgOutOfState: average(freight, "out-of-state"),
-        avgLocalMtd: average(freightMtd, "local"),
-        avgCaliforniaMtd: average(freightMtd, "california"),
-        avgOutOfStateMtd: average(freightMtd, "out-of-state"),
+        truckingMtd: truckingMtd.reduce((total, record) => total + record.cost, 0),
+        truckingYtd: truckingYtd.reduce((total, record) => total + record.cost, 0),
+        totalLocal: laneTotal(freight, "local"),
+        totalCalifornia: laneTotal(freight, "california"),
+        totalOutOfState: laneTotal(freight, "out-of-state"),
+        totalLocalMtd: laneTotal(freightMtd, "local"),
+        totalCaliforniaMtd: laneTotal(freightMtd, "california"),
+        totalOutOfStateMtd: laneTotal(freightMtd, "out-of-state"),
     };
   } catch (error) {
     throw error instanceof Error ? error : new Error("KPI calculation failed.");
