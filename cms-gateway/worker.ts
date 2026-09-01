@@ -1,10 +1,13 @@
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 25_000;
+const DIRECT_TIMEOUT_MS = 15_000;
 const MAX_QUERY_LIMIT = 10_000;
+const DIRECT_INVOICE_URL = "https://cms.siliconii.com/SalesProcess/INVCList";
 
 type Env = {
   CMS_UPSTREAM_MCP_URL: string;
   CMS_MCP_AUTH_TOKEN?: string;
+  CMS_IMS_API_KEY?: string;
 };
 
 type RpcRequest = {
@@ -142,7 +145,108 @@ function monthBounds(month: string) {
   const next = monthNumber === 12
     ? `${year + 1}-01-01`
     : `${year}-${String(monthNumber + 1).padStart(2, "0")}-01`;
-  return { start, next };
+  const endDate = new Date(`${next}T00:00:00Z`);
+  endDate.setUTCDate(endDate.getUTCDate() - 1);
+  return { start, next, end: endDate.toISOString().slice(0, 10) };
+}
+
+function extractRows(payload: unknown): Record<string, unknown>[] {
+  if (Array.isArray(payload)) return payload.filter((row): row is Record<string, unknown> => Boolean(row && typeof row === "object"));
+  if (!payload || typeof payload !== "object") return [];
+  const object = payload as Record<string, unknown>;
+  for (const key of ["Data", "data", "rows", "Rows", "result", "Result", "list", "List"]) {
+    const value = object[key];
+    if (Array.isArray(value)) return value.filter((row): row is Record<string, unknown> => Boolean(row && typeof row === "object"));
+  }
+  return [];
+}
+
+async function fetchDirectInvoiceRows(env: Env, month: string) {
+  if (!env.CMS_IMS_API_KEY) throw new Error("Direct CMS API key is not configured");
+  const { start, end } = monthBounds(month);
+  const url = new URL(DIRECT_INVOICE_URL);
+  url.search = new URLSearchParams({
+    mode: "LIST",
+    key_val: "",
+    appr_yn: "",
+    block_gbn: "",
+    block_pages: "10",
+    page_rows: "10000",
+    curr_block: "1",
+    curr_page: "1",
+    base_key: "",
+    sdt: start,
+    edt: end,
+    comp_cd: "CO000007",
+    whouse_cd: "",
+    invc_user: "",
+    dept_cd: "",
+    cust_cd: "",
+    cust_nm: "",
+    prod_cd: "",
+    prod_nm: "",
+    biz_type: "",
+    biz_curr: "",
+    pay_curr: "",
+    pkng_gbn: "",
+    ow_yn: "",
+    ow_sdt: "",
+    ow_edt: "",
+    invc_no: "",
+    curr_lang: "ENG",
+  }).toString();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), DIRECT_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Accept: "application/json, text/plain, */*",
+        "x-api-key": env.CMS_IMS_API_KEY,
+        Origin: "https://cms.siliconii.com",
+        Referer: "https://cms.siliconii.com/SalesProcess/INVCList",
+        "User-Agent": "StyleKorean-CMS-Gateway/2026-09-01",
+      },
+      signal: controller.signal,
+    });
+    const contentType = response.headers.get("content-type") || "";
+    const raw = await response.text();
+    if (!response.ok) throw new Error(`Direct CMS invoice HTTP ${response.status}`);
+    if (!contentType.toLowerCase().includes("json") && !raw.trim().startsWith("{") && !raw.trim().startsWith("[")) {
+      throw new Error("Direct CMS invoice endpoint did not return JSON");
+    }
+    const rows = extractRows(JSON.parse(raw));
+    if (!rows.length) throw new Error("Direct CMS invoice endpoint returned no readable rows");
+    return rows;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function summarizeInvoiceRows(rows: Record<string, unknown>[], month: string) {
+  const { start, next } = monthBounds(month);
+  const groups = new Map<string, { invoiceIds: Set<string>; count: number; total: number }>();
+  for (const row of rows) {
+    const date = text(row.invc_dt ?? row.INVC_DT).slice(0, 10);
+    if (date && (date < start || date >= next)) continue;
+    const amount = Number(String(row.invc_atot ?? row.INVC_ATOT ?? "").replace(/[$,]/g, ""));
+    if (!Number.isFinite(amount)) continue;
+    const currency = text(row.biz_curr ?? row.BIZ_CURR ?? row.pay_curr ?? row.PAY_CURR) || "UNKNOWN";
+    const invoice = text(row.invc_no ?? row.INVC_NO);
+    const group = groups.get(currency) ?? { invoiceIds: new Set<string>(), count: 0, total: 0 };
+    group.count += 1;
+    group.total += amount;
+    if (invoice) group.invoiceIds.add(invoice);
+    groups.set(currency, group);
+  }
+  return [...groups.entries()].map(([currency, group]) => {
+    const invoiceCount = group.invoiceIds.size || group.count;
+    return {
+      currency,
+      invoiceCount,
+      totalSales: Math.round(group.total * 100) / 100,
+      averageInvoiceValue: invoiceCount ? Math.round((group.total / invoiceCount) * 100) / 100 : 0,
+    };
+  }).sort((a, b) => a.currency.localeCompare(b.currency));
 }
 
 async function discoverInvoiceSource(env: Env) {
@@ -171,41 +275,80 @@ async function discoverInvoiceSource(env: Env) {
   return source;
 }
 
+async function fetchMcpSalesSummary(env: Env, month: string) {
+  const { start, next } = monthBounds(month);
+  const source = await discoverInvoiceSource(env);
+  const lowerColumns = new Map(source.columns.map((column) => [column.toLowerCase(), column]));
+  const dateColumn = lowerColumns.get("invc_dt")!;
+  const amountColumn = lowerColumns.get("invc_atot")!;
+  const currencyColumn = lowerColumns.get("biz_curr") || lowerColumns.get("pay_curr") || "";
+  const invoiceColumn = lowerColumns.get("invc_no") || "";
+  const invoiceCountExpr = invoiceColumn
+    ? `COUNT(DISTINCT ${safeIdentifier(invoiceColumn)})`
+    : "COUNT(*)";
+  const currencyExpr = currencyColumn ? safeIdentifier(currencyColumn) : "''";
+  const groupBy = currencyColumn ? `GROUP BY ${safeIdentifier(currencyColumn)}` : "";
+  const sql = `SELECT ${currencyExpr} AS currency,
+    ${invoiceCountExpr} AS invoiceCount,
+    SUM(TRY_CONVERT(decimal(19,2), ${safeIdentifier(amountColumn)})) AS totalSales,
+    AVG(TRY_CONVERT(decimal(19,2), ${safeIdentifier(amountColumn)})) AS averageInvoiceValue
+    FROM [CSMS].${safeIdentifier(source.schema)}.${safeIdentifier(source.table)} WITH (NOLOCK)
+    WHERE TRY_CONVERT(date, ${safeIdentifier(dateColumn)}) >= '${start}'
+      AND TRY_CONVERT(date, ${safeIdentifier(dateColumn)}) < '${next}'
+    ${groupBy}
+    ORDER BY currency`;
+  const rows = await runReadonlyQuery(env, sql, 100, `Aggregate CMS invoice sales for ${month}`);
+  return {
+    rows,
+    source: { database: "CSMS", schema: source.schema, table: source.table, transport: "mcp" },
+    notes: currencyColumn ? "Totals are grouped by CMS currency and are not combined across currencies." : "CMS source has no detected currency column.",
+  };
+}
+
 async function handleSalesSummary(url: URL, env: Env) {
+  const month = url.searchParams.get("month") || new Date().toISOString().slice(0, 7);
   try {
-    const month = url.searchParams.get("month") || new Date().toISOString().slice(0, 7);
-    const { start, next } = monthBounds(month);
-    const source = await discoverInvoiceSource(env);
-    const lowerColumns = new Map(source.columns.map((column) => [column.toLowerCase(), column]));
-    const dateColumn = lowerColumns.get("invc_dt")!;
-    const amountColumn = lowerColumns.get("invc_atot")!;
-    const currencyColumn = lowerColumns.get("biz_curr") || lowerColumns.get("pay_curr") || "";
-    const invoiceColumn = lowerColumns.get("invc_no") || "";
-    const invoiceCountExpr = invoiceColumn
-      ? `COUNT(DISTINCT ${safeIdentifier(invoiceColumn)})`
-      : "COUNT(*)";
-    const currencyExpr = currencyColumn ? safeIdentifier(currencyColumn) : "''";
-    const groupBy = currencyColumn ? `GROUP BY ${safeIdentifier(currencyColumn)}` : "";
-    const sql = `SELECT ${currencyExpr} AS currency,
-      ${invoiceCountExpr} AS invoiceCount,
-      SUM(TRY_CONVERT(decimal(19,2), ${safeIdentifier(amountColumn)})) AS totalSales,
-      AVG(TRY_CONVERT(decimal(19,2), ${safeIdentifier(amountColumn)})) AS averageInvoiceValue
-      FROM [CSMS].${safeIdentifier(source.schema)}.${safeIdentifier(source.table)} WITH (NOLOCK)
-      WHERE TRY_CONVERT(date, ${safeIdentifier(dateColumn)}) >= '${start}'
-        AND TRY_CONVERT(date, ${safeIdentifier(dateColumn)}) < '${next}'
-      ${groupBy}
-      ORDER BY currency`;
-    const rows = await runReadonlyQuery(env, sql, 100, `Aggregate CMS invoice sales for ${month}`);
-    return json({
-      ok: true,
-      month,
-      source: { database: "CSMS", schema: source.schema, table: source.table },
-      rows,
-      generatedAt: new Date().toISOString(),
-      notes: currencyColumn ? "Totals are grouped by CMS currency and are not combined across currencies." : "CMS source has no detected currency column.",
-    });
+    monthBounds(month);
+    let directError = "";
+    if (env.CMS_IMS_API_KEY) {
+      try {
+        const directRows = await fetchDirectInvoiceRows(env, month);
+        const rows = summarizeInvoiceRows(directRows, month);
+        if (rows.length) {
+          return json({
+            ok: true,
+            month,
+            source: { endpoint: DIRECT_INVOICE_URL, transport: "direct-api" },
+            rows,
+            generatedAt: new Date().toISOString(),
+            notes: "Totals are grouped by CMS currency and are not combined across currencies.",
+          });
+        }
+        directError = "Direct CMS invoice data contained no numeric invoice totals for the requested month";
+      } catch (error) {
+        directError = error instanceof Error ? error.message : String(error);
+      }
+    }
+    try {
+      const result = await fetchMcpSalesSummary(env, month);
+      return json({
+        ok: true,
+        month,
+        ...result,
+        generatedAt: new Date().toISOString(),
+        fallbackFromDirect: directError || undefined,
+      });
+    } catch (error) {
+      const mcpError = error instanceof Error ? error.message : String(error);
+      return json({
+        ok: false,
+        error: mcpError,
+        directError: directError || undefined,
+        transportsTried: [env.CMS_IMS_API_KEY ? "direct-api" : null, "mcp"].filter(Boolean),
+      }, 502);
+    }
   } catch (error) {
-    return json({ ok: false, error: error instanceof Error ? error.message : String(error) }, 502);
+    return json({ ok: false, error: error instanceof Error ? error.message : String(error) }, 400);
   }
 }
 
@@ -219,6 +362,7 @@ export default {
         mode: "read-only",
         upstreamConfigured: Boolean(env.CMS_UPSTREAM_MCP_URL),
         authForwardingConfigured: Boolean(env.CMS_MCP_AUTH_TOKEN),
+        directInvoiceConfigured: Boolean(env.CMS_IMS_API_KEY),
         checkedAt: new Date().toISOString(),
       });
     }
