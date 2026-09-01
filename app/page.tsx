@@ -2991,16 +2991,25 @@ export default function Home() {
         ...dashboardInventory.inStock,
         ...skwStock,
       ], false));
-      // Alerts read AVAILABLE (zero/negative retained) from the dashboard tab;
-      // when that tab is absent, fall back to SKW physical on-hand so SKW-only
-      // deployments still surface LOW stock. Inbound reuses the combined list.
-      const availableSource = alertInputs.available.length ? alertInputs.available : skwStock;
+      // Alerts read AVAILABLE (zero/negative retained) from the dashboard tab.
+      // SKW_Stock is a DISTINCT physical-on-hand source (transferInboundInventory_
+      // writes it), so merge SKW-only products in alongside dashboard availability
+      // rather than discarding them whenever the dashboard has rows — an alias
+      // match (SKU/UPC/name) avoids double-counting a product present in both.
+      // When the dashboard tab is absent, SKW stock stands in entirely.
+      const availableSource = [
+        ...alertInputs.available,
+        ...skwStock.filter(
+          (s) => !alertInputs.available.some((a) => inventoryProductsMatch(a, s)),
+        ),
+      ];
       setAlertAvailable(uniqueInventoryItems(availableSource, false));
-      setInventoryDataAvailable(
-        Boolean(inventoryDashboardTable?.rows?.length) ||
-          skwInbound.length > 0 ||
-          skwStock.length > 0,
-      );
+      // Classify stock only when an actual STOCK source loaded (dashboard
+      // availability or SKW on-hand). Inbound alone must NOT enable alerts, or
+      // inbound-only SKUs would be reported as zero-available stockouts while
+      // current stock is genuinely unknown — that case must show the degraded
+      // state instead.
+      setInventoryDataAvailable(availableSource.length > 0);
       setGmailIngestion(nextGmailIngestion);
       setCmsInventory(nextCmsInventory);
       setCmsInventoryConfigured(nextCmsInventoryConfigured);
