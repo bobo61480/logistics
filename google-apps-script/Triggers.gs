@@ -8,7 +8,7 @@
 
 /* eslint-disable no-unused-vars */
 
-var GMAIL_PIPELINE_TRIGGER_SYNC_VERSION = "2026-08-31-central-v5-gmail-recovery";
+var GMAIL_PIPELINE_TRIGGER_SYNC_VERSION = "2026-08-31-central-v7-yixi-location-selfheal";
 var APPS_SCRIPT_DEPLOY_SYNC_VERSION = "2026-08-29-d1-canonical-v4";
 
 var TRIGGER_PLAN = [
@@ -16,6 +16,7 @@ var TRIGGER_PLAN = [
   { handler: "processXpoTrackingEmailsV2", minutes: 15 },
   { handler: "processApprovedPending", minutes: 30 },
   { handler: "scanAndImportWmsTruckingOrdersV2", minutes: 15 },
+  { handler: "dedupeWhTruckingLocationSafeV5", minutes: 1 },
   { handler: "trackSmallParcelsStatusUpdates", hours: 1 },
   { handler: "syncInventoryModule", hours: 1 },
   { handler: "dedupeAllOperationalSheetsV4", daily: 4 },
@@ -58,6 +59,7 @@ var TRIGGER_CLEANUP_HANDLERS = [
   "processXpoTrackingEmailsV2",
   "scanAndImportWmsTruckingOrders",
   "scanAndImportWmsTruckingOrdersV2",
+  "dedupeWhTruckingLocationSafeV5",
   "trackSmallParcelsStatusUpdates",
   "syncInventoryModule",
   "dedupeAllOperationalSheetsV4",
