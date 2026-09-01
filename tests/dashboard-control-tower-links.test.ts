@@ -16,7 +16,8 @@ describe("main dashboard control tower links", () => {
     expect(layout).toContain("<DashboardControlTowerLinks />");
     expect(remap).toContain('const LOGISTICS_HOST = "skwarehouse.dpdns.org";');
     expect(remap).toContain('const WAREHOUSE_HOST = "skwbp.dpdns.org";');
-    expect(remap).toContain('anchor.href = `https://${WAREHOUSE_HOST}`;');
+    expect(remap).toContain('const target = `https://${WAREHOUSE_HOST}`;');
+    expect(remap).toContain("anchor.href = target;");
     expect(remap).toContain('name.textContent === "Logistics Control Tower"');
     expect(remap).toContain('name.textContent === "Warehouse Control Tower"');
   });
