@@ -80,7 +80,9 @@ const promptIndex = args.indexOf("--prompt");
 // The gateway records `prompt` verbatim in its operator audit log, so it must
 // be a real, explicit question — never a silent default or an empty value.
 const auditPrompt = promptIndex !== -1 ? args[promptIndex + 1] : undefined;
-if (!auditPrompt || auditPrompt.startsWith("--")) {
+// A whitespace-only prompt is as useless for the audit log as an empty one;
+// reject it, but forward the original text verbatim (never trimmed) downstream.
+if (!auditPrompt || !auditPrompt.trim() || auditPrompt.startsWith("--")) {
   console.error(
     'Missing required --prompt "<your verbatim question>" — it is written to the\n' +
       "CMS operator audit log and must not be defaulted or left empty.",
@@ -143,6 +145,10 @@ async function mcpCall(tool, toolArgs) {
       body,
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
+    // A transient 5xx from an intermediary can still carry a JSON body that
+    // parses cleanly; treat any non-OK status as a transport failure so the
+    // retry loop advances to the curl fallback instead of accepting it.
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText} from gateway`);
     return parseRpc(await res.text());
   };
   // Node's fetch ignores HTTPS_PROXY; curl honors it (sandboxed environments).
