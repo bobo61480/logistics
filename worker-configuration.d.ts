@@ -5,6 +5,7 @@ interface __BaseEnv_Env {
 	ASSETS: Fetcher;
 	APPS_SCRIPT_WRITE_URL: "https://script.google.com/macros/s/AKfycbz770kmpwqMTA-h-lzeLARgVnDh_VDjh-70OOKk_yE-iXJTmzAsVXUtln17QTOURO1R/exec";
 	CMS_MCP_URL: "https://cms.mcp.siliconii.com/mcp/";
+	CMS_GATEWAY_URL: "https://stylekorean-cms-gateway.stylekorean.workers.dev";
 	CMS_MCP_AUTH_TOKEN?: string;
 	CMS_IMS_API_KEY?: string;
 	// Carrier tracking API secrets are provisioned via `wrangler secret put`, not wrangler.toml
