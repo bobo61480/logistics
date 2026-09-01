@@ -41,13 +41,12 @@ describe("Apps Script production integrity", () => {
   });
 
   it("has exactly one production compatibility entry point for the legacy WMS scanner name", () => {
-    const code = read("google-apps-script/Code.gs");
-    const compatibility = read("google-apps-script/zz_WmsTruckingCompatibility.gs");
-    const combined = `${code}\n${compatibility}`;
+    const importer = read("google-apps-script/WmsTruckingSyncV2.gs");
+    const combined = importer;
     const matches = combined.match(/function\s+scanAndImportWmsTruckingOrders\s*\(/g) ?? [];
 
     expect(matches).toHaveLength(1);
-    expect(compatibility).toContain("return scanAndImportWmsTruckingOrdersV2();");
+    expect(importer).toContain("return scanAndImportWmsTruckingOrdersV2();");
   });
 
   it("central trigger provisioning cleans legacy WMS/Gmail handlers and provisions the current ones", () => {

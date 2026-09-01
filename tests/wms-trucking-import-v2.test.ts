@@ -27,13 +27,15 @@ type Helpers = {
     groupKey: string,
     sourceByInvoice: Map<string, { key: string }>,
   ) => string[];
+  wmsLocationStoreIndex_: (map: Record<string, number>) => number | undefined;
 };
 
 function loadHelpers(): Helpers {
   const source = readFileSync("google-apps-script/WmsTruckingSyncV2.gs", "utf8");
+  const locationSafety = readFileSync("google-apps-script/zzzzzzzzzzz_WmsLocationSafetyV5.gs", "utf8");
   const context = vm.createContext({ Map, Set, console });
   vm.runInContext(
-    `${source}\n;globalThis.__helpers = {wmsImportEligible_,wmsInvoiceSignatureFromKey_,chooseWmsTargetRow_,filterWmsInvoicesForGroup_};`,
+    `${locationSafety}\n${source}\n;globalThis.__helpers = {wmsImportEligible_,wmsInvoiceSignatureFromKey_,chooseWmsTargetRow_,filterWmsInvoicesForGroup_,wmsLocationStoreIndex_};`,
     context,
   );
   return context.__helpers as Helpers;
@@ -49,7 +51,7 @@ describe("WMS trucking importer v2 safeguards", () => {
     expect(helpers.wmsImportEligible_({ key: "2026-08-10" }, "2026-08-11")).toBe(false);
   });
 
-  it("normalizes destination-specific WMS keys to an invoice idempotency signature", () => {
+  it("keeps destination-specific invoice signatures separate", () => {
     const sourceSignature = helpers.wmsInvoiceSignatureFromKey_(
       "YIXI TRADING LLC DBA FANLOLI BEAUTY___2026-09-04___DEST_CHINATOWN",
       "in00471237",
@@ -60,15 +62,22 @@ describe("WMS trucking importer v2 safeguards", () => {
     );
 
     expect(sourceSignature).toBe(
-      "YIXI TRADING LLC DBA FANLOLI BEAUTY___2026-09-04___INV_IN00471237",
+      "YIXI TRADING LLC DBA FANLOLI BEAUTY___2026-09-04___DEST_CHINATOWN___INV_IN00471237",
     );
-    expect(targetSignature).toBe(sourceSignature);
+    expect(targetSignature).not.toBe(sourceSignature);
     expect(
       helpers.wmsInvoiceSignatureFromKey_(
         "YIXI TRADING LLC DBA FANLOLI BEAUTY___2026-09-04___DEST_JAPAN CENTER",
         "IN00471235",
       ),
     ).not.toBe(sourceSignature);
+  });
+
+  it("persists the destination in the target location column", () => {
+    expect(helpers.wmsLocationStoreIndex_({ "LOCATION STORE": 8 })).toBe(8);
+    expect(helpers.wmsLocationStoreIndex_({ "LOCATION/STORE": 9 })).toBe(9);
+    const source = readFileSync("google-apps-script/WmsTruckingSyncV2.gs", "utf8");
+    expect(source).toContain("newRow[targetLocationIndex] = group.destinationHint");
   });
 
   it("does not reuse a row just because an invoice was previously merged into a nearby date", () => {

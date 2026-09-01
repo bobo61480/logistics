@@ -1,14 +1,14 @@
 /**
  * zzzzzzzz_GmailSafetyV4.gs
  *
- * One late-loaded production hardening layer for Gmail V2. Keep the safety
- * rules in one place rather than creating parallel parser copies.
+ * Pure production hardening helpers for Gmail V2. Canonical entry points call
+ * these helpers explicitly; this file must never replace another function at
+ * load time because Apps Script does not guarantee file evaluation order.
  */
 /* eslint-disable no-unused-vars */
 
 var GMAIL_SAFETY_V4_VERSION = "2026-08-29-v4-canonical-dedupe";
 var GMAIL_SAFETY_V4_NEEDS_CORRECTION = "NEEDS CORRECTION";
-var GMAIL_SAFETY_V4_LAST_UPSERT = null;
 var GMAIL_SAFETY_V4_D1_REFRESH_URL = "https://stylekorean.dpdns.org/api/logistics/snapshot?refresh=1&source=apps-script-gmail";
 
 function gmailSafetyV4ValidFreightId_(value) {
@@ -93,110 +93,3 @@ function gmailSafetyV4RefreshD1_(reason) {
   }
 }
 
-function gmailSafetyV4InstallMutationSync_(handlerName, changed) {
-  var base = this[handlerName];
-  if (typeof base !== "function" || base._gmailSafetyV4D1) return;
-  var wrapped = function () {
-    var result = base.apply(this, arguments);
-    var shouldRefresh = false;
-    try { shouldRefresh = changed(result || {}); } catch (e) {}
-    if (shouldRefresh) gmailSafetyV4RefreshD1_(handlerName);
-    return result;
-  };
-  wrapped._gmailSafetyV4D1 = true;
-  this[handlerName] = wrapped;
-}
-
-function gmailSafetyV4Install_() {
-  if (typeof LOGISTICS_STATUS_ALIASES_ !== "undefined") {
-    LOGISTICS_STATUS_ALIASES_["FDA RELEASED"] = "FDA Released / Scheduled";
-    LOGISTICS_STATUS_ALIASES_["FDA RELEASED/SCHEDULED"] = "FDA Released / Scheduled";
-    LOGISTICS_STATUS_ALIASES_["FDA RELEASED / SCHEDULED"] = "FDA Released / Scheduled";
-  }
-
-  if (typeof VALIDATION !== "undefined") {
-    if (VALIDATION.statusValues.indexOf(GMAIL_SAFETY_V4_NEEDS_CORRECTION) === -1) VALIDATION.statusValues.splice(1, 0, GMAIL_SAFETY_V4_NEEDS_CORRECTION);
-    VALIDATION.colors.needsCorrection = "#FCE8B2";
-  }
-
-  if (typeof mergeRecordContextV2_ === "function" && !mergeRecordContextV2_._gmailSafetyV4) {
-    var baseMerge = mergeRecordContextV2_;
-    var wrappedMerge = function (record, context, meta) { return gmailSafetyV4ApplyRecord_(baseMerge(record, context, meta), meta || {}); };
-    wrappedMerge._gmailSafetyV4 = true;
-    mergeRecordContextV2_ = wrappedMerge;
-  }
-
-  if (typeof upsertInboundEmailV2_ === "function" && !upsertInboundEmailV2_._gmailSafetyV4) {
-    var baseInbound = upsertInboundEmailV2_;
-    var wrappedInbound = function (record, allowInsert) {
-      var result = baseInbound(record, allowInsert);
-      GMAIL_SAFETY_V4_LAST_UPSERT = result || { matched: false, action: "noop" };
-      return result;
-    };
-    wrappedInbound._gmailSafetyV4 = true;
-    upsertInboundEmailV2_ = wrappedInbound;
-  }
-
-  if (typeof upsertOutboundEmailV2_ === "function" && !upsertOutboundEmailV2_._gmailSafetyV4) {
-    var baseOutbound = upsertOutboundEmailV2_;
-    var wrappedOutbound = function (record, allowInsert) {
-      var result = baseOutbound(record, allowInsert);
-      GMAIL_SAFETY_V4_LAST_UPSERT = result || { matched: false, action: "noop" };
-      return result;
-    };
-    wrappedOutbound._gmailSafetyV4 = true;
-    upsertOutboundEmailV2_ = wrappedOutbound;
-  }
-
-  if (typeof commitApprovedPendingRow_ === "function" && !commitApprovedPendingRow_._gmailSafetyV4) {
-    var baseCommit = commitApprovedPendingRow_;
-    var wrappedCommit = function (sheet, rowIndex1based, data, col) {
-      GMAIL_SAFETY_V4_LAST_UPSERT = null;
-      baseCommit(sheet, rowIndex1based, data, col);
-      var result = GMAIL_SAFETY_V4_LAST_UPSERT;
-      if (!result || result.matched !== true) {
-        sheet.getRange(rowIndex1based, col["Status"] + 1).setValue(GMAIL_SAFETY_V4_NEEDS_CORRECTION);
-        var issueCell = sheet.getRange(rowIndex1based, col["Issues"] + 1);
-        var priorIssue = String(issueCell.getDisplayValue() || "").trim();
-        var issue = "Approved record could not be uniquely matched or safely inserted. Correct identifiers/customer/date, then approve again.";
-        if (priorIssue.indexOf(issue) === -1) issueCell.setValue(priorIssue ? priorIssue + " | " + issue : issue);
-        sheet.getRange(rowIndex1based, 1, 1, VALIDATION.pendingHeaders.length).setBackground(VALIDATION.colors.needsCorrection);
-        return { committed: false, matched: false, action: "needs-correction" };
-      }
-      return { committed: true, matched: true, action: result.action, row: result.row, changes: result.changes || [] };
-    };
-    wrappedCommit._gmailSafetyV4 = true;
-    commitApprovedPendingRow_ = wrappedCommit;
-  }
-
-  if (typeof reviewPendingRow_ === "function" && !reviewPendingRow_._gmailSafetyV4) {
-    var baseReview = reviewPendingRow_;
-    var wrappedReview = function (payload) {
-      var result = baseReview(payload);
-      if (result && result.action === "approved" && result.row) {
-        var pending = ensurePendingSheet_();
-        var statusColumn = VALIDATION.pendingHeaders.indexOf("Status") + 1;
-        var actualStatus = String(pending.getRange(result.row, statusColumn).getDisplayValue() || "").trim();
-        result.status = actualStatus || result.status;
-        result.ok = actualStatus === "COMMITTED";
-        if (!result.ok) result.error = "Approved review could not be committed safely; row moved to " + actualStatus + ".";
-      }
-      return result;
-    };
-    wrappedReview._gmailSafetyV4 = true;
-    reviewPendingRow_ = wrappedReview;
-  }
-
-  if (typeof Drive !== "undefined" && Drive.Files && typeof Drive.Files.create === "function") {
-    if (typeof convertBlobWithDriveRestV2_ === "function") convertBlobWithDriveRestV2_ = gmailSafetyV4ConvertBlob_;
-    if (typeof pdfTextV2_ === "function") pdfTextV2_ = gmailSafetyV4PdfText_;
-  }
-
-  gmailSafetyV4InstallMutationSync_("processLogisticsEmailsV2", function (r) { return Number(r.inserted || 0) + Number(r.updated || 0) > 0; });
-  gmailSafetyV4InstallMutationSync_("processXpoTrackingEmailsV2", function (r) { return Number(r.updated || 0) > 0; });
-  gmailSafetyV4InstallMutationSync_("processApprovedPending", function (r) { return Number(r.committed || 0) > 0; });
-
-  return GMAIL_SAFETY_V4_VERSION;
-}
-
-var GMAIL_SAFETY_V4_INSTALLED = gmailSafetyV4Install_();

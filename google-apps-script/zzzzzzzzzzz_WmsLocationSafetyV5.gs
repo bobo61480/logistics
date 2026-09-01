@@ -224,82 +224,19 @@ function whBackfillLocationStoreV5_() {
   return changed;
 }
 
-var WMS_LOCATION_BASE_DEST_NORMALIZER_V5 = typeof normalizeWmsDestinationHint_ === "function" ? normalizeWmsDestinationHint_ : null;
-if (WMS_LOCATION_BASE_DEST_NORMALIZER_V5) {
-  normalizeWmsDestinationHint_ = function (value) {
-    var yixi = whYixiLocationAliasV5_(value);
-    return yixi || WMS_LOCATION_BASE_DEST_NORMALIZER_V5(value);
-  };
-}
-
-if (typeof wmsInvoiceSignatureFromKey_ === "function") {
-  wmsInvoiceSignatureFromKey_ = function (groupKey, invoice) {
-    var cleanInvoice = String(invoice || "").trim().toUpperCase();
-    if (!groupKey || !cleanInvoice) return "";
-    return String(groupKey) + "___INV_" + cleanInvoice;
-  };
-}
-
-var WMS_LOCATION_BASE_CHOOSE_V5 = typeof chooseWmsTargetRow_ === "function" ? chooseWmsTargetRow_ : null;
-if (WMS_LOCATION_BASE_CHOOSE_V5) {
-  chooseWmsTargetRow_ = function (groupKey, invoices, rows) {
-    var desired = whLocationFromGroupKeyV5_(groupKey);
-    if (!desired) return WMS_LOCATION_BASE_CHOOSE_V5(groupKey, invoices, rows);
-    var wanted = {};
-    (invoices || []).forEach(function (invoice) { wanted[String(invoice || "").trim().toUpperCase()] = true; });
-    var filtered = (rows || []).filter(function (row) {
-      var matchedInvoice = "";
-      for (var i = 0; i < (row.invoices || []).length; i++) {
-        var candidate = String(row.invoices[i] || "").trim().toUpperCase();
-        if (wanted[candidate]) { matchedInvoice = candidate; break; }
-      }
-      if (!matchedInvoice) return true;
-      var actual = WMS_LOCATION_TARGET_BY_ROW_INVOICE_V5[row.rowNumber + "|" + matchedInvoice] || "";
-      return !actual || actual === desired || actual === ("YIXI:" + desired);
-    });
-    return WMS_LOCATION_BASE_CHOOSE_V5(groupKey, invoices, filtered);
-  };
-}
-
-var WMS_LOCATION_BASE_SCAN_V5 = typeof scanAndImportWmsTruckingOrdersV2 === "function" ? scanAndImportWmsTruckingOrdersV2 : null;
-if (WMS_LOCATION_BASE_SCAN_V5) {
-  scanAndImportWmsTruckingOrdersV2 = function () {
-    whBuildTargetLocationIndexV5_();
-    var result = WMS_LOCATION_BASE_SCAN_V5.apply(this, arguments);
-    try { whBackfillLocationStoreV5_(); } catch (backfillError) { Logger.log("Location backfill failed: " + backfillError.message); }
-    try { dedupeWhTruckingLocationSafeV5_(); } catch (dedupeError) { Logger.log("Location-safe dedupe failed: " + dedupeError.message); }
-    return result;
-  };
-}
-
-if (typeof TRIGGER_PLAN !== "undefined") {
-  var hasLocationDedupeV5 = TRIGGER_PLAN.some(function (item) { return item.handler === "dedupeWhTruckingLocationSafeV5"; });
-  if (!hasLocationDedupeV5) TRIGGER_PLAN.push({ handler: "dedupeWhTruckingLocationSafeV5", minutes: 1 });
-}
-if (typeof TRIGGER_CLEANUP_HANDLERS !== "undefined" && TRIGGER_CLEANUP_HANDLERS.indexOf("dedupeWhTruckingLocationSafeV5") === -1) {
-  TRIGGER_CLEANUP_HANDLERS.push("dedupeWhTruckingLocationSafeV5");
-}
-if (typeof GMAIL_PIPELINE_TRIGGER_SYNC_VERSION !== "undefined") {
-  GMAIL_PIPELINE_TRIGGER_SYNC_VERSION = "2026-08-31-central-v7-yixi-location-selfheal";
-}
-
-/*
- * The production deployment smoke test and Worker both call action=snapshot.
- * Use that already-authorized web-app execution to ensure the trigger plan is
- * installed immediately after every version change. The property check inside
- * ensureCanonicalTriggersForVersion_ makes this a no-op after the first repair.
- */
-var WMS_LOCATION_BASE_DOGET_V5 = typeof doGet === "function" ? doGet : null;
-if (WMS_LOCATION_BASE_DOGET_V5) {
-  doGet = function (e) {
-    try {
-      var action = String(e && e.parameter && e.parameter.action || "").trim().toLowerCase();
-      if (action === "snapshot" && typeof ensureCanonicalTriggersForVersion_ === "function") {
-        ensureCanonicalTriggersForVersion_();
-      }
-    } catch (triggerRepairError) {
-      Logger.log("Snapshot trigger-plan repair failed: " + triggerRepairError.message);
+function whFilterTargetRowsForLocationV5_(groupKey, invoices, rows) {
+  var desired = whLocationFromGroupKeyV5_(groupKey);
+  if (!desired) return rows || [];
+  var wanted = {};
+  (invoices || []).forEach(function (invoice) { wanted[String(invoice || "").trim().toUpperCase()] = true; });
+  return (rows || []).filter(function (row) {
+    var matchedInvoice = "";
+    for (var i = 0; i < (row.invoices || []).length; i++) {
+      var candidate = String(row.invoices[i] || "").trim().toUpperCase();
+      if (wanted[candidate]) { matchedInvoice = candidate; break; }
     }
-    return WMS_LOCATION_BASE_DOGET_V5(e);
-  };
+    if (!matchedInvoice) return true;
+    var actual = WMS_LOCATION_TARGET_BY_ROW_INVOICE_V5[row.rowNumber + "|" + matchedInvoice] || "";
+    return !actual || actual === desired || actual === ("YIXI:" + desired);
+  });
 }

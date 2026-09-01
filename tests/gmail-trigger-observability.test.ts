@@ -7,7 +7,7 @@ describe("Gmail trigger recovery observability", () => {
     const gmail = readFileSync("google-apps-script/GmailPipelineV2.gs", "utf8");
     const xpo = readFileSync("google-apps-script/GmailXpoV2.gs", "utf8");
 
-    expect(triggers).toContain('GMAIL_PIPELINE_TRIGGER_SYNC_VERSION = "2026-08-31-central-v5-gmail-recovery"');
+    expect(triggers).toContain('GMAIL_PIPELINE_TRIGGER_SYNC_VERSION = "2026-09-01-central-v8-single-owner"');
     expect(triggers).toContain("recordTriggerLockSkip_");
     expect(triggers).toContain("consumeTriggerLockSkips_");
     expect(triggers).toContain("ensureCanonicalTriggersForVersion_");

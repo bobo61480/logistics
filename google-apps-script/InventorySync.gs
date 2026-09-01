@@ -565,23 +565,9 @@ function num_(value) {
  * 
  * Updates are pulled from email notifications, carrier tracking, and manual sources.
  */
-var SMALL_PARCEL_TRIGGER_VERSION_ = "hourly-v3-outbound-20260811";
-
-function ensureHourlySmallParcelTrigger_() {
-  var props = PropertiesService.getScriptProperties();
-  if (props.getProperty("SMALL_PARCEL_TRIGGER_VERSION") === SMALL_PARCEL_TRIGGER_VERSION_) return;
-  ScriptApp.getProjectTriggers().forEach(function (trigger) {
-    if (trigger.getHandlerFunction() === "trackSmallParcelsStatusUpdates") ScriptApp.deleteTrigger(trigger);
-  });
-  ScriptApp.newTrigger("trackSmallParcelsStatusUpdates").timeBased().everyHours(1).create();
-  props.setProperty("SMALL_PARCEL_TRIGGER_VERSION", SMALL_PARCEL_TRIGGER_VERSION_);
-  Logger.log("Small parcel tracker migrated to hourly trigger.");
-}
-
 function trackSmallParcelsStatusUpdates() {
   var ss;
   try {
-    ensureHourlySmallParcelTrigger_();
     ss = SpreadsheetApp.openById(INVENTORY_SYNC.masterId);
     var results = { checked: 0, updated: 0, errors: [] };
 

@@ -8,7 +8,7 @@
 
 /* eslint-disable no-unused-vars */
 
-var GMAIL_PIPELINE_TRIGGER_SYNC_VERSION = "2026-08-31-central-v5-gmail-recovery";
+var GMAIL_PIPELINE_TRIGGER_SYNC_VERSION = "2026-09-01-central-v8-single-owner";
 var APPS_SCRIPT_DEPLOY_SYNC_VERSION = "2026-08-29-d1-canonical-v4";
 
 var TRIGGER_PLAN = [
@@ -61,6 +61,7 @@ var TRIGGER_CLEANUP_HANDLERS = [
   "trackSmallParcelsStatusUpdates",
   "syncInventoryModule",
   "dedupeAllOperationalSheetsV4",
+  "dedupeWhTruckingLocationSafeV5",
   "enrichImportsFromContainerLog",
   "reconcileCustomerBackfill",
   "customerLookupOnEdit",
