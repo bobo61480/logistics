@@ -220,6 +220,48 @@ var IMPORT_CUTOFF_DATE_ = new Date(2026, 6, 1); // July 1, 2026 (local script ti
  * Builds an allow-list from IMPORTS. Only non-grey, non-terminal shipments
  * dated July 1, 2026 or later are eligible to contribute inbound inventory.
  */
+/**
+ * Locates the primary IMPORTS table header.
+ *
+ * IMPORTS contains title rows and later section markers, so selecting the
+ * first non-empty row is unsafe. Require ETA plus at least one stable shipment
+ * identifier, and choose the strongest match within the leading table area.
+ */
+function findHeaderRowIdx_(data) {
+  if (!data || !data.length) return -1;
+  var identifiers = {
+    "SHIPMENT": true, "SHIPMENT #": true, "SHIPMENT NO": true, "SHIPMENT NO.": true,
+    "DOCS": true, "INVOICE": true, "MBL": true, "HBL": true, "차수": true,
+    "CONTAINER": true, "CONTAINER #": true, "CONTAINER NO": true,
+    "ENTRY NUMBER": true, "CONTAINER RAW (SYSTEM)": true
+  };
+  var bestIndex = -1;
+  var bestScore = -1;
+  var limit = Math.min(data.length, 50);
+
+  for (var r = 0; r < limit; r++) {
+    var seen = {};
+    (data[r] || []).forEach(function (value) {
+      var name = String(value || "").trim().toUpperCase();
+      if (name) seen[name] = true;
+    });
+    if (!seen["ETA"]) continue;
+
+    var score = 0;
+    Object.keys(identifiers).forEach(function (name) {
+      if (seen[name]) score++;
+    });
+    if (seen["WEBSITE STATUS"] || seen["STATUS"] || seen["SHIPMENT STATUS"]) score++;
+    if (score < 1) continue;
+
+    if (score > bestScore) {
+      bestIndex = r;
+      bestScore = score;
+    }
+  }
+  return bestIndex;
+}
+
 function findImportSectionMarkerIndex_(data, marker) {
   var wanted = String(marker || "").trim().toUpperCase();
   for (var r = 0; r < data.length; r++) {
@@ -523,23 +565,9 @@ function num_(value) {
  * 
  * Updates are pulled from email notifications, carrier tracking, and manual sources.
  */
-var SMALL_PARCEL_TRIGGER_VERSION_ = "hourly-v3-outbound-20260811";
-
-function ensureHourlySmallParcelTrigger_() {
-  var props = PropertiesService.getScriptProperties();
-  if (props.getProperty("SMALL_PARCEL_TRIGGER_VERSION") === SMALL_PARCEL_TRIGGER_VERSION_) return;
-  ScriptApp.getProjectTriggers().forEach(function (trigger) {
-    if (trigger.getHandlerFunction() === "trackSmallParcelsStatusUpdates") ScriptApp.deleteTrigger(trigger);
-  });
-  ScriptApp.newTrigger("trackSmallParcelsStatusUpdates").timeBased().everyHours(1).create();
-  props.setProperty("SMALL_PARCEL_TRIGGER_VERSION", SMALL_PARCEL_TRIGGER_VERSION_);
-  Logger.log("Small parcel tracker migrated to hourly trigger.");
-}
-
 function trackSmallParcelsStatusUpdates() {
   var ss;
   try {
-    ensureHourlySmallParcelTrigger_();
     ss = SpreadsheetApp.openById(INVENTORY_SYNC.masterId);
     var results = { checked: 0, updated: 0, errors: [] };
 

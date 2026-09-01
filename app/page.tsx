@@ -9,11 +9,13 @@ import FulfillmentTkOrders from "./FulfillmentTkOrders";
 import { GmailIngestionCard, type GmailIngestionEvent } from "./gmail-ingestion-card";
 import { DriveArchiveCard, driveLinkGlyph } from "./drive-archive-card";
 import ShipmentEventTrackerCard from "./ShipmentEventTrackerCard";
-import { LiveMapPanel, useParcelTracking, type MilestoneShipment, type TrackableShipment, type TrackingResult } from "./live-map";
+import { InventoryReconciliationCard, type CmsInventoryItem } from "./inventory-reconciliation-card";
+import { useParcelTracking, type TrackableShipment, type TrackingResult } from "./live-map";
 import { ThemeToggle } from "./theme-toggle";
 import { DataGrids } from "./data-grids";
 import { IngestionRoadmapCard } from "./ingestion-roadmap-card";
 import { LOGISTICS_STATUS_OPTIONS } from "../lib/domain/status";
+import { airlineNameFromFlight } from "../lib/domain/airlines";
 
 const SHEET_ID =
   process.env.NEXT_PUBLIC_LOGISTICS_MASTER_SHEET_ID ??
@@ -106,12 +108,14 @@ type KpiSnapshot = {
   }>;
   ltlPercent: number;
   ftlPercent: number;
-  avgLocal: number;
-  avgCalifornia: number;
-  avgOutOfState: number;
-  avgLocalMtd: number;
-  avgCaliforniaMtd: number;
-  avgOutOfStateMtd: number;
+  truckingMtd: number;
+  truckingYtd: number;
+  totalLocal: number;
+  totalCalifornia: number;
+  totalOutOfState: number;
+  totalLocalMtd: number;
+  totalCaliforniaMtd: number;
+  totalOutOfStateMtd: number;
 };
 
 export type InventoryItem = {
@@ -146,12 +150,14 @@ const EMPTY_KPIS: KpiSnapshot = {
   topCarriers: [],
   ltlPercent: 0,
   ftlPercent: 0,
-  avgLocal: 0,
-  avgCalifornia: 0,
-  avgOutOfState: 0,
-  avgLocalMtd: 0,
-  avgCaliforniaMtd: 0,
-  avgOutOfStateMtd: 0,
+  truckingMtd: 0,
+  truckingYtd: 0,
+  totalLocal: 0,
+  totalCalifornia: 0,
+  totalOutOfState: 0,
+  totalLocalMtd: 0,
+  totalCaliforniaMtd: 0,
+  totalOutOfStateMtd: 0,
 };
 
 const SOURCE_LEGEND = [
@@ -784,7 +790,7 @@ function dashboardInventoryItems(table: any): InventoryCollections {
     const sku = value(indexes.sku);
     const upc = value(indexes.upc);
     const incoming = inventoryNumber(value(indexes.incoming));
-    if ((!productName && !sku && !upc) || incoming <= 0) return;
+    if (!productName && !sku && !upc) return;
     const shipmentNo = value(indexes.shipmentNo);
     const base = {
       shipmentNo,
@@ -796,7 +802,9 @@ function dashboardInventoryItems(table: any): InventoryCollections {
       location: value(indexes.location),
       status: value(indexes.status),
     };
-    if (!/^(DELIVERED|RECEIVED|COMPLETED|CANCELLED)$/.test(value(indexes.status).toUpperCase())) inbound.push({ ...base, id: `inventory-inbound-${rowIndex}`, quantity: incoming });
+    if (incoming > 0 && !/^(DELIVERED|RECEIVED|COMPLETED|CANCELLED)$/.test(value(indexes.status).toUpperCase())) {
+      inbound.push({ ...base, id: `inventory-inbound-${rowIndex}`, quantity: incoming });
+    }
     const onHand = inventoryNumber(value(indexes.onHand));
     if (onHand > 0) inStock.push({ ...base, id: `inventory-stock-${rowIndex}`, quantity: onHand });
   });
@@ -1162,6 +1170,8 @@ type WorkerSnapshot = {
     skwInboundTable?: any;
     skwStockTable?: any;
     gmailIngestion?: GmailIngestionEvent[] | null;
+    cmsInventory?: CmsInventoryItem[];
+    cmsInventoryConfigured?: boolean;
   };
   kpis?: KpiSnapshot | null;
 };
@@ -1182,7 +1192,35 @@ const OUTBOUND_SCHEDULE_META: OutboundSourceMeta = {
 };
 
 function populatedOutboundRows(rows: string[][], headerRow: number) {
-  return rows.slice(headerRow).some((row) => Boolean(cell(row, 0) && cell(row, 3)));
+  return rows.slice(headerRow).some((row) => Boolean(cell(row, 0) && parseDate(cell(row, 3))));
+}
+
+export function enrichScheduleItemsFromEmail(items: ScheduleItem[], events: GmailIngestionEvent[] | null) {
+  if (!events?.length) return items;
+  const identifiers = new Map<string, GmailIngestionEvent>();
+  for (const event of events) {
+    for (const value of [event.shipmentId, event.invoice, event.blOrPro, event.container]) {
+      const normalized = clean(value).toUpperCase();
+      if (normalized && !identifiers.has(normalized)) identifiers.set(normalized, event);
+    }
+  }
+  return items.map((item) => {
+    const event = [item.shipmentNo, item.invoice, item.pro, item.container, item.reference]
+      .map((value) => clean(value).toUpperCase()).map((value) => identifiers.get(value)).find(Boolean);
+    if (!event) return item;
+    const customer = item.customer || event.customer;
+    return {
+      ...item,
+      customer,
+      title: item.title || customer || event.shipmentId,
+      invoice: item.invoice || event.invoice,
+      shipmentNo: item.shipmentNo || event.shipmentId,
+      pro: item.pro || event.blOrPro,
+      container: item.container || event.container,
+      carrier: item.carrier || event.carrierOrVessel,
+      secondary: item.secondary || event.note,
+    };
+  });
 }
 
 async function fetchWorkerSnapshot(): Promise<WorkerSnapshot> {
@@ -1261,6 +1299,8 @@ async function fetchOperationalSnapshot() {
       // null (not []) when the deployed Worker predates the feed, so the card
       // reports "unavailable" instead of claiming the inbox is empty.
       gmailIngestion: sources.gmailIngestion ?? null,
+      cmsInventory: sources.cmsInventory ?? [],
+      cmsInventoryConfigured: sources.cmsInventoryConfigured ?? false,
       connection: {
         mode: snapshot.stale ? "stale" as const : "worker" as const,
         storage: snapshot.storage,
@@ -1277,6 +1317,8 @@ async function fetchOperationalSnapshot() {
       ...(await fetchSheetSnapshot()),
       // The direct-Sheets fallback carries no ingestion feed.
       gmailIngestion: null,
+      cmsInventory: [],
+      cmsInventoryConfigured: false,
       connection: {
         mode: "sheets" as const,
         storage: "sheets" as const,
@@ -2588,6 +2630,7 @@ type CountEntry = [string, number];
 
 function scheduleCarrierName(item: ScheduleItem): string {
   const name = clean(item.carrier) || (item.isSmallParcel ? clean(item.shippingMethod) : "");
+  if (item.mode === "Air") return airlineNameFromFlight(name) || name;
   // "Trucking" is a freight mode stylekorean sometimes falls back to as a carrier value,
   // not an actual named carrier — exclude it so it can't displace a real carrier in the ranking.
   return /^trucking$/i.test(name) ? "" : name;
@@ -2741,6 +2784,8 @@ export default function Home() {
   const [kpis, setKpis] = useState<KpiSnapshot>(EMPTY_KPIS);
   const [inboundInventory, setInboundInventory] = useState<InventoryItem[]>([]);
   const [warehouseStock, setWarehouseStock] = useState<InventoryItem[]>([]);
+  const [cmsInventory, setCmsInventory] = useState<CmsInventoryItem[]>([]);
+  const [cmsInventoryConfigured, setCmsInventoryConfigured] = useState(false);
   const [selectedInventory, setSelectedInventory] = useState<InventoryItem | null>(null);
   const [connection, setConnection] = useState<ConnectionState | null>(null);
   const [gmailIngestion, setGmailIngestion] = useState<GmailIngestionEvent[] | null>(null);
@@ -2773,17 +2818,19 @@ export default function Home() {
         skwInboundTable,
         skwStockTable,
         gmailIngestion: nextGmailIngestion,
+        cmsInventory: nextCmsInventory,
+        cmsInventoryConfigured: nextCmsInventoryConfigured,
         connection: nextConnection,
       } = await fetchOperationalSnapshot();
       // Each source row remains its own operational move except same-customer,
       // same-date trucking rows, which consolidateTruckingItems merges into one card.
-      setItems(consolidateTruckingItems([
+      setItems(enrichScheduleItemsFromEmail(consolidateTruckingItems([
         ...pendingImportItems(imports),
         ...inboundParcelItems(imports),
         ...outboundItems(outbound, outboundMeta),
         ...nationalOutboundItems(nationalOutbound),
         ...salesOutboundItems(salesOutbound),
-      ]));
+      ]), nextGmailIngestion));
       setKpis(liveKpis);
       const dashboardInventory = dashboardInventoryItems(inventoryDashboardTable);
       setInboundInventory(uniqueInventoryItems([
@@ -2795,6 +2842,8 @@ export default function Home() {
         ...skwStockItems(skwStockTable),
       ], false));
       setGmailIngestion(nextGmailIngestion);
+      setCmsInventory(nextCmsInventory);
+      setCmsInventoryConfigured(nextCmsInventoryConfigured);
       setConnection(nextConnection);
       const refreshedAt = new Date();
       lastRefreshAt.current = refreshedAt.getTime();
@@ -2995,42 +3044,14 @@ export default function Home() {
   const carrierCategoryStats = useMemo(() => categoryCarrierStats(items, startOfToday()), [items]);
   const activeFreightModeCounts = useMemo(() => freightModeCounts(activeItems), [activeItems]);
 
-  const mapMilestones = useMemo<MilestoneShipment[]>(
-    () =>
-      activeItems
-        .filter((item) => item.direction === "inbound" && !item.isSmallParcel && (item.mode === "Air" || item.mode === "Ocean"))
-        .map((item) => ({
-          id: item.id,
-          title: item.shipmentNo || item.title,
-          mode: item.mode,
-          pod: item.pod,
-          eta: item.eta,
-          status: item.status,
-          vessel: item.vessel,
-        })),
-    [activeItems],
-  );
-
-  const mapTrackable = useMemo<TrackableShipment[]>(
-    () =>
-      activeItems.flatMap((item) => {
-        if (!item.isSmallParcel || !item.trackingNumber) return [];
-        const carrier = trackableCarrier(item.carrier || item.shippingMethod);
-        if (!carrier) return [];
-        return [{
-          id: item.id,
-          title: item.title,
-          carrier,
-          trackingNumber: item.trackingNumber,
-          direction: item.direction,
-          status: item.status,
-        }];
-      }),
-    [activeItems],
-  );
-
-  const { tracking: parcelTracking, configured: parcelTrackingConfigured, loading: parcelTrackingLoading } =
-    useParcelTracking(mapTrackable);
+  const parcelTrackable = useMemo<TrackableShipment[]>(() => activeItems.flatMap((item) => {
+    if (!item.isSmallParcel || !item.trackingNumber) return [];
+    const carrier = trackableCarrier(item.carrier || item.shippingMethod);
+    if (!carrier) return [];
+    return [{ id: item.id, title: item.title, carrier, trackingNumber: item.trackingNumber,
+      direction: item.direction, status: item.status }];
+  }), [activeItems]);
+  const { tracking: parcelTracking } = useParcelTracking(parcelTrackable);
 
   const handleStatus = async (item: ScheduleItem, status: string) => {
     setSavingId(item.id);
@@ -3272,11 +3293,12 @@ export default function Home() {
             <div><small>FTL</small><strong>{kpis.ftlPercent}%</strong></div>
           </article>
           <article className="kpi-card kpi-average">
-            <span>AVG TRUCKING COST · MTD / YTD</span>
+            <span>TOTAL TRUCKING COST · MTD / YTD</span>
             <div className="average-head" aria-hidden="true"><small>Lane</small><small>MTD</small><small>YTD</small></div>
-            <div><small>LOCAL / REGIONAL HEURISTIC</small><strong>{money(kpis.avgLocalMtd)}</strong><strong>{money(kpis.avgLocal)}</strong></div>
-            <div><small>CALIFORNIA</small><strong>{money(kpis.avgCaliforniaMtd)}</strong><strong>{money(kpis.avgCalifornia)}</strong></div>
-            <div><small>OUT OF STATE</small><strong>{money(kpis.avgOutOfStateMtd)}</strong><strong>{money(kpis.avgOutOfState)}</strong></div>
+            <div><small>ALL TRUCKING</small><strong>{money(kpis.truckingMtd)}</strong><strong>{money(kpis.truckingYtd)}</strong></div>
+            <div><small>LOCAL / REGIONAL HEURISTIC</small><strong>{money(kpis.totalLocalMtd)}</strong><strong>{money(kpis.totalLocal)}</strong></div>
+            <div><small>CALIFORNIA</small><strong>{money(kpis.totalCaliforniaMtd)}</strong><strong>{money(kpis.totalCalifornia)}</strong></div>
+            <div><small>OUT OF STATE</small><strong>{money(kpis.totalOutOfStateMtd)}</strong><strong>{money(kpis.totalOutOfState)}</strong></div>
           </article>
         </div>
         <details className="kpi-method">
@@ -3287,8 +3309,8 @@ export default function Home() {
             Order Date (column G) and Amount (column E), expand K values, and exclude cancelled
             orders. WMS wholesale sales use Date (column A) and numeric INVOICE AMOUNT (column G);
             text entries such as “FREE SAMPLE,” “FOC,” “Sample,” and operational notes are excluded.
-            MTD is the current month through today; YTD begins January 1, 2026. Trucking averages
-            exclude transfers and unclassified destinations; local / regional uses a destination city/ZIP heuristic for the Southern California operating area and is not a measured mileage radius.
+            MTD is the current month through today; YTD begins January 1, 2026. Trucking totals
+            sum freight Invoice first, then Rate when Invoice is blank, and exclude transfers. Lane totals exclude unclassified destinations; local / regional uses a destination city/ZIP heuristic for the Southern California operating area and is not a measured mileage radius.
             The NJ transfer card includes only TRANSFERS rows whose TO field is NJ or New Jersey.
             Carrier freight spend uses the same freight Invoice-first, Rate-fallback cost, and shipment share
             is each carrier’s moves divided by all YTD moves with a named carrier.{" "}
@@ -3309,12 +3331,10 @@ export default function Home() {
         <ControlTowerFreightMix modes={activeFreightModeCounts} />
       </section>
 
-      <LiveMapPanel
-        milestones={mapMilestones}
-        trackable={mapTrackable}
-        tracking={parcelTracking}
-        configured={parcelTrackingConfigured}
-        trackingLoading={parcelTrackingLoading}
+      <InventoryReconciliationCard
+        warehouse={warehouseStock}
+        cms={cmsInventory}
+        configured={cmsInventoryConfigured}
       />
 
       <section className="control-panel" aria-label="Schedule filters">

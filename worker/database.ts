@@ -1,10 +1,6 @@
 import type { SourceHealth } from "./sources";
 
-// Keep every chunk within the schema's 512 KiB byte constraint while packing
-// ASCII-heavy operational data densely enough to preserve the D1 query budget.
 const PART_BYTES = 512 * 1024;
-// Each part insert is one D1 query. Keep the publication transaction plus
-// retention below the 50-query Worker invocation limit on the Free plan.
 const MAX_PARTS = 44;
 const RETAINED_SNAPSHOTS = 4;
 
@@ -130,9 +126,7 @@ export async function readCurrentSnapshot(db: D1Database): Promise<StoredSnapsho
     }
     return total + actualPartBytes;
   }, 0);
-  if (actualPayloadBytes !== metadata.payload_bytes) {
-    throw new Error("Current D1 snapshot byte count failed integrity validation");
-  }
+  if (actualPayloadBytes !== metadata.payload_bytes) throw new Error("Current D1 snapshot byte count failed integrity validation");
 
   const grouped = new Map<string, string[]>();
   for (const row of rows) {
@@ -142,15 +136,11 @@ export async function readCurrentSnapshot(db: D1Database): Promise<StoredSnapsho
   }
   const decode = (name: string) => {
     const chunks = grouped.get(name);
-    if (!chunks?.length || chunks.some((chunk) => chunk === undefined)) {
-      throw new Error(`Current D1 snapshot is missing ${name}`);
-    }
+    if (!chunks?.length || chunks.some((chunk) => chunk === undefined)) throw new Error(`Current D1 snapshot is missing ${name}`);
     return joinPayload(chunks);
   };
   const sourceHealth = decode("sourceHealth") as SourceHealth[];
-  if (!Array.isArray(sourceHealth) || sourceHealth.length !== metadata.source_count) {
-    throw new Error("Current D1 snapshot source count failed integrity validation");
-  }
+  if (!Array.isArray(sourceHealth) || sourceHealth.length !== metadata.source_count) throw new Error("Current D1 snapshot source count failed integrity validation");
   return {
     ok: true,
     generatedAt: metadata.generated_at,
@@ -185,6 +175,69 @@ export async function readDatabaseHealth(db: D1Database) {
     partCount: row.part_count,
     payloadBytes: row.payload_bytes,
   } : { ready: false };
+}
+
+function normalize(value: unknown) {
+  return String(value ?? "").trim().replace(/\s+/g, " ").toUpperCase();
+}
+
+function findStatusColumn(rows: string[][]) {
+  const aliases = new Set(["STATUS", "WEBSITE STATUS", "CURRENT STATUS"]);
+  for (let r = 0; r < Math.min(rows.length, 8); r += 1) {
+    for (let c = 0; c < rows[r].length; c += 1) {
+      if (aliases.has(normalize(rows[r][c]))) return { headerRow: r, statusColumn: c };
+    }
+  }
+  return null;
+}
+
+function snapshotRowsForSheet(sources: Record<string, unknown>, sourceSheet: string) {
+  if (sourceSheet === "IMPORTS" && Array.isArray(sources.imports)) {
+    return { key: "imports", rows: sources.imports as string[][] };
+  }
+  const outboundMeta = sources.outboundMeta as { sheetName?: string } | undefined;
+  if (outboundMeta?.sheetName === sourceSheet && Array.isArray(sources.outbound)) {
+    return { key: "outbound", rows: sources.outbound as string[][] };
+  }
+  return null;
+}
+
+export async function applyConfirmedStatusToSnapshot(db: D1Database, input: {
+  sourceSheet: string;
+  sourceRow: number;
+  entityId: string;
+  status: string;
+}) {
+  const current = await readCurrentSnapshot(db);
+  if (!current) throw new Error("D1 frontend snapshot is not initialized");
+  const source = snapshotRowsForSheet(current.sources, input.sourceSheet);
+  if (!source) throw new Error(`D1 frontend does not contain editable source ${input.sourceSheet}`);
+  const info = findStatusColumn(source.rows);
+  if (!info) throw new Error(`D1 frontend source ${input.sourceSheet} has no status column`);
+
+  const rows = source.rows.map((row) => row.slice());
+  let targetIndex = input.sourceRow - 1;
+  const identity = normalize(input.entityId);
+  if (targetIndex <= info.headerRow || targetIndex >= rows.length || (identity && !rows[targetIndex].some((cell) => normalize(cell) === identity))) {
+    const candidates = identity
+      ? rows.map((row, index) => ({ row, index })).filter(({ row, index }) => index > info.headerRow && row.some((cell) => normalize(cell) === identity))
+      : [];
+    if (candidates.length === 1) targetIndex = candidates[0].index;
+    else if (targetIndex <= info.headerRow || targetIndex >= rows.length) throw new Error("D1 frontend row could not be resolved uniquely");
+  }
+  rows[targetIndex][info.statusColumn] = input.status;
+  const sources = { ...current.sources, [source.key]: rows };
+  const next: OperationalSnapshot = {
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    version: current.version,
+    sourceHealth: current.sourceHealth,
+    sources,
+    kpis: current.kpis,
+    kpiError: current.kpiError,
+  };
+  const persisted = await persistSnapshot(db, next);
+  return { ...persisted, targetIndex, statusColumn: info.statusColumn };
 }
 
 export async function recordPendingReviewDecision(db: D1Database, event: {
@@ -222,7 +275,7 @@ export async function recordConfirmedStatusWrite(db: D1Database, event: {
   await db.prepare(`INSERT INTO automation_events
     (id, source, entity_type, entity_id, previous_json, proposed_json, decision,
       actor, correlation_id, verification, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, 'confirmed', 'operator', ?, 'source-confirmed', ?)`)
+    VALUES (?, ?, ?, ?, ?, ?, 'confirmed', 'operator', ?, 'source-and-d1-confirmed', ?)`)
     .bind(
       crypto.randomUUID(),
       `${event.sourceSheet}:${event.sourceRow}`,

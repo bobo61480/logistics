@@ -37,5 +37,7 @@ describe("snapshot KPI calculation", () => {
       today: { year: 2026, month: 8, day: 12, code: 20260812 },
     });
     expect(result.shippingMtd).toBe(450);
+    expect(result.truckingMtd).toBe(450);
+    expect(result.totalLocalMtd).toBe(450);
   });
 });

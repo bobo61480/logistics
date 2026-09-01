@@ -5,11 +5,12 @@ compatibility_flags = ["nodejs_compat"]
 workers_dev = false
 
 [[routes]]
-pattern = "stylekorean.dpdns.org/*"
-zone_id = "5d128576939145a0274370efd693dafe"
+pattern = "stylekorean.dpdns.org"
+custom_domain = true
 
 [vars]
 APPS_SCRIPT_WRITE_URL = "https://script.google.com/macros/s/AKfycbz770kmpwqMTA-h-lzeLARgVnDh_VDjh-70OOKk_yE-iXJTmzAsVXUtln17QTOURO1R/exec"
+CMS_MCP_URL = "https://cms.mcp.siliconii.com/mcp/"
 
 [[ratelimits]]
 name = "STATUS_WRITE_RATE_LIMITER"
@@ -31,5 +32,5 @@ binding = "ASSETS"
 run_worker_first = ["/api/*"]
 
 [observability]
-enabled = true
+enabled = false
 head_sampling_rate = 0.1

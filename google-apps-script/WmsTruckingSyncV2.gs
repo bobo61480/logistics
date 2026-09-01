@@ -3,8 +3,9 @@
  *
  * Safeguards:
  *  - never imports source ship dates before 2026-08-01
- *  - groups only by canonical customer + exact ship date
- *  - never reuses a target row whose exact customer/date key differs
+ *  - groups by canonical customer + exact ship date + explicit destination when present
+ *  - blocks duplicate customer/date/invoice signatures across existing and same-run rows
+ *  - cross-date invoice matching rejects rows that contain conflicting invoices
  *  - repairs legacy nearby-date merges by removing source-known invoices that
  *    belong to another exact source group before updating the matched row
  *  - leaves terminal/completed target rows untouched
@@ -12,35 +13,98 @@
 
 var WMS_TRUCKING_IMPORT_MIN_DATE = "2026-08-01";
 var WMS_TRUCKING_SYNC_ENABLED = true;
-// Re-enabled 2026-08-23 after fixing the customer-canonicalization bug that
-// caused the 2026-08-12 KORHEIM wrong-merge incident (canonicalWmsCustomer_
-// in Code.gs used an unanchored prefix match, not the word-boundary check it
-// has now). Ships in dry-run first: real scans run and log exactly what they
-// would insert/update to PIPELINE LOG without touching WH Trucking Request,
-// so the fix can be validated against live data before trusting it with
-// writes again. Flip to false only after reviewing several dry-run cycles.
-var WMS_TRUCKING_DRY_RUN = true;
+// Production writes are safe only after destination-aware grouping and
+// operational-date precedence. Current/future rows are synchronized; historic
+// freight is left as audit history instead of being recreated as new schedules.
+var WMS_TRUCKING_DRY_RUN = false;
 
-function wmsImportEligible_(dateInfo) {
-  var key = String(dateInfo && dateInfo.key || "").trim();
-  return /^\d{4}-\d{2}-\d{2}$/.test(key) && key >= WMS_TRUCKING_IMPORT_MIN_DATE;
+function wmsTodayKey_() {
+  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
 }
 
-function wmsExactGroupKey_(customer, dateInfo) {
-  return normalizeWmsCustomerKey_(canonicalWmsCustomer_(customer)) + "___" + String(dateInfo && dateInfo.key || "");
+function wmsImportEligible_(dateInfo, todayKey) {
+  var key = String(dateInfo && dateInfo.key || "").trim();
+  var floor = String(todayKey || wmsTodayKey_()).trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(key) && key >= WMS_TRUCKING_IMPORT_MIN_DATE && key >= floor;
+}
+
+function normalizeWmsDestinationHint_(value) {
+  var text = String(value || "").trim();
+  var knownLocation = whYixiLocationAliasV5_(text);
+  if (knownLocation) return knownLocation;
+  if (!text || /^(?:YES|NO|TRUE|FALSE|Y|N)$/i.test(text)) return "";
+  if (/\b(?:OOS|ADD[ -]?ON|FREE SAMPLE|TOTAL|SKU)\b|A-SKU|총량|재고|문제/i.test(text)) return "";
+  if (/^IN\d{6,}$/i.test(text)) return "";
+  if (/^[A-Z0-9._-]{3,25}$/i.test(text) && text.indexOf(" ") === -1) return "";
+  if (!/[A-Za-z가-힣]{3}/.test(text)) return "";
+  return normalizeWmsCustomerKey_(text);
+}
+
+function wmsDestinationHint_(row, map) {
+  var fields = ["REMARKS (WAREHOUSE)", "REMARKS (SALES)", "SKU 2", "SKU 1"];
+  for (var i = 0; i < fields.length; i++) {
+    var index = map[fields[i]];
+    if (index === undefined) continue;
+    var hint = normalizeWmsDestinationHint_(row[index]);
+    if (hint) return hint;
+  }
+  return "";
+}
+
+function wmsExactGroupKey_(customer, dateInfo, destinationHint) {
+  var key = normalizeWmsCustomerKey_(canonicalWmsCustomer_(customer)) + "___" + String(dateInfo && dateInfo.key || "");
+  var destination = normalizeWmsCustomerKey_(destinationHint || "");
+  return destination ? key + "___DEST_" + destination : key;
+}
+
+/**
+ * The destination remains part of the signature. The same customer/date can
+ * have separate physical deliveries, and location-aware grouping must not be
+ * undone by a broader invoice signature.
+ */
+function wmsInvoiceSignatureFromKey_(groupKey, invoice) {
+  var cleanInvoice = String(invoice || "").trim().toUpperCase();
+  if (!groupKey || !cleanInvoice) return "";
+  return String(groupKey) + "___INV_" + cleanInvoice;
+}
+
+function shouldWmsOverwriteShipDate_(currentRow, map) {
+  var status = map["STATUS"] !== undefined ? String(currentRow[map["STATUS"]] || "").trim().toUpperCase() : "";
+  var pro = map["PRO#"] !== undefined ? String(currentRow[map["PRO#"]] || "").trim() : "";
+  if (status === "ROUTED/BOOKED" || pro) return false;
+  return true;
+}
+
+function wmsLocationStoreIndex_(map) {
+  var aliases = ["LOCATION STORE", "LOCATION/STORE", "LOCATION"];
+  for (var i = 0; i < aliases.length; i++) {
+    if (map[aliases[i]] !== undefined) return map[aliases[i]];
+  }
+  return undefined;
 }
 
 function chooseWmsTargetRow_(groupKey, invoices, rows) {
+  rows = whFilterTargetRowsForLocationV5_(groupKey, invoices, rows);
   var wanted = new Set((invoices || []).map(function (invoice) {
     return String(invoice || "").trim().toUpperCase();
   }).filter(Boolean));
 
   for (var i = 0; i < rows.length; i++) {
     var row = rows[i];
-    if (row.key !== groupKey) continue;
+    var hasWantedInvoice = false;
     for (var j = 0; j < row.invoices.length; j++) {
-      if (wanted.has(String(row.invoices[j] || "").trim().toUpperCase())) return row;
+      if (wanted.has(String(row.invoices[j] || "").trim().toUpperCase())) {
+        hasWantedInvoice = true;
+        break;
+      }
     }
+    if (!hasWantedInvoice) continue;
+    if (row.key === groupKey) return row;
+    if (row.operationallyLocked) return row;
+    var hasConflictingInvoice = row.invoices.some(function (invoice) {
+      return !wanted.has(String(invoice || "").trim().toUpperCase());
+    });
+    if (!hasConflictingInvoice) return row;
   }
 
   for (var k = 0; k < rows.length; k++) {
@@ -68,6 +132,7 @@ function scanAndImportWmsTruckingOrdersV2() {
   if (!lock.tryLock(10000)) return { ok: false, error: "Lock timeout" };
 
   try {
+    whBuildTargetLocationIndexV5_();
     var sourceSpreadsheet = SpreadsheetApp.openById(WMS_SPREADSHEET_ID);
     var targetSpreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
     var sourceSheet = sourceSpreadsheet.getSheetByName("Stylekorean");
@@ -84,6 +149,7 @@ function scanAndImportWmsTruckingOrdersV2() {
     var groups = new Map();
     var sourceByInvoice = new Map();
     var skippedBeforeCutoff = 0;
+    var importTodayKey = wmsTodayKey_();
 
     for (var r = sourceHeader.rowIndex + 1; r < sourceData.length; r++) {
       var row = sourceData[r];
@@ -97,15 +163,17 @@ function scanAndImportWmsTruckingOrdersV2() {
 
       var customer = canonicalWmsCustomer_(rawCustomer);
       var dateInfo = normalizeWmsShipDate_(rawShipDate);
-      if (!wmsImportEligible_(dateInfo)) {
+      if (!wmsImportEligible_(dateInfo, importTodayKey)) {
         skippedBeforeCutoff++;
         continue;
       }
 
-      var key = wmsExactGroupKey_(customer, dateInfo);
+      var destinationHint = wmsDestinationHint_(row, sourceMap);
+      var key = wmsExactGroupKey_(customer, dateInfo, destinationHint);
       sourceByInvoice.set(invoice, {
         customer: customer,
         dateInfo: dateInfo,
+        destinationHint: destinationHint,
         sourceRow: r + 1,
         key: key
       });
@@ -115,6 +183,7 @@ function scanAndImportWmsTruckingOrdersV2() {
           key: key,
           customer: customer,
           shipDate: dateInfo.display,
+          destinationHint: destinationHint,
           invoices: [],
           amounts: [],
           sourceRows: []
@@ -135,11 +204,13 @@ function scanAndImportWmsTruckingOrdersV2() {
     var targetData = targetSheet.getRange(1, 1, targetLastRow, targetLastColumn).getDisplayValues();
     var targetHeader = findWhTruckingHeader_(targetData);
     var targetMap = targetHeader.map;
+    var targetLocationIndex = wmsLocationStoreIndex_(targetMap);
     ["CUSTOMER", "INVOICE NO.", "SHIP DATE"].forEach(function (name) {
       if (targetMap[name] === undefined) throw new Error("WH Trucking Request is missing header: " + name);
     });
 
     var targetRows = [];
+    var existingInvoiceSignatures = new Set();
     var lastBusinessRow = targetHeader.rowIndex + 1;
 
     for (var t = targetHeader.rowIndex + 1; t < targetData.length; t++) {
@@ -153,13 +224,19 @@ function scanAndImportWmsTruckingOrdersV2() {
 
       var targetDateInfo = normalizeWmsShipDate_(targetShipDate);
       var targetKey = wmsExactGroupKey_(targetCustomer, targetDateInfo);
+      var targetInvoices = splitWmsInvoices_(invoiceCell);
+      targetInvoices.forEach(function (targetInvoice) {
+        var signature = wmsInvoiceSignatureFromKey_(targetKey, targetInvoice);
+        if (signature) existingInvoiceSignatures.add(signature);
+      });
       targetRows.push({
         rowNumber: t + 1,
         key: targetKey,
         customer: targetCustomer,
         dateInfo: targetDateInfo,
-        invoices: splitWmsInvoices_(invoiceCell),
+        invoices: targetInvoices,
         active: isWmsActiveStatus_(status),
+        operationallyLocked: !shouldWmsOverwriteShipDate_(targetRow, targetMap),
         status: status
       });
     }
@@ -168,6 +245,8 @@ function scanAndImportWmsTruckingOrdersV2() {
     var updated = 0;
     var repaired = 0;
     var skippedTerminal = 0;
+    var skippedOperational = 0;
+    var skippedDuplicateSignature = 0;
     var pendingRows = [];
     var width = Math.max(targetLastColumn, 24);
 
@@ -181,6 +260,10 @@ function scanAndImportWmsTruckingOrdersV2() {
           skippedTerminal++;
           return;
         }
+        if (match.operationallyLocked && match.key !== key) {
+          skippedOperational++;
+          return;
+        }
 
         var current = targetSheet.getRange(match.rowNumber, 1, 1, width).getValues()[0];
         var currentInvoices = splitWmsInvoices_(current[targetMap["INVOICE NO."]]);
@@ -190,16 +273,24 @@ function scanAndImportWmsTruckingOrdersV2() {
         var changed = false;
 
         if (WMS_TRUCKING_DRY_RUN) {
+          var mayUpdateShipDate = shouldWmsOverwriteShipDate_(current, targetMap);
           changed = wouldChangeMappedValue_(current, targetMap, "CUSTOMER", group.customer) ||
             wouldChangeMappedValue_(current, targetMap, "INVOICE NO.", mergedInvoices.join("\n")) ||
-            wouldChangeMappedValue_(current, targetMap, "SHIP DATE", group.shipDate) ||
+            (mayUpdateShipDate && wouldChangeMappedValue_(current, targetMap, "SHIP DATE", group.shipDate)) ||
+            (group.destinationHint && targetLocationIndex !== undefined && !current[targetLocationIndex]) ||
             (totalAmount > 0 && targetMap["VALUE"] !== undefined && !current[targetMap["VALUE"]]) ||
             (targetMap["STATUS"] !== undefined && !current[targetMap["STATUS"]]);
           logWmsDryRun_("update", match.rowNumber, group, mergedInvoices, totalAmount);
         } else {
           changed = writeMappedValue_(targetSheet, match.rowNumber, targetMap, "CUSTOMER", group.customer) || changed;
           changed = writeMappedValue_(targetSheet, match.rowNumber, targetMap, "INVOICE NO.", mergedInvoices.join("\n")) || changed;
-          changed = writeMappedValue_(targetSheet, match.rowNumber, targetMap, "SHIP DATE", group.shipDate) || changed;
+          if (shouldWmsOverwriteShipDate_(current, targetMap)) {
+            changed = writeMappedValue_(targetSheet, match.rowNumber, targetMap, "SHIP DATE", group.shipDate) || changed;
+          }
+          if (group.destinationHint && targetLocationIndex !== undefined && !current[targetLocationIndex]) {
+            targetSheet.getRange(match.rowNumber, targetLocationIndex + 1).setValue(group.destinationHint);
+            changed = true;
+          }
 
           if (totalAmount > 0 && targetMap["VALUE"] !== undefined && !current[targetMap["VALUE"]]) {
             targetSheet.getRange(match.rowNumber, targetMap["VALUE"] + 1).setValue(totalAmount);
@@ -213,8 +304,22 @@ function scanAndImportWmsTruckingOrdersV2() {
 
         match.invoices = mergedInvoices.slice();
         match.key = key;
+        mergedInvoices.forEach(function (mergedInvoice) {
+          var signature = wmsInvoiceSignatureFromKey_(key, mergedInvoice);
+          if (signature) existingInvoiceSignatures.add(signature);
+        });
         if (removedCount > 0) repaired++;
         if (changed) updated++;
+        return;
+      }
+
+      var hasDuplicateSignature = group.invoices.some(function (groupInvoice) {
+        var signature = wmsInvoiceSignatureFromKey_(key, groupInvoice);
+        return signature && existingInvoiceSignatures.has(signature);
+      });
+      if (hasDuplicateSignature) {
+        skippedDuplicateSignature++;
+        Logger.log("WMS duplicate invoice signature blocked: " + key + " :: " + group.invoices.join(", "));
         return;
       }
 
@@ -222,6 +327,7 @@ function scanAndImportWmsTruckingOrdersV2() {
       newRow[targetMap["CUSTOMER"]] = group.customer;
       newRow[targetMap["INVOICE NO."]] = group.invoices.join("\n");
       newRow[targetMap["SHIP DATE"]] = group.shipDate;
+      if (group.destinationHint && targetLocationIndex !== undefined) newRow[targetLocationIndex] = group.destinationHint;
       if (targetMap["VALUE"] !== undefined && totalAmount > 0) newRow[targetMap["VALUE"]] = totalAmount;
       if (targetMap["STATUS"] !== undefined) newRow[targetMap["STATUS"]] = "WORK IN PROGRESS";
       if (WMS_TRUCKING_DRY_RUN) {
@@ -229,6 +335,10 @@ function scanAndImportWmsTruckingOrdersV2() {
       } else {
         pendingRows.push({ row: newRow, group: group });
       }
+      group.invoices.forEach(function (groupInvoice) {
+        var signature = wmsInvoiceSignatureFromKey_(key, groupInvoice);
+        if (signature) existingInvoiceSignatures.add(signature);
+      });
       imported++;
     });
 
@@ -262,8 +372,13 @@ function scanAndImportWmsTruckingOrdersV2() {
       ", updated=" + updated +
       ", repaired=" + repaired +
       ", skippedTerminal=" + skippedTerminal +
+      ", skippedOperational=" + skippedOperational +
+      ", skippedDuplicateSignature=" + skippedDuplicateSignature +
       ", skippedBeforeCutoff=" + skippedBeforeCutoff
     );
+
+    try { whBackfillLocationStoreV5_(); } catch (backfillError) { Logger.log("Location backfill failed: " + backfillError.message); }
+    try { dedupeWhTruckingLocationSafeV5_(); } catch (dedupeError) { Logger.log("Location-safe dedupe failed: " + dedupeError.message); }
 
     return {
       ok: true,
@@ -273,6 +388,8 @@ function scanAndImportWmsTruckingOrdersV2() {
       updated: updated,
       repaired: repaired,
       skippedTerminal: skippedTerminal,
+      skippedOperational: skippedOperational,
+      skippedDuplicateSignature: skippedDuplicateSignature,
       skippedBeforeCutoff: skippedBeforeCutoff,
       nextRow: lastBusinessRow + pendingRows.length + 1
     };
@@ -282,6 +399,11 @@ function scanAndImportWmsTruckingOrdersV2() {
   } finally {
     lock.releaseLock();
   }
+}
+
+/** Compatibility alias for any stale manually-installed legacy trigger. */
+function scanAndImportWmsTruckingOrders() {
+  return scanAndImportWmsTruckingOrdersV2();
 }
 
 /** Non-mutating twin of writeMappedValue_ — reports whether a write would

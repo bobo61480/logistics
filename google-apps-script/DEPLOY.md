@@ -17,16 +17,18 @@ trigger plan in `Triggers.gs` uses the V2 handlers.
 |------|-------------|
 | `google-apps-script/Code.gs` | `doPost` web-app handler, WMS importer, inventory transfer |
 | `google-apps-script/GmailPipelineV2.gs` | **Canonical** email ingestion: message-level parse → validate → upsert |
-| `google-apps-script/GmailPipelineV2Runtime.gs` | Runtime logging helpers for V2 (`writeLog_` → PIPELINE LOG) |
 | `google-apps-script/GmailPipeline.gs` | Legacy V1 ingestion (compatibility shim; not on the trigger plan) |
+| `google-apps-script/zzzzzzzz_GmailSafetyV4.gs` | Explicit Gmail validation, Drive conversion, and D1 refresh helpers |
 | `google-apps-script/Triggers.gs` | `setupAllTriggers()` — single owner of every time-driven job |
 | `google-apps-script/InventorySync.gs` | Live inventory + KPI dashboard rebuild |
 | `google-apps-script/Validation.gs` | Record validation, PENDING VERIFICATION approve/reject workflow |
 | `google-apps-script/StatusNormalization.gs` | `canonicalLogisticsStatus_` status vocabulary |
 | `google-apps-script/CustomerLookup.gs` | Customer resolution helpers |
 | `google-apps-script/CustomerBackfill.gs` | `reconcileCustomerBackfill` daily backfill |
+| `google-apps-script/CustomerMatching.gs` | Shared exact/canonical customer matching primitives |
 | `google-apps-script/WmsTruckingSyncV2.gs` | `scanAndImportWmsTruckingOrdersV2` WMS trucking import |
-| `google-apps-script/zz_WmsTruckingCompatibility.gs` | WMS trucking compatibility shims |
+| `google-apps-script/zzzzzzzzz_DeduplicationV4.gs` | Canonical operational/audit deduplication helpers |
+| `google-apps-script/zzzzzzzzzzz_WmsLocationSafetyV5.gs` | Location-aware WMS identity and cleanup helpers |
 | `google-apps-script/appsscript.json` | Manifest: scopes, Drive API v3, V8 runtime |
 
 > Deploy **all** of the above. Option B (clasp) pushes the whole
@@ -44,7 +46,7 @@ Do this once to get the pipeline live immediately.
 3. For each `.gs` file in `google-apps-script/`, create (or rename) a script file
    with the same name and paste the content. Include every file listed in the
    table above (at minimum `Code.gs`, `GmailPipelineV2.gs`,
-   `GmailPipelineV2Runtime.gs`, `Triggers.gs`, `InventorySync.gs`,
+   `GmailPipeline.gs`, `zzzzzzzz_GmailSafetyV4.gs`, `Triggers.gs`, `InventorySync.gs`,
    `Validation.gs`, `StatusNormalization.gs`).
 4. Open **Project Settings** (⚙ gear icon) → paste the manifest JSON from
    `google-apps-script/appsscript.json` into the **appsscript.json** editor view
@@ -143,15 +145,17 @@ one-time catch-up:
 ### Step 5 — Register all time-driven triggers
 
 Run `setupAllTriggers()` once. This removes legacy handlers and provisions the
-canonical plan from `Triggers.gs` (7 triggers):
+canonical plan from `Triggers.gs` (9 triggers):
 
 | Function | Schedule |
 |----------|---------|
 | `processLogisticsEmailsV2` | every 15 min |
 | `processApprovedPending` | every 30 min |
 | `scanAndImportWmsTruckingOrdersV2` | every 15 min |
+| `processXpoTrackingEmailsV2` | every 15 min |
 | `trackSmallParcelsStatusUpdates` | every 1 hour |
 | `syncInventoryModule` | every 1 hour |
+| `dedupeAllOperationalSheetsV4` | daily at 4 AM |
 | `enrichImportsFromContainerLog` | daily at 6 AM |
 | `reconcileCustomerBackfill` | daily at 5 AM |
 

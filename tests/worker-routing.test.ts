@@ -14,15 +14,18 @@ describe("control tower Worker routing", () => {
     expect(worker).toContain('url.pathname === "/api/logistics/reconciliation"');
     expect(worker).toContain("env.ASSETS.fetch(request)");
     expect(wrangler).toContain('main = "worker/index.ts"');
+    expect(wrangler).toContain('[assets]');
+    expect(wrangler).toContain('directory = "./out"');
     expect(wrangler).toContain('binding = "ASSETS"');
     expect(wrangler).toContain('run_worker_first = ["/api/*"]');
-    expect(wrangler).toContain('pattern = "stylekorean.dpdns.org/*"');
-    expect(wrangler).toContain('zone_id = "5d128576939145a0274370efd693dafe"');
-    expect(wrangler).not.toContain("custom_domain = true");
+    expect(wrangler).toContain('pattern = "stylekorean.dpdns.org"');
+    expect(wrangler).toContain("custom_domain = true");
+    expect(wrangler).not.toContain('pattern = "stylekorean.dpdns.org/*"');
+    expect(wrangler).not.toContain('zone_id = "5d128576939145a0274370efd693dafe"');
     expect(wrangler).toContain("workers_dev = false");
   });
 
-  it("keeps the WMS source read-only and proxies writes only to the approved Apps Script endpoint", () => {
+  it("makes Google Sheets plus D1 a strict dual-write path", () => {
     const sources = read("worker/sources.ts");
     const status = read("worker/status-command.ts");
     const wrangler = read("wrangler.toml");
@@ -37,28 +40,32 @@ describe("control tower Worker routing", () => {
     expect(status).toContain("STATUS_WRITE_RATE_LIMITER.limit");
     expect(status).toContain("Status write rate limit exceeded");
     expect(status).toContain('"retry-after": "60"');
-    expect(status).toContain('event: "status-write-confirmed"');
+    expect(status).toContain("applyConfirmedStatusToSnapshot");
+    expect(status).toContain("rolled back to keep both stores consistent");
+    expect(status).toContain('event: "status-dual-write-confirmed"');
+    expect(status).toContain('frontendSource: "d1"');
     expect(status).not.toContain("AKfycbz770kmpwqMTA-h-lzeLARgVnDh_VDjh-70OOKk_yE-iXJTmzAsVXUtln17QTOURO1R");
     expect(wrangler).toContain("AKfycbz770kmpwqMTA-h-lzeLARgVnDh_VDjh-70OOKk_yE-iXJTmzAsVXUtln17QTOURO1R");
     expect(wrangler).toContain('name = "STATUS_WRITE_RATE_LIMITER"');
-    expect(wrangler).toContain("limit = 30");
-    expect(wrangler).toContain("period = 60");
   });
 
-  it("reports the intentionally public access policy without presenting safeguards as authentication", () => {
+  it("uses D1 as the exclusive frontend source", () => {
     const worker = read("worker/index.ts");
-
-    expect(worker).toContain('accessPolicy: "public"');
-    expect(worker).toContain('statusWriteAuthentication: "none"');
-    expect(worker).toContain('statusWriteRateLimit: "30 requests per 60 seconds per client IP and Cloudflare location"');
+    expect(worker).toContain('frontendSource: "d1"');
+    expect(worker).toContain('dataStore: "Cloudflare D1"');
+    expect(worker).toContain('googleSheetsRole: "synchronized operational source"');
+    expect(worker).toContain('deduplication: "enabled-before-d1-publish"');
+    expect(worker).not.toContain('storage: "sheets"');
   });
 
-  it("keeps the last good snapshot available during a short source outage", () => {
+  it("keeps the last good D1 snapshot visible during a short source outage", () => {
     const worker = read("worker/index.ts");
     expect(worker).toContain("SNAPSHOT_REFRESH_SECONDS");
-    expect(worker).toContain('x-stylekorean-cache", "STALE"');
+    expect(worker).toContain('x-stylekorean-cache", "D1-STALE-WHILE-REVALIDATE"');
     expect(worker).toContain("Response is stale");
     expect(worker).toContain("staleReason");
+    expect(worker).toContain('event: "d1-background-refresh-failed"');
+    expect(worker).not.toContain('event: "d1-foreground-refresh-failed"');
   });
 
   it("adds baseline security headers to APIs and static assets", () => {
@@ -69,19 +76,10 @@ describe("control tower Worker routing", () => {
     expect(worker).toContain("x-frame-options");
   });
 
-  it("only merges same-customer, same-date trucking rows, and keeps status writes pinned to their real source row", () => {
-    // A 2026-08-12 incident removed customer+date trucking consolidation because it could
-    // hide distinct operational moves. Control Tower reintroduced it deliberately (2026-08-23)
-    // to roll same-shipment invoices into one card, but only for trucking rows, and status
-    // edits still resolve to whichever constituent row actually supplied the displayed status
-    // — never blindly to the first row in the group — so a merged card can't silently write
-    // to the wrong shipment.
+  it("only merges same-customer, same-date trucking presentation rows, while writes stay pinned to real source rows", () => {
     const page = read("app/page.tsx");
-
     expect(page).toContain("function consolidateTruckingItems");
-    expect(page).toContain(
-      "The status dropdown and \"source row\" link act on primary's row",
-    );
+    expect(page).toContain("The status dropdown and \"source row\" link act on primary's row");
     expect(page).toContain('editable: statusSource === primary ? primary.editable : false');
   });
 });

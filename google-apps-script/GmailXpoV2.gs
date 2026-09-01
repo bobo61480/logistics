@@ -24,8 +24,14 @@ var GMAIL_XPO_SOURCE_SHEETS = [
 
 function processXpoTrackingEmailsV2() {
   var lock = LockService.getScriptLock();
-  if (!lock.tryLock(5000)) return { skipped: "locked" };
+  if (!lock.tryLock(5000)) {
+    recordTriggerLockSkip_("processXpoTrackingEmailsV2");
+    return { skipped: "locked" };
+  }
+  var stats;
+  var shouldRefreshD1 = false;
   try {
+    ensureCanonicalTriggersForVersion_();
     var query = "newer_than:" + GMAIL_XPO_V2_LOOKBACK_DAYS +
       'd -in:spam -in:trash from:no-reply@xpo.com subject:"Shipment Progress for Pro"';
     var byId = {};
@@ -39,7 +45,7 @@ function processXpoTrackingEmailsV2() {
     messages.sort(function (a, b) { return a.getDate().getTime() - b.getDate().getTime(); });
     messages = messages.slice(-GMAIL_XPO_V2_MAX_MESSAGES);
 
-    var stats = { messages: 0, updated: 0, noop: 0, pending: 0, errors: 0 };
+    stats = { messages: 0, updated: 0, noop: 0, pending: 0, errors: 0, priorLockSkips: consumeTriggerLockSkips_("processXpoTrackingEmailsV2") };
     messages.forEach(function (message) {
       var id = message.getId();
       if (gmailXpoSeenV2_(id)) return;
@@ -97,11 +103,13 @@ function processXpoTrackingEmailsV2() {
         logPipeline_("XPO INGEST ERROR", id, String(error && error.stack || error));
       }
     });
+    shouldRefreshD1 = stats.updated > 0;
     logPipeline_("XPO V2 RUN", GMAIL_XPO_V2_VERSION, JSON.stringify(stats));
-    return stats;
   } finally {
     lock.releaseLock();
   }
+  if (shouldRefreshD1) gmailSafetyV4RefreshD1_("processXpoTrackingEmailsV2");
+  return stats;
 }
 
 function gmailXpoSeenV2_(messageId) {

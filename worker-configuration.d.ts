@@ -4,6 +4,9 @@ interface __BaseEnv_Env {
 	STATUS_WRITE_RATE_LIMITER: RateLimit;
 	ASSETS: Fetcher;
 	APPS_SCRIPT_WRITE_URL: "https://script.google.com/macros/s/AKfycbz770kmpwqMTA-h-lzeLARgVnDh_VDjh-70OOKk_yE-iXJTmzAsVXUtln17QTOURO1R/exec";
+	CMS_MCP_URL: "https://cms.mcp.siliconii.com/mcp/";
+	CMS_MCP_AUTH_TOKEN?: string;
+	CMS_IMS_API_KEY?: string;
 	// Carrier tracking API secrets are provisioned via `wrangler secret put`, not wrangler.toml
 	// vars, so `wrangler types` cannot see them — declared manually here to match carrier-tracking.ts.
 	UPS_CLIENT_ID?: string;
@@ -24,5 +27,5 @@ type StringifyValues<EnvType extends Record<string, unknown>> = {
 	[Binding in keyof EnvType]: EnvType[Binding] extends string ? EnvType[Binding] : string;
 };
 declare namespace NodeJS {
-	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "APPS_SCRIPT_WRITE_URL">> {}
+	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "APPS_SCRIPT_WRITE_URL" | "CMS_MCP_URL">> {}
 }

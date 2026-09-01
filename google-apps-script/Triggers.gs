@@ -8,8 +8,8 @@
 
 /* eslint-disable no-unused-vars */
 
-var GMAIL_PIPELINE_TRIGGER_SYNC_VERSION = "2026-08-24-central-v2-xpo";
-var APPS_SCRIPT_DEPLOY_SYNC_VERSION = "2026-08-12-stabilization-v1";
+var GMAIL_PIPELINE_TRIGGER_SYNC_VERSION = "2026-09-01-central-v8-single-owner";
+var APPS_SCRIPT_DEPLOY_SYNC_VERSION = "2026-08-29-d1-canonical-v4";
 
 var TRIGGER_PLAN = [
   { handler: "processLogisticsEmailsV2", minutes: 15 },
@@ -18,19 +18,40 @@ var TRIGGER_PLAN = [
   { handler: "scanAndImportWmsTruckingOrdersV2", minutes: 15 },
   { handler: "trackSmallParcelsStatusUpdates", hours: 1 },
   { handler: "syncInventoryModule", hours: 1 },
+  { handler: "dedupeAllOperationalSheetsV4", daily: 4 },
   { handler: "enrichImportsFromContainerLog", daily: 6 },
   { handler: "reconcileCustomerBackfill", daily: 5 }
 ];
 
-// customerLookupOnEdit is retained here ONLY as a cleanup target: an earlier
-// revision of PR #92 registered it as an installable trigger, but
-// deploy-apps-script.yml never runs setupAllTriggers(), so that trigger
-// would have silently disabled the customer-lookup automation after every
-// deploy until a human manually re-ran setup. Reverted — CustomerLookup.gs's
-// onEdit(e) is a bare, zero-config simple trigger again (see that file's
-// header comment for how it now avoids the authorization-requiring calls a
-// simple trigger can't make). This entry just ensures setupAllTriggers()
-// deletes any stray installable trigger left over from that revision.
+var TRIGGER_PLAN_PROPERTY = "CANONICAL_TRIGGER_PLAN_APPLIED_VERSION";
+var TRIGGER_LOCK_SKIP_PREFIX = "TRIGGER_LOCK_SKIPS_";
+
+function recordTriggerLockSkip_(handler) {
+  var props = PropertiesService.getScriptProperties();
+  var key = TRIGGER_LOCK_SKIP_PREFIX + String(handler || "unknown");
+  props.setProperty(key, String(Number(props.getProperty(key) || 0) + 1));
+}
+
+function consumeTriggerLockSkips_(handler) {
+  var props = PropertiesService.getScriptProperties();
+  var key = TRIGGER_LOCK_SKIP_PREFIX + String(handler || "unknown");
+  var count = Number(props.getProperty(key) || 0);
+  props.deleteProperty(key);
+  return count;
+}
+
+function ensureCanonicalTriggersForVersion_() {
+  var props = PropertiesService.getScriptProperties();
+  if (props.getProperty(TRIGGER_PLAN_PROPERTY) === GMAIL_PIPELINE_TRIGGER_SYNC_VERSION) return false;
+  setupAllTriggers();
+  try {
+    logPipeline_("TRIGGER PLAN REPAIRED", GMAIL_PIPELINE_TRIGGER_SYNC_VERSION, JSON.stringify({ handlers: TRIGGER_PLAN.length }));
+  } catch (e) {
+    Logger.log("Trigger repair logging failed: " + e.message);
+  }
+  return true;
+}
+
 var TRIGGER_CLEANUP_HANDLERS = [
   "processLogisticsEmails",
   "processLogisticsEmailsV2",
@@ -39,6 +60,8 @@ var TRIGGER_CLEANUP_HANDLERS = [
   "scanAndImportWmsTruckingOrdersV2",
   "trackSmallParcelsStatusUpdates",
   "syncInventoryModule",
+  "dedupeAllOperationalSheetsV4",
+  "dedupeWhTruckingLocationSafeV5",
   "enrichImportsFromContainerLog",
   "reconcileCustomerBackfill",
   "customerLookupOnEdit",
@@ -47,9 +70,7 @@ var TRIGGER_CLEANUP_HANDLERS = [
 
 function setupAllTriggers() {
   ScriptApp.getProjectTriggers().forEach(function (trigger) {
-    if (TRIGGER_CLEANUP_HANDLERS.indexOf(trigger.getHandlerFunction()) !== -1) {
-      ScriptApp.deleteTrigger(trigger);
-    }
+    if (TRIGGER_CLEANUP_HANDLERS.indexOf(trigger.getHandlerFunction()) !== -1) ScriptApp.deleteTrigger(trigger);
   });
 
   TRIGGER_PLAN.forEach(function (t) {
@@ -59,15 +80,11 @@ function setupAllTriggers() {
     else builder.everyDays(1).atHour(t.daily).create();
   });
 
-  Logger.log("Provisioned " + TRIGGER_PLAN.length + " canonical triggers.");
+  PropertiesService.getScriptProperties().setProperty(TRIGGER_PLAN_PROPERTY, GMAIL_PIPELINE_TRIGGER_SYNC_VERSION);
+  Logger.log("Provisioned " + TRIGGER_PLAN.length + " canonical triggers for " + GMAIL_PIPELINE_TRIGGER_SYNC_VERSION + ".");
   return TRIGGER_PLAN;
 }
 
-/**
- * Legacy safety shim only. This handler is intentionally absent from
- * TRIGGER_PLAN, but retaining the function prevents a stale installed trigger
- * from failing before setupAllTriggers() has a chance to delete it.
- */
 function requestSiteRedeploy() {
   Logger.log("requestSiteRedeploy is obsolete; live operational data no longer requires a code redeploy.");
   return { skipped: "obsolete" };

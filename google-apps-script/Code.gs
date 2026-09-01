@@ -47,6 +47,11 @@ function doGet(e) {
   try {
     const action = String((e && e.parameter && e.parameter.action) || "").trim().toLowerCase();
     if (action !== "snapshot") return json_({ ok: false, error: "Unsupported action." });
+    try {
+      ensureCanonicalTriggersForVersion_();
+    } catch (triggerRepairError) {
+      Logger.log("Snapshot trigger-plan repair failed: " + String(triggerRepairError && triggerRepairError.message || triggerRepairError));
+    }
     const master = SpreadsheetApp.openById(SPREADSHEET_ID);
     const national = SpreadsheetApp.openById(NATIONAL_SPREADSHEET_ID);
     const wms = SpreadsheetApp.openById(WMS_SPREADSHEET_ID);
@@ -57,9 +62,13 @@ function doGet(e) {
         imports: readSnapshotRows_(master, "IMPORTS", null, 1, 2500, 30),
         outbound: readSnapshotRows_(master, "Outbound Shipping Schedule", null, 1, 1500, 30),
         trucking: readSnapshotRows_(master, "WH Trucking Request", null, 1, 25000, 32),
+        b2bTrucking: readSnapshotRows_(master, "B2B/E-COM TRUCKING", null, 1, 5000, 32),
+        ulta: readSnapshotRows_(master, "ULTA", null, 1, 5000, 32),
+        iherb: readSnapshotRows_(master, "IHERB", null, 1, 5000, 32),
+        tjxRoss: readSnapshotRows_(master, "TJX/ROSS", null, 1, 5000, 32),
         transfers: readSnapshotRows_(master, "TRANSFERS", null, 1, 2500, 29),
         nationalOutbound: readSnapshotRows_(national, null, 99300389, 1, 3500, 21),
-        salesOutbound: readSnapshotRows_(wms, null, 0, 2, 4199, 32),
+        salesOutbound: readSnapshotRows_(wms, null, 0, 2, 11999, 32),
         inventoryDashboardTable: readSnapshotRows_(master, "INVENTORY", null, 1, 6500, 15),
         skwInboundTable: readSnapshotRows_(master, "SKW_Inbound", null, 1, 2500, 18),
         skwStockTable: readSnapshotRows_(master, "SKW_Stock", null, 1, 2500, 10),
@@ -161,6 +170,15 @@ function doPost(e) {
     }
     const request = JSON.parse(rawContents || "{}");
 
+    // The IMS report is reachable from Google's egress but intermittently
+    // blocked or stalled when fetched directly from a Cloudflare Worker. The
+    // Worker uses this narrowly-scoped proxy only after a direct fetch fails.
+    // The key is never logged or returned; a Script Property can be used when
+    // configured, otherwise the Worker supplies it over the TLS request.
+    if (request.action === "cmsInventory") {
+      return json_(fetchCmsInventoryProxy_(request));
+    }
+
     // Dashboard-driven Gmail-ingestion approve/reject. Kept as an explicit
     // "action" discriminator so the pre-existing status-update callers
     // (which never send "action") are completely unaffected.
@@ -219,6 +237,52 @@ function doPost(e) {
   } finally {
     if (haveLock) lock.releaseLock();
   }
+}
+
+function fetchCmsInventoryProxy_(request) {
+  const configuredKey = PropertiesService.getScriptProperties().getProperty("CMS_IMS_API_KEY") || "";
+  const apiKey = String(configuredKey || request.apiKey || "").trim();
+  if (!apiKey || apiKey.length > 512) throw new Error("CMS IMS credential is not configured.");
+
+  const query = [
+    "curr_lang=ENG", "comp_cd=CO000007", "exp_date_fr=", "exp_date_to=",
+    "prod_cd=", "prod_nm=", "brand_cd=", "brand_nm=", "hide_null_cost=false"
+  ].join("&");
+  const response = UrlFetchApp.fetch("https://ims.siliconii.com/api/get/report/stock/expdate?" + query, {
+    method: "get",
+    headers: {
+      Accept: "application/json, text/plain, */*",
+      "x-api-key": apiKey,
+      Origin: "https://cms.siliconii.com",
+      Referer: "https://cms.siliconii.com/ImsReport/StockExpDate",
+      "User-Agent": "StyleKorean-Control-Tower/2026-08-30"
+    },
+    muteHttpExceptions: true
+  });
+  const status = response.getResponseCode();
+  if (status < 200 || status >= 300) throw new Error("Siliconii IMS HTTP " + status);
+  const payload = JSON.parse(response.getContentText() || "{}");
+  if (String(payload.ResultCode || "") !== "0000" || !Array.isArray(payload.Data)) {
+    throw new Error(String(payload.ResultMessage || "Siliconii IMS returned invalid inventory data"));
+  }
+  const rows = payload.Data.map(function (row) {
+    return {
+      productName: String(row.prod_nm || "").trim(),
+      sku: String(row.prod_cd || "").trim(),
+      upc: String(row.barcode || "").trim(),
+      expirationDate: String(row.exp_date || "").trim(),
+      quantity: Number(row.stock_qty) || 0
+    };
+  }).filter(function (row) { return row.sku; });
+  return { ok: true, source: "ims", rows: rows };
+}
+
+// One-time owner-run helper. Running this from the Apps Script editor causes
+// Google to request the external_request scope explicitly; it has no data or
+// spreadsheet side effects and does not send the IMS credential.
+function authorizeCmsImsExternalRequest() {
+  const response = UrlFetchApp.fetch("https://ims.siliconii.com/", { method: "get", muteHttpExceptions: true });
+  return { ok: true, status: response.getResponseCode() };
 }
 
 function validateRequest_(request) {
@@ -446,8 +510,8 @@ function referencesMatch_(left, right) {
   return a.includes(b) || b.includes(a);
 }
 
-// The legacy WMS importer was removed on 2026-08-12. The only callable legacy
-// handler name now lives in zz_WmsTruckingCompatibility.gs and delegates to V2.
+// The legacy WMS importer was removed on 2026-08-12. Its compatibility alias
+// lives beside the canonical implementation in WmsTruckingSyncV2.gs.
 
 function findWmsTruckingHeader_(rows) {
   for (let r = 0; r < Math.min(rows.length, 10); r++) {

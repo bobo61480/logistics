@@ -106,12 +106,14 @@ export interface D1Kpis {
   topCarriers: { name: string; earnings: number; moves: number; shipmentPercent: number }[];
   ltlPercent: number;
   ftlPercent: number;
-  avgLocal: number;
-  avgCalifornia: number;
-  avgOutOfState: number;
-  avgLocalMtd: number;
-  avgCaliforniaMtd: number;
-  avgOutOfStateMtd: number;
+  truckingMtd: number;
+  truckingYtd: number;
+  totalLocal: number;
+  totalCalifornia: number;
+  totalOutOfState: number;
+  totalLocalMtd: number;
+  totalCaliforniaMtd: number;
+  totalOutOfStateMtd: number;
 }
 
 export interface D1SyncSource {

@@ -1,0 +1,100 @@
+name: Deploy read-only CMS gateway
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cms-gateway/**'
+      - 'wrangler.cms-gateway.toml'
+      - '.github/workflows/deploy-cms-gateway.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cms-gateway-production
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck project
+        run: npm run typecheck
+
+      - name: Configure CMS gateway secrets
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CMS_MCP_AUTH_TOKEN: ${{ secrets.CMS_MCP_AUTH_TOKEN }}
+          CMS_IMS_API_KEY: ${{ secrets.CMS_IMS_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -n "${CMS_MCP_AUTH_TOKEN:-}" ]; then
+            printf '%s' "$CMS_MCP_AUTH_TOKEN" | npx wrangler secret put CMS_MCP_AUTH_TOKEN --name stylekorean-cms-gateway --config wrangler.cms-gateway.toml
+          else
+            echo "CMS_MCP_AUTH_TOKEN is not configured; deploying without bearer forwarding."
+          fi
+          if [ -n "${CMS_IMS_API_KEY:-}" ]; then
+            printf '%s' "$CMS_IMS_API_KEY" | npx wrangler secret put CMS_IMS_API_KEY --name stylekorean-cms-gateway --config wrangler.cms-gateway.toml
+          else
+            echo "CMS_IMS_API_KEY is not configured; direct invoice fallback will be unavailable."
+          fi
+
+      - name: Deploy CMS gateway Worker
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --config wrangler.cms-gateway.toml 2>&1 | tee /tmp/cms-gateway-deploy.log
+          grep -Eo 'https://[^ ]+workers.dev' /tmp/cms-gateway-deploy.log | tail -1 > /tmp/cms-gateway-url.txt || true
+          echo "CMS gateway URL: $(cat /tmp/cms-gateway-url.txt 2>/dev/null || true)"
+
+      - name: Verify gateway health and August sales route
+        shell: bash
+        run: |
+          set -euo pipefail
+          gateway_url="$(cat /tmp/cms-gateway-url.txt)"
+          test -n "$gateway_url"
+
+          health_ok=0
+          for attempt in 1 2 3 4 5 6; do
+            status="$(curl -sS --max-time 30 -o /tmp/cms-health.json -w '%{http_code}' "$gateway_url/health" || true)"
+            if [ "$status" = "200" ] && grep -Fq '"ok":true' /tmp/cms-health.json; then
+              health_ok=1
+              break
+            fi
+            echo "Gateway health attempt ${attempt} returned HTTP ${status}"
+            cat /tmp/cms-health.json 2>/dev/null || true
+            sleep 10
+          done
+          if [ "$health_ok" -ne 1 ]; then
+            echo "CMS gateway health never became reachable"
+            exit 1
+          fi
+
+          status="$(curl -sS --max-time 60 -o /tmp/cms-sales.json -w '%{http_code}' "$gateway_url/sales-summary?month=2026-08" || true)"
+          if [ "$status" = "404" ] || [ -z "$status" ]; then
+            echo "CMS sales route is not deployed"
+            exit 1
+          fi
+          echo "Gateway health:"
+          cat /tmp/cms-health.json
+          echo
+          echo "August sales route HTTP ${status}:"
+          cat /tmp/cms-sales.json
+          echo

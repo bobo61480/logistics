@@ -117,6 +117,7 @@ function loadCustomerLookupHelpers(): CustomerLookupHelpers {
   // both sources into one vm context, mirroring loadWmsHelpers() in
   // wms-trucking-sync.test.ts.
   const code = readFileSync("google-apps-script/Code.gs", "utf8");
+  const customerMatching = readFileSync("google-apps-script/CustomerMatching.gs", "utf8");
   const customerLookup = readFileSync("google-apps-script/CustomerLookup.gs", "utf8");
   // Logger stub: logPipelineFromBoundSpreadsheet_'s catch path calls
   // Logger.log, same as real Apps Script — without a stub, an intentionally
@@ -125,7 +126,7 @@ function loadCustomerLookupHelpers(): CustomerLookupHelpers {
   const context = vm.createContext({ console, Logger: { log: () => {} } });
 
   vm.runInContext(
-    `${code}\n${customerLookup}\n;globalThis.__cust = {` +
+    `${code}\n${customerMatching}\n${customerLookup}\n;globalThis.__cust = {` +
       "matchCustomerRecord_,buildCustomerNoteText_,canonicalWmsCustomer_,normalizeWmsCustomerKey_," +
       "stripCustomerLocationSuffix_,isAmbiguousLocationFamily_,customerAddressConflicts_," +
       "customerAddressFillable_,matchedByExactName_,fillCustomerAddress_," +

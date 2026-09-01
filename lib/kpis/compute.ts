@@ -19,12 +19,14 @@ export type KpiSnapshot = {
   topCarriers: CarrierKpi[];
   ltlPercent: number;
   ftlPercent: number;
-  avgLocal: number;
-  avgCalifornia: number;
-  avgOutOfState: number;
-  avgLocalMtd: number;
-  avgCaliforniaMtd: number;
-  avgOutOfStateMtd: number;
+  truckingMtd: number;
+  truckingYtd: number;
+  totalLocal: number;
+  totalCalifornia: number;
+  totalOutOfState: number;
+  totalLocalMtd: number;
+  totalCaliforniaMtd: number;
+  totalOutOfStateMtd: number;
 };
 
 export function dateCode(value: string) {
@@ -42,6 +44,38 @@ export function amount(value: string, allowSuffix: boolean) {
   const multiplier = match[2] === "K" ? 1_000 : match[2] === "M" ? 1_000_000 : match[2] === "B" ? 1_000_000_000 : 1;
   const parsed = Number(match[1]) * multiplier;
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeHeader(value: unknown) {
+  return String(value ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, " ")
+    .trim();
+}
+
+function headerIndex(header: string[], aliases: string[], fallback: number) {
+  const wanted = new Set(aliases.map(normalizeHeader));
+  const index = header.findIndex((value) => wanted.has(normalizeHeader(value)));
+  return index >= 0 ? index : fallback;
+}
+
+function nationalSalesRecords(rows: string[][], yearStart: number, todayCode: number) {
+  if (!rows.length) return [] as Array<{ date: number; value: number }>;
+  const header = rows[0] ?? [];
+  const statusCol = headerIndex(header, ["Status", "Overall PO Status"], 0);
+  const departmentCol = headerIndex(header, ["Dept", "Department"], 2);
+  const amountCol = headerIndex(header, ["Amount", "Total Order Amount"], 4);
+  const orderDateCol = headerIndex(header, ["Order Date"], 6);
+  const hasDepartmentHeader = header.some((value) => ["DEPT", "DEPARTMENT"].includes(normalizeHeader(value)));
+
+  return rows.slice(1).flatMap((row) => {
+    if ((row[statusCol] ?? "").trim().toLowerCase() === "cancelled") return [];
+    if (hasDepartmentHeader && (row[departmentCol] ?? "").trim().toLowerCase() !== "national") return [];
+    const date = dateCode(row[orderDateCol] ?? "");
+    const value = amount(row[amountCol] ?? "", true);
+    return date >= yearStart && date <= todayCode && value !== null && value > 0 ? [{ date, value }] : [];
+  });
 }
 
 function freightAmount(value: string) {
@@ -104,12 +138,7 @@ export function computeKpisFromRows(input: Input): KpiSnapshot {
   const today = input.today ?? pacificToday();
   const yearStart = today.year * 10_000 + 101;
   const monthStart = today.year * 10_000 + today.month * 100 + 1;
-  const nationalSales = input.nationalRows.slice(1).flatMap((row) => {
-    if ((row[0] ?? "").trim().toLowerCase() === "cancelled") return [];
-    const date = dateCode(row[6] ?? "");
-    const value = amount(row[4] ?? "", true);
-    return date >= yearStart && date <= today.code && value !== null && value > 0 ? [{ date, value }] : [];
-  });
+  const nationalSales = nationalSalesRecords(input.nationalRows, yearStart, today.code);
   const wmsSales = input.wmsRows.slice(1).flatMap((row) => {
     const date = dateCode(row[0] ?? "");
     const value = amount(row[6] ?? "", false);
@@ -128,6 +157,8 @@ export function computeKpisFromRows(input: Input): KpiSnapshot {
   });
   const freight = [...trucking, ...transfer].filter((r) => r.date >= yearStart && r.date <= today.code);
   const freightMtd = freight.filter((r) => r.date >= monthStart);
+  const truckingYtd = freight.filter((r) => !r.isTransfer);
+  const truckingMtd = freightMtd.filter((r) => !r.isTransfer);
   const transferYtd = freight.filter((r) => r.isTransfer);
   const transferMtd = freightMtd.filter((r) => r.isTransfer);
   const njTransferYtd = transferYtd.filter((r) => isNewJerseyDestination(r.destination));
@@ -147,9 +178,9 @@ export function computeKpisFromRows(input: Input): KpiSnapshot {
   const ltl = classified.filter((r) => r.loadType === "LTL").length;
   const ftl = classified.filter((r) => r.loadType === "FTL").length;
   const splitTotal = ltl + ftl;
-  const average = (records: typeof freight, band: "local" | "california" | "out-of-state") => {
+  const laneTotal = (records: typeof freight, band: "local" | "california" | "out-of-state") => {
     const matching = records.filter((r) => !r.isTransfer && r.cost > 0 && distanceBand(r.destination) === band);
-    return matching.length ? matching.reduce((total, r) => total + r.cost, 0) / matching.length : 0;
+    return matching.reduce((total, r) => total + r.cost, 0);
   };
   return {
     nationalsSalesMtd: sum(nationalSales, monthStart), nationalsSalesYtd: sum(nationalSales, yearStart),
@@ -158,7 +189,8 @@ export function computeKpisFromRows(input: Input): KpiSnapshot {
     transfersMtd: transferMtd.reduce((t, r) => t + r.cost, 0), transfersYtd: transferYtd.reduce((t, r) => t + r.cost, 0),
     njTransferMtd: njTransferMtd.reduce((t, r) => t + r.cost, 0), njTransferYtd: njTransferYtd.reduce((t, r) => t + r.cost, 0),
     topCarriers, ltlPercent: splitTotal ? Math.round((ltl / splitTotal) * 100) : 0, ftlPercent: splitTotal ? Math.round((ftl / splitTotal) * 100) : 0,
-    avgLocal: average(freight, "local"), avgCalifornia: average(freight, "california"), avgOutOfState: average(freight, "out-of-state"),
-    avgLocalMtd: average(freightMtd, "local"), avgCaliforniaMtd: average(freightMtd, "california"), avgOutOfStateMtd: average(freightMtd, "out-of-state"),
+    truckingMtd: truckingMtd.reduce((t, r) => t + r.cost, 0), truckingYtd: truckingYtd.reduce((t, r) => t + r.cost, 0),
+    totalLocal: laneTotal(freight, "local"), totalCalifornia: laneTotal(freight, "california"), totalOutOfState: laneTotal(freight, "out-of-state"),
+    totalLocalMtd: laneTotal(freightMtd, "local"), totalCaliforniaMtd: laneTotal(freightMtd, "california"), totalOutOfStateMtd: laneTotal(freightMtd, "out-of-state"),
   };
 }

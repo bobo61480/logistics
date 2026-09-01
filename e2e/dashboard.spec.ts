@@ -384,7 +384,7 @@ test("renders live schedules and KPI cards computed from the workbooks", async (
   );
 
   // Drive Archive card offers the document quick links.
-  await expect(page.getByRole("heading", { name: "Drive Archive" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Document Folders" })).toBeVisible();
   await expect(page.getByRole("link", { name: /SK Logistics Email Archive/ })).toBeVisible();
 });
 
