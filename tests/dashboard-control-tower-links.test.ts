@@ -1,16 +1,23 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const source = readFileSync("app/page.tsx", "utf8");
+const page = readFileSync("app/page.tsx", "utf8");
+const layout = readFileSync("app/layout.tsx", "utf8");
+const remap = readFileSync("app/dashboard-control-tower-links.tsx", "utf8");
 
 describe("main dashboard control tower links", () => {
-  it("routes Logistics Control Tower to skwarehouse and Warehouse Control Tower to skwbp", () => {
-    expect(source).toContain('<div className="sys-badge-name">Logistics Control Tower</div>');
-    expect(source).toContain('<div className="sys-badge-host">skwarehouse.dpdns.org</div>');
-    expect(source).toContain('href="https://skwarehouse.dpdns.org"');
+  it("keeps both dashboard badges identifiable", () => {
+    expect(page).toContain('<div className="sys-badge-name">Logistics Control Tower</div>');
+    expect(page).toContain('<div className="sys-badge-name">Warehouse Control Tower</div>');
+  });
 
-    expect(source).toContain('<div className="sys-badge-name">Warehouse Control Tower</div>');
-    expect(source).toContain('<div className="sys-badge-host">skwbp.dpdns.org</div>');
-    expect(source).toContain('href="https://skwbp.dpdns.org"');
+  it("remaps Logistics to skwarehouse and Warehouse to skwbp after hydration", () => {
+    expect(layout).toContain('import { DashboardControlTowerLinks } from "./dashboard-control-tower-links";');
+    expect(layout).toContain("<DashboardControlTowerLinks />");
+    expect(remap).toContain('const LOGISTICS_HOST = "skwarehouse.dpdns.org";');
+    expect(remap).toContain('const WAREHOUSE_HOST = "skwbp.dpdns.org";');
+    expect(remap).toContain('anchor.href = `https://${WAREHOUSE_HOST}`;');
+    expect(remap).toContain('name.textContent === "Logistics Control Tower"');
+    expect(remap).toContain('name.textContent === "Warehouse Control Tower"');
   });
 });
