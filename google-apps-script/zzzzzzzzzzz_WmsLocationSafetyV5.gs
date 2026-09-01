@@ -17,7 +17,7 @@
  */
 /* eslint-disable no-unused-vars */
 
-var WMS_LOCATION_SAFETY_V5_VERSION = "2026-09-01-v6-yixi-address-canonical";
+var WMS_LOCATION_SAFETY_V5_VERSION = "2026-09-01-v6-yixi-address-canonical-r2";
 var WMS_LOCATION_TARGET_BY_ROW_INVOICE_V5 = {};
 
 function whLocationNormV5_(value) {
@@ -34,15 +34,43 @@ function whYixiLocationAliasV5_(value) {
   return "";
 }
 
+function whYixiExplicitAddressFromNoteV6_(note) {
+  var lines = String(note || "").split(/\r?\n/);
+  for (var i = 0; i < lines.length; i++) {
+    var match = lines[i].match(/^\s*Address\s*:\s*(.+)$/i);
+    if (match && String(match[1] || "").trim()) return String(match[1]).trim();
+  }
+  return "";
+}
+
+function whYixiLocationFromEvidenceV6_(address, store, note) {
+  // Physical address is authoritative. If the ADDRESS column is blank, an
+  // explicit Address: line in NOTE is the next-best address source. Only
+  // when neither proves a known location may LOCATION / STORE decide it.
+  var fromAddress = whYixiLocationAliasV5_(address);
+  if (fromAddress) return fromAddress;
+  var noteAddress = whYixiExplicitAddressFromNoteV6_(note);
+  var fromNoteAddress = whYixiLocationAliasV5_(noteAddress);
+  if (fromNoteAddress) return fromNoteAddress;
+  return whYixiLocationAliasV5_(store);
+}
+
+function whCanonicalYixiStoreV6_(location) {
+  var stores = {
+    "STONESTOWN GALLERIA": "STONESTOWN GALLERIA",
+    "HILLSDALE READYSPACES": "HILLSDALE / READYSPACES",
+    "CHINATOWN": "CHINATOWN",
+    "JAPAN CENTER": "JAPAN CENTER"
+  };
+  return stores[String(location || "")] || "";
+}
+
 function whCanonicalYixiCustomerNameV6_(customer, address, store, note) {
   var raw = String(customer || "").trim();
   var customerKey = whLocationNormV5_(raw);
   if (!/YIXI|FANLOLI/.test(customerKey)) return raw;
 
-  // Physical address / explicit store location is authoritative. Do not use
-  // the customer name itself to infer the location, and do not guess from an
-  // unmatched address.
-  var location = whYixiLocationAliasV5_([address, store].filter(Boolean).join(" | "));
+  var location = whYixiLocationFromEvidenceV6_(address, store, note);
   var canonicalByLocation = {
     "STONESTOWN GALLERIA": "YIXI TRADING (FANLOLI) - GALLERIA (SF)",
     "HILLSDALE READYSPACES": "YIXI Trading LLC (dba Fanloli) (HILLSDALE READYSPACE)",
@@ -54,9 +82,8 @@ function whCanonicalYixiCustomerNameV6_(customer, address, store, note) {
 
 function whLocationIdentityV5_(customer, address, store, note) {
   var customerKey = whLocationNormV5_(customer);
-  var combined = [store, address, note].map(whLocationNormV5_).filter(Boolean).join(" | ");
   if (/YIXI|FANLOLI/.test(customerKey)) {
-    var yixi = whYixiLocationAliasV5_(combined);
+    var yixi = whYixiLocationFromEvidenceV6_(address, store, note);
     if (yixi) return "YIXI:" + yixi;
   }
   return whLocationNormV5_(store) || whLocationNormV5_(address) || "";
@@ -251,6 +278,16 @@ function whBackfillLocationStoreV5_() {
       var currentCustomer = String(targetRow[targetMap["CUSTOMER"]] || "").trim();
       var addressValue = targetMap["ADDRESS"] !== undefined ? String(targetRow[targetMap["ADDRESS"]] || "").trim() : "";
       var noteValue = targetMap["NOTE"] !== undefined ? String(targetRow[targetMap["NOTE"]] || "").trim() : "";
+      var provenLocation = whYixiLocationFromEvidenceV6_(addressValue, storeValue, noteValue);
+      if (/YIXI|FANLOLI/.test(whLocationNormV5_(currentCustomer)) && provenLocation) {
+        var canonicalStore = whCanonicalYixiStoreV6_(provenLocation);
+        if (canonicalStore && canonicalStore !== storeValue) {
+          targetSheet.getRange(t + 1, targetMap["LOCATION STORE"] + 1).setValue(canonicalStore);
+          storeValue = canonicalStore;
+          targetRow[targetMap["LOCATION STORE"]] = canonicalStore;
+          changed++;
+        }
+      }
       var canonicalCustomer = whCanonicalYixiCustomerNameV6_(currentCustomer, addressValue, storeValue, noteValue);
       if (canonicalCustomer && canonicalCustomer !== currentCustomer) {
         targetSheet.getRange(t + 1, targetMap["CUSTOMER"] + 1).setValue(canonicalCustomer);
