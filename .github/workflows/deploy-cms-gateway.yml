@@ -33,18 +33,24 @@ jobs:
       - name: Typecheck project
         run: npm run typecheck
 
-      - name: Configure optional CMS upstream auth
+      - name: Configure CMS gateway secrets
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CMS_MCP_AUTH_TOKEN: ${{ secrets.CMS_MCP_AUTH_TOKEN }}
+          CMS_IMS_API_KEY: ${{ secrets.CMS_IMS_API_KEY }}
         run: |
           set -euo pipefail
           if [ -n "${CMS_MCP_AUTH_TOKEN:-}" ]; then
             printf '%s' "$CMS_MCP_AUTH_TOKEN" | npx wrangler secret put CMS_MCP_AUTH_TOKEN --name stylekorean-cms-gateway --config wrangler.cms-gateway.toml
           else
             echo "CMS_MCP_AUTH_TOKEN is not configured; deploying without bearer forwarding."
+          fi
+          if [ -n "${CMS_IMS_API_KEY:-}" ]; then
+            printf '%s' "$CMS_IMS_API_KEY" | npx wrangler secret put CMS_IMS_API_KEY --name stylekorean-cms-gateway --config wrangler.cms-gateway.toml
+          else
+            echo "CMS_IMS_API_KEY is not configured; direct invoice fallback will be unavailable."
           fi
 
       - name: Deploy CMS gateway Worker
