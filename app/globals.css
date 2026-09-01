@@ -2242,6 +2242,7 @@ footer strong {
 .qty-inb  { color: var(--status-cleared); }
 .inv-inbound { margin-top: 2px; font-size: 10.5px; color: var(--text-faint); white-space: nowrap; }
 .inventory-alerts-empty { padding: 22px 18px; color: var(--text-soft); font-size: 13px; line-height: 1.5; }
+.inventory-alerts-degraded { color: var(--status-warning); font-weight: 500; }
 
 .shipment-notice { font-variant-numeric: tabular-nums; }
 .shipment-notice span { margin-right: 2px; }

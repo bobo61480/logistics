@@ -405,62 +405,99 @@ export type InventoryAlert = {
   severity: InventorySeverity;
 };
 
-// Any product whose current warehouse on-hand is below this is flagged LOW.
+// Any product whose current available quantity is below this is flagged LOW.
 // Matches the Low Stock panel's own "under 200" convention so the two agree.
 const LOW_STOCK_ALERT_THRESHOLD = 200;
 
-// Roll current warehouse on-hand and inbound-in-transit into one alert list,
-// modelled on the HQ dashboard's Inventory Alerts panel. Products are keyed by
-// SKU (falling back to UPC, then product name) so on-hand and inbound rows for
-// the same product combine into a single available/inbound pair. Severity:
-//   CRIT — oversold (available < 0) or out of stock with nothing inbound
+type InventoryAlertProduct = {
+  rep: InventoryItem;
+  productName: string;
+  sku: string;
+  available: number;
+  inbound: number;
+};
+
+// Roll available (not physical on-hand) stock together with inbound-in-transit
+// into one alert list, modelled on the HQ dashboard's Inventory Alerts panel.
+//
+// `available` must be a zero-RETAINING list (see dashboardAlertInputs) so a
+// genuine stockout — available 0 or oversold with nothing inbound — surfaces as
+// CRIT; a list filtered to quantity > 0 could never produce a stockout alert.
+//
+// Products are reconciled with the same inventoryProductsMatch alias helper the
+// Low Stock panel uses (SKU, then UPC, then product name across both records),
+// so a stock row keyed by SKU and an inbound row sharing only the UPC merge into
+// one product instead of splitting into two alerts. Severity:
+//   CRIT — oversold (available < 0), or out of stock with nothing inbound
 //   INB  — out of stock but replenishment is inbound
-//   LOW  — some stock on hand, but under the low-stock threshold
-// Products with healthy on-hand cover produce no alert.
+//   LOW  — some stock available, but under the low-stock threshold
+// Products with healthy available cover produce no alert.
 export function computeInventoryAlerts(
-  stock: InventoryItem[],
+  available: InventoryItem[],
   inbound: InventoryItem[],
 ): InventoryAlert[] {
   const productKey = (item: InventoryItem) =>
     normalizedIdentifier(item.sku) ||
     normalizedIdentifier(item.upc) ||
     normalizedIdentifier(item.productName);
-  const rows = new Map<string, InventoryAlert>();
-  const ensure = (item: InventoryItem) => {
-    const key = productKey(item);
-    if (!key) return null;
-    let row = rows.get(key);
-    if (!row) {
-      row = {
-        id: key,
-        productName: item.productName || item.sku || item.upc,
-        sku: item.sku || item.upc,
-        available: 0,
-        inbound: 0,
-        severity: "inb",
-      };
-      rows.set(key, row);
+  const aggregate = (items: InventoryItem[], field: "available" | "inbound") => {
+    const products = new Map<string, InventoryAlertProduct>();
+    for (const item of items) {
+      const key = productKey(item);
+      if (!key) continue;
+      let product = products.get(key);
+      if (!product) {
+        product = {
+          rep: item,
+          productName: item.productName || item.sku || item.upc,
+          sku: item.sku || item.upc,
+          available: 0,
+          inbound: 0,
+        };
+        products.set(key, product);
+      }
+      product[field] += item.quantity;
+      if (!product.productName && item.productName) product.productName = item.productName;
+      if (!product.sku && (item.sku || item.upc)) product.sku = item.sku || item.upc;
     }
-    if (!row.productName && item.productName) row.productName = item.productName;
-    if (!row.sku && (item.sku || item.upc)) row.sku = item.sku || item.upc;
-    return row;
+    return products;
   };
-  for (const item of stock) {
-    const row = ensure(item);
-    if (row) row.available += item.quantity;
+  const stockProducts = aggregate(available, "available");
+  const inboundProducts = aggregate(inbound, "inbound");
+  // Fold each inbound product into the matching available product (alias match,
+  // not just exact key), the way the Low Stock panel matches inbound to a stock
+  // row. Inbound with no available match at all is a fully out-of-stock product.
+  const consumed = new Set<string>();
+  for (const product of stockProducts.values()) {
+    for (const [key, incoming] of inboundProducts) {
+      if (consumed.has(key)) continue;
+      if (inventoryProductsMatch(product.rep, incoming.rep)) {
+        product.inbound += incoming.inbound;
+        consumed.add(key);
+        if (!product.productName && incoming.productName) product.productName = incoming.productName;
+        if (!product.sku && incoming.sku) product.sku = incoming.sku;
+      }
+    }
   }
-  for (const item of inbound) {
-    const row = ensure(item);
-    if (row) row.inbound += item.quantity;
+  const products = [...stockProducts.values()];
+  for (const [key, incoming] of inboundProducts) {
+    if (!consumed.has(key)) products.push(incoming);
   }
   const alerts: InventoryAlert[] = [];
-  for (const row of rows.values()) {
+  for (const product of products) {
     let severity: InventorySeverity | null = null;
-    if (row.available < 0) severity = "crit";
-    else if (row.available === 0) severity = row.inbound > 0 ? "inb" : "crit";
-    else if (row.available < LOW_STOCK_ALERT_THRESHOLD) severity = "low";
+    if (product.available < 0) severity = "crit";
+    else if (product.available === 0) severity = product.inbound > 0 ? "inb" : "crit";
+    else if (product.available < LOW_STOCK_ALERT_THRESHOLD) severity = "low";
     if (!severity) continue;
-    alerts.push({ ...row, severity });
+    alerts.push({
+      id: product.rep.id,
+      productName: product.productName,
+      sku: product.sku,
+      available: product.available,
+      inbound: product.inbound,
+      severity,
+    });
   }
   const rank: Record<InventorySeverity, number> = { crit: 0, low: 1, inb: 2 };
   return alerts.sort(
@@ -474,20 +511,26 @@ const INVENTORY_SEVERITY_LABEL: Record<InventorySeverity, string> = {
   inb: "INB",
 };
 
-// Replaces the former "Status Workflow" legend. Sourced live from the same
-// warehouse-stock and inbound-inventory collections the inventory panels use;
-// when neither is available it shows a clean empty state instead of inventing
-// data.
+// Replaces the former "Status Workflow" legend. Sourced live from the INVENTORY
+// dashboard tab's AVAILABLE column (zero/negative rows retained) plus the
+// inbound-inventory collection. `dataAvailable` is false when NONE of the
+// optional inventory sheets loaded this sync — distinct from "loaded, but no
+// alerts" — so an unavailable feed reads as degraded rather than healthy.
 function InventoryAlerts({
-  stock,
+  available,
   inbound,
+  dataAvailable,
   loading,
 }: {
-  stock: InventoryItem[];
+  available: InventoryItem[];
   inbound: InventoryItem[];
+  dataAvailable: boolean;
   loading: boolean;
 }) {
-  const alerts = useMemo(() => computeInventoryAlerts(stock, inbound), [stock, inbound]);
+  const alerts = useMemo(
+    () => computeInventoryAlerts(available, inbound),
+    [available, inbound],
+  );
   return (
     <section
       className="inventory-panel inventory-alerts-panel"
@@ -499,7 +542,7 @@ function InventoryAlerts({
           <h2 id="inventory-alerts-heading">Inventory Alerts</h2>
         </div>
         <div className="inventory-total">
-          <strong>{alerts.length}</strong>
+          <strong>{dataAvailable ? alerts.length : "—"}</strong>
           <span>alerts</span>
         </div>
       </div>
@@ -525,11 +568,16 @@ function InventoryAlerts({
             </li>
           ))}
         </ul>
-      ) : (
+      ) : loading ? (
+        <p className="inventory-alerts-empty">Syncing inventory…</p>
+      ) : dataAvailable ? (
         <p className="inventory-alerts-empty">
-          {loading
-            ? "Syncing inventory…"
-            : "No low-stock alerts. Every tracked product has healthy on-hand cover."}
+          No low-stock alerts. Every tracked product has healthy available cover.
+        </p>
+      ) : (
+        <p className="inventory-alerts-empty inventory-alerts-degraded">
+          Inventory data unavailable — the stock and inbound sheets did not load this sync, so
+          stock levels can&apos;t be checked. This does not mean stock is healthy.
         </p>
       )}
     </section>
@@ -947,6 +995,77 @@ function dashboardInventoryItems(table: any): InventoryCollections {
     if (onHand > 0) inStock.push({ ...base, id: `inventory-stock-${rowIndex}`, quantity: onHand });
   });
   return { inbound, inStock };
+}
+
+type InventoryAlertInputs = {
+  available: InventoryItem[];
+  inbound: InventoryItem[];
+};
+
+// Alerts-panel-specific parse of the INVENTORY dashboard tab. Unlike
+// dashboardInventoryItems (which powers the other panels and deliberately keeps
+// only on-hand > 0 rows), this RETAINS zero and negative rows so a genuine
+// stockout — 0 or oversold available with nothing inbound — can surface as a
+// CRIT alert. It also reads the AVAILABLE column in preference to physical
+// on-hand (falling back to on-hand only when Available is absent), matching how
+// InventorySync.gs derives its flags: allocated/held stock must not read as
+// available. dashboardInventoryItems is left untouched for the panels that rely
+// on its on-hand semantics.
+export function dashboardAlertInputs(table: any): InventoryAlertInputs {
+  if (!table?.rows) return { available: [], inbound: [] };
+  const find = inventoryIndexes(table);
+  const availableIndex = (() => {
+    const preferred = find("AVAILABLE");
+    if (preferred >= 0) return preferred;
+    const actual = find("ON HAND ACTUAL");
+    if (actual >= 0) return actual;
+    return find("ON HAND");
+  })();
+  const indexes = {
+    shipmentNo: find("INBOUND SHIPMENTS 차수", "INBOUND SHIPMENTS", "SHIPMENT NO", "SHIPMENT"),
+    productName: find("PRODUCT NAME", "PRODUCT DESCRIPTION", "DESCRIPTION"),
+    sku: find("SKU"),
+    upc: find("UPC", "BARCODE"),
+    expirationDate: find("NEAREST EXPIRY", "EXPIRY DATE", "EXPIRATION DATE"),
+    incoming: find("REMAINING TO RECEIVE", "INCOMING CONFIRMED"),
+    available: availableIndex,
+    location: find("LOCATIONS", "LOCATION"),
+    status: find("FLAG", "STATUS"),
+  };
+  const available: InventoryItem[] = [];
+  const inbound: InventoryItem[] = [];
+  table.rows.forEach((row: any, rowIndex: number) => {
+    const value = (index: number) => (index >= 0 ? cell(row, index) : "");
+    const productName = value(indexes.productName);
+    const sku = value(indexes.sku);
+    const upc = value(indexes.upc);
+    if (!productName && !sku && !upc) return;
+    const shipmentNo = value(indexes.shipmentNo);
+    const status = value(indexes.status);
+    const base = {
+      shipmentNo,
+      productName,
+      sku,
+      upc,
+      expirationDate: value(indexes.expirationDate),
+      palletNumber: packingListPallets(shipmentNo, sku),
+      location: value(indexes.location),
+      status,
+    };
+    // Retain the row regardless of sign so stockouts are not silently dropped.
+    if (indexes.available >= 0) {
+      available.push({
+        ...base,
+        id: `inventory-available-${rowIndex}`,
+        quantity: inventoryNumber(value(indexes.available)),
+      });
+    }
+    const incoming = inventoryNumber(value(indexes.incoming));
+    if (incoming > 0 && !/^(DELIVERED|RECEIVED|COMPLETED|CANCELLED)$/.test(status.toUpperCase())) {
+      inbound.push({ ...base, id: `inventory-alert-inbound-${rowIndex}`, quantity: incoming });
+    }
+  });
+  return { available, inbound };
 }
 
 function skwInboundItems(table: any): InventoryItem[] {
@@ -2805,6 +2924,12 @@ export default function Home() {
   const [kpis, setKpis] = useState<KpiSnapshot>(EMPTY_KPIS);
   const [inboundInventory, setInboundInventory] = useState<InventoryItem[]>([]);
   const [warehouseStock, setWarehouseStock] = useState<InventoryItem[]>([]);
+  // Zero/negative-retaining available list that feeds the Inventory Alerts panel,
+  // kept separate from warehouseStock (which is filtered to on-hand > 0).
+  const [alertAvailable, setAlertAvailable] = useState<InventoryItem[]>([]);
+  // False until an inventory source (dashboard tab or an SKW sheet) actually
+  // loads, so the alerts panel can tell "no alerts" apart from "no data".
+  const [inventoryDataAvailable, setInventoryDataAvailable] = useState(false);
   const [cmsInventory, setCmsInventory] = useState<CmsInventoryItem[]>([]);
   const [cmsInventoryConfigured, setCmsInventoryConfigured] = useState(false);
   const [selectedInventory, setSelectedInventory] = useState<InventoryItem | null>(null);
@@ -2854,14 +2979,28 @@ export default function Home() {
       ]), nextGmailIngestion));
       setKpis(liveKpis);
       const dashboardInventory = dashboardInventoryItems(inventoryDashboardTable);
-      setInboundInventory(uniqueInventoryItems([
+      const skwInbound = skwInboundItems(skwInboundTable);
+      const skwStock = skwStockItems(skwStockTable);
+      const alertInputs = dashboardAlertInputs(inventoryDashboardTable);
+      const inboundInventoryItems = uniqueInventoryItems([
         ...dashboardInventory.inbound,
-        ...skwInboundItems(skwInboundTable),
-      ], true));
+        ...skwInbound,
+      ], true);
+      setInboundInventory(inboundInventoryItems);
       setWarehouseStock(uniqueInventoryItems([
         ...dashboardInventory.inStock,
-        ...skwStockItems(skwStockTable),
+        ...skwStock,
       ], false));
+      // Alerts read AVAILABLE (zero/negative retained) from the dashboard tab;
+      // when that tab is absent, fall back to SKW physical on-hand so SKW-only
+      // deployments still surface LOW stock. Inbound reuses the combined list.
+      const availableSource = alertInputs.available.length ? alertInputs.available : skwStock;
+      setAlertAvailable(uniqueInventoryItems(availableSource, false));
+      setInventoryDataAvailable(
+        Boolean(inventoryDashboardTable?.rows?.length) ||
+          skwInbound.length > 0 ||
+          skwStock.length > 0,
+      );
       setGmailIngestion(nextGmailIngestion);
       setCmsInventory(nextCmsInventory);
       setCmsInventoryConfigured(nextCmsInventoryConfigured);
@@ -3210,7 +3349,7 @@ export default function Home() {
           <strong>{connection.mode === "stale" ? "Continuity mode." : "Fallback mode."}</strong>{" "}
           {connection.mode === "stale"
             ? "The last verified snapshot is still available while live workbook sources recover."
-            : "The dashboard is reading Google Sheets directly; status writes still require the Worker."}
+            : "The dashboard is reading Google Sheets directly while the Worker reconnects. Every view stays read-only."}
           {connection.detail ? ` ${connection.detail}` : ""}
         </div>
       )}
@@ -3489,7 +3628,12 @@ export default function Home() {
 
       <IngestionRoadmapCard />
 
-      <InventoryAlerts stock={warehouseStock} inbound={inboundInventory} loading={loading} />
+      <InventoryAlerts
+        available={alertAvailable}
+        inbound={inboundInventory}
+        dataAvailable={inventoryDataAvailable}
+        loading={loading}
+      />
 
       <ShipmentEventTrackerCard />
 

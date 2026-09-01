@@ -407,7 +407,15 @@ test("presents the schedule read-only with no status-write controls", async ({ p
 
   // The former "Status Workflow" panel is gone, replaced by "Inventory Alerts".
   await expect(page.getByRole("heading", { name: "Status Workflow" })).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "Inventory Alerts" })).toBeVisible();
+  const alertsPanel = page.locator(".inventory-alerts-panel");
+  await expect(alertsPanel.getByRole("heading", { name: "Inventory Alerts" })).toBeVisible();
+
+  // This fixture ships no inventory tabs (dashboard/SKW all null), so the panel
+  // must report a degraded "data unavailable" state — NOT a healthy "no alerts"
+  // — since it cannot tell whether stock is fine when nothing loaded.
+  await expect(alertsPanel.locator(".inventory-alerts-degraded")).toBeVisible();
+  await expect(alertsPanel).toContainText("Inventory data unavailable");
+  await expect(alertsPanel).not.toContainText("healthy available cover");
 });
 
 test("shows the failure banner when the workbooks are unreachable", async ({ page }) => {
