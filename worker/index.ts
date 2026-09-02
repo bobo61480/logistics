@@ -386,6 +386,57 @@ async function handleMonthlyKpis(request: Request, env: Env) {
   }
 }
 
+// Public fulfillment (sk-b2b-mobile WMS) Apps Script endpoint. Kept as a
+// fallback so the proxy works even if the wrangler var is not yet deployed;
+// this URL is already public (it shipped in the client bundle before the
+// browser was moved behind this proxy), so it is not a secret.
+const DEFAULT_FULFILLMENT_GAS_URL =
+  "https://script.google.com/macros/s/AKfycbykK9DWjem9ORHxfR_mpdZl5DVh-en0D6JpCdIuel305QmfqxoNU_NqSnjkhFk401hI/exec";
+
+// Same-origin proxy for the live fulfillment feed. The frontend reads it only
+// through the Worker (never the browser calling Apps Script directly), keeping
+// every operational read same-origin. It is a live passthrough rather than a
+// D1-cached projection because fulfillment status (picking/inspection) is
+// real-time and a 15-minute snapshot cadence would render it stale; writes are
+// forwarded to the same endpoint and rate-limited like other write paths.
+async function handleFulfillment(request: Request, env: Env): Promise<Response> {
+  const target = env.FULFILLMENT_GAS_URL || DEFAULT_FULFILLMENT_GAS_URL;
+  const proxyJson = (body: string, status: number) =>
+    new Response(body, {
+      status,
+      headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+    });
+  try {
+    if (request.method === "GET") {
+      const upstream = new URL(target);
+      new URL(request.url).searchParams.forEach((value, key) => upstream.searchParams.set(key, value));
+      const res = await fetch(upstream.toString(), { cache: "no-store", signal: AbortSignal.timeout(25_000) });
+      return proxyJson(await res.text(), res.ok ? 200 : 502);
+    }
+    if (request.method === "POST") {
+      // Fulfillment writes (setManualPackingMoved / saveDimensions) mutate WMS
+      // state, so reject cross-site requests up front — matching the status,
+      // review, and tracking write paths — before forwarding or spending rate.
+      const origin = request.headers.get("origin");
+      if (origin && origin !== new URL(request.url).origin) return json({ ok: false, error: "Cross-origin fulfillment writes are not allowed" }, 403);
+      if (request.headers.get("sec-fetch-site") === "cross-site") return json({ ok: false, error: "Cross-site fulfillment writes are not allowed" }, 403);
+      const clientIp = request.headers.get("cf-connecting-ip")?.trim() || "unknown";
+      const rateLimit = await env.STATUS_WRITE_RATE_LIMITER.limit({ key: `fulfillment-write:${clientIp}` });
+      if (!rateLimit.success) return json({ ok: false, error: "Fulfillment write rate limit exceeded" }, 429);
+      const res = await fetch(target, {
+        method: "POST",
+        body: await request.text(),
+        headers: { "content-type": request.headers.get("content-type") || "application/x-www-form-urlencoded;charset=UTF-8" },
+        signal: AbortSignal.timeout(25_000),
+      });
+      return proxyJson(await res.text(), res.ok ? 200 : 502);
+    }
+    return json({ ok: false, error: "Method not allowed" }, 405);
+  } catch (error) {
+    return json({ ok: false, error: error instanceof Error ? error.message : String(error) }, 502);
+  }
+}
+
 function withSecurityHeaders(response: Response) {
   const secured = new Response(response.body, response);
   secured.headers.set("content-security-policy", "base-uri 'self'; frame-ancestors 'none'; object-src 'none'");
@@ -428,6 +479,8 @@ export default {
       response = await handlePendingReviewCommand(request, env, context);
     } else if (url.pathname === "/api/logistics/tracking") {
       response = await handleTrackingCommand(request, env);
+    } else if (url.pathname === "/api/logistics/fulfillment") {
+      response = await handleFulfillment(request, env);
     } else if (url.pathname === "/api/logistics/health") {
       response = request.method === "GET" ? await handleHealth(env) : json({ ok: false, error: "Method not allowed" }, 405);
     } else if (url.pathname.startsWith("/api/")) {

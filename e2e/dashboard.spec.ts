@@ -351,59 +351,69 @@ async function mockWorkbooks(page: Page): Promise<MockState> {
     return route.fulfill({ status: 404, headers: { "Access-Control-Allow-Origin": "*" }, body: "" });
   });
 
-  await page.route("https://script.google.com/**", async (route) => {
-    const url = new URL(route.request().url());
-    if (route.request().method() === "GET" && url.searchParams.get("op") === "getSalesOverview") {
-      return fulfill(
-        route,
-        JSON.stringify({
-          ok: true,
-          jobs: [
-            {
-              invoice: "INTK001",
-              remarks: "TK TEST CUSTOMER",
-              shipDate: isoDaysFromToday(3),
-              method: "TK",
-              amount: "1250.50",
-              pickStart: "08:15",
-              pickComplete: false,
-              inspection: "",
-              movedToPacking: false,
-              dimsCount: 0,
-            },
-            {
-              invoice: "INUPS001",
-              remarks: "UPS SHOULD NOT IMPORT",
-              shipDate: isoDaysFromToday(4),
-              method: "UPS",
-              amount: "99.00",
-            },
-          ],
-        }),
-        "application/json",
-      );
+  // The fulfillment feed now flows through the same-origin Worker proxy, not a
+  // direct browser call to Apps Script.
+  await page.route("**/api/logistics/fulfillment**", async (route) => {
+    const request = route.request();
+    if (request.method() === "GET") {
+      const url = new URL(request.url());
+      if (url.searchParams.get("op") === "getSalesOverview") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            jobs: [
+              {
+                invoice: "INTK001",
+                remarks: "TK TEST CUSTOMER",
+                shipDate: isoDaysFromToday(3),
+                method: "TK",
+                amount: "1250.50",
+                pickStart: "08:15",
+                pickComplete: false,
+                inspection: "",
+                movedToPacking: false,
+                dimsCount: 0,
+              },
+              {
+                invoice: "INUPS001",
+                remarks: "UPS SHOULD NOT IMPORT",
+                shipDate: isoDaysFromToday(4),
+                method: "UPS",
+                amount: "99.00",
+              },
+            ],
+          }),
+        });
+      }
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
     }
-    const payload = JSON.parse(route.request().postData() ?? "{}");
-    state.postedPayload = payload;
-    state.postedStatus = String(payload.status ?? "");
-    return fulfill(
-      route,
-      JSON.stringify({ ok: true, row: payload.sourceRow }),
-      "application/json",
-    );
+    // POST — a fulfillment write (saveDimensions / setManualPackingMoved).
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
   });
+
+  // Nothing may reach Apps Script directly any more; the fulfillment feed is
+  // behind the same-origin Worker proxy. Abort so any regression fails loudly
+  // instead of escaping to the live network.
+  await page.route("https://script.google.com/**", (route) => route.abort());
 
   return state;
 }
 
 test("renders live schedules and KPI cards from the D1 snapshot", async ({ page }) => {
-  // The frontend is D1-only: everything on the page must come from the Worker
-  // snapshot, never a direct browser read of Google Sheets. Record any such
-  // read so the assertion at the end fails loudly if the D1 boundary regresses
-  // (e.g. an omitted KPI payload falling back to fetchLiveKpis()).
+  // The frontend is D1-only: every operational read must go through the
+  // same-origin Worker, never a direct browser read of Google Sheets
+  // (docs.google.com) or Apps Script (script.google.com). Record any such read
+  // so the assertion at the end fails loudly if the boundary regresses (e.g. an
+  // omitted KPI payload falling back to fetchLiveKpis(), or the fulfillment feed
+  // calling Apps Script directly).
   const directSheetReads: string[] = [];
   page.on("request", (request) => {
-    if (request.url().includes("docs.google.com")) directSheetReads.push(request.url());
+    const requestUrl = request.url();
+    if (requestUrl.includes("docs.google.com") || requestUrl.includes("script.google.com")) {
+      directSheetReads.push(requestUrl);
+    }
   });
 
   await mockWorkbooks(page);
@@ -578,10 +588,11 @@ test("serves the last good D1 snapshot with a continuity marker during a source 
   await expect(page.getByText("Schedule unavailable.")).toHaveCount(0);
 });
 
-test("degrades KPIs without reading Sheets when the Worker ships no KPI payload", async ({ page }) => {
+test("shows an explicit KPI-unavailable state without reading Sheets when the Worker ships no KPI payload", async ({ page }) => {
   // The Worker persists kpis: null when its KPI computation fails. The browser
-  // must degrade to empty KPIs — never fall back to reading Google Sheets
-  // directly — so the D1 boundary holds even on the KPI-failure path.
+  // must show an explicit unavailable state — never manufacture $0 totals and
+  // never fall back to reading Google Sheets directly — so the D1 boundary
+  // holds even on the KPI-failure path.
   const directSheetReads: string[] = [];
   page.on("request", (request) => {
     if (request.url().includes("docs.google.com")) directSheetReads.push(request.url());
@@ -596,18 +607,77 @@ test("degrades KPIs without reading Sheets when the Worker ships no KPI payload"
       body: JSON.stringify(workerSnapshot({ kpis: null })),
     }),
   );
-  // No KPI payload anywhere: the current-month projection is unavailable too,
-  // so the browser cannot backfill it from the monthly endpoint either.
-  await page.unroute("**/api/logistics/monthly-kpis**");
+
+  await page.goto("/");
+
+  // The rest of the D1 snapshot still renders; the KPI grid shows an explicit
+  // unavailable placeholder (not $0 cards), and no workbook read is triggered.
+  await expect(page.locator(".import-table")).toContainText("HJ99 - 2026");
+  await expect(page.locator(".kpi-grid-unavailable")).toContainText("KPIs unavailable");
+  await expect(page.locator(".kpi-grid")).not.toContainText("SHIPPING COSTS");
+  expect(directSheetReads, `unexpected direct Sheets reads: ${directSheetReads.join(", ")}`).toEqual([]);
+});
+
+test("reads current-month and YTD KPIs from the D1 snapshot, fetching only past months", async ({ page }) => {
+  // The current month and YTD are authoritative from the D1 snapshot, so the
+  // page must not call /api/logistics/monthly-kpis for them (doing so would
+  // overwrite D1 KPIs with an independently recomputed projection). Only a
+  // selected *past* month triggers that request.
+  const monthlyRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/api/logistics/monthly-kpis")) monthlyRequests.push(request.url());
+  });
+
+  await mockWorkbooks(page);
   await page.route("**/api/logistics/monthly-kpis**", (route) =>
-    route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ ok: false }) }),
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: true, kpis: { ...workerKpis(), shippingMtd: 111, shippingYtd: 111 } }),
+    }),
   );
 
   await page.goto("/");
 
-  // The rest of the D1 snapshot still renders, and the carrier KPI card
-  // degrades to its unavailable state instead of triggering a workbook read.
+  // Default view is the current month → served from the D1 snapshot, no fetch.
+  const kpiCard = (title: string) => page.locator(".kpi-card", { hasText: title });
+  await expect(kpiCard("SHIPPING COSTS")).toContainText("$9,600");
+  expect(monthlyRequests, "current month must not hit monthly-kpis").toEqual([]);
+
+  // Selecting a past month pulls that month's projection from the Worker API.
+  await page.getByLabel("MTD month").selectOption("2026-01");
+  await expect(kpiCard("SHIPPING COSTS")).toContainText("$111");
+  expect(monthlyRequests.length).toBe(1);
+  expect(monthlyRequests[0]).toContain("month=2026-01");
+});
+
+test("does not present a prior-month D1 snapshot as the current month's MTD", async ({ page }) => {
+  // A snapshot generated last month but served across the boundary (D1
+  // stale-while-revalidate) carries last month's MTD. It must not be labelled
+  // as the current month's — the current MTD shows unavailable until the
+  // background refresh lands, rather than mislabeling stale totals.
+  await mockWorkbooks(page);
+  await page.unroute("**/api/logistics/snapshot**");
+  const lastMonth = new Date();
+  lastMonth.setUTCMonth(lastMonth.getUTCMonth() - 1);
+  await page.route("**/api/logistics/snapshot**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(
+        workerSnapshot({
+          generatedAt: lastMonth.toISOString(),
+          stale: true,
+          staleReason: "The durable snapshot is refreshing in the background",
+        }),
+      ),
+    }),
+  );
+
+  await page.goto("/");
+
+  // Schedule still renders from D1, but the current-month MTD is not backfilled
+  // from the stale prior-month snapshot.
   await expect(page.locator(".import-table")).toContainText("HJ99 - 2026");
-  await expect(page.locator(".carrier-ranking")).toContainText("Carrier data unavailable");
-  expect(directSheetReads, `unexpected direct Sheets reads: ${directSheetReads.join(", ")}`).toEqual([]);
+  await expect(page.locator(".kpi-grid-unavailable")).toContainText("KPIs unavailable");
 });
