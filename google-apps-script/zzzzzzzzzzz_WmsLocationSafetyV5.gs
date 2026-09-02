@@ -8,6 +8,8 @@
  *    destination/location is known;
  *  - Yixi/Fanloli's Stonestown, Hillsdale/Readyspaces, Japan Center, and
  *    Chinatown locations are four distinct delivery identities;
+ *  - Yixi/Fanloli customer display names are normalized from the proven
+ *    address/location to the exact names already used in WH Trucking Request;
  *  - repeated copies of the same invoice/date/location are removed without
  *    collapsing split loads with different PROs or different locations;
  *  - snapshot traffic self-repairs the canonical trigger plan so this guard
@@ -15,7 +17,7 @@
  */
 /* eslint-disable no-unused-vars */
 
-var WMS_LOCATION_SAFETY_V5_VERSION = "2026-08-31-v5-yixi-location-aware-r2";
+var WMS_LOCATION_SAFETY_V5_VERSION = "2026-09-01-v6-yixi-address-canonical-r2";
 var WMS_LOCATION_TARGET_BY_ROW_INVOICE_V5 = {};
 
 function whLocationNormV5_(value) {
@@ -32,11 +34,56 @@ function whYixiLocationAliasV5_(value) {
   return "";
 }
 
+function whYixiExplicitAddressFromNoteV6_(note) {
+  var lines = String(note || "").split(/\r?\n/);
+  for (var i = 0; i < lines.length; i++) {
+    var match = lines[i].match(/^\s*Address\s*:\s*(.+)$/i);
+    if (match && String(match[1] || "").trim()) return String(match[1]).trim();
+  }
+  return "";
+}
+
+function whYixiLocationFromEvidenceV6_(address, store, note) {
+  // Physical address is authoritative. If the ADDRESS column is blank, an
+  // explicit Address: line in NOTE is the next-best address source. Only
+  // when neither proves a known location may LOCATION / STORE decide it.
+  var fromAddress = whYixiLocationAliasV5_(address);
+  if (fromAddress) return fromAddress;
+  var noteAddress = whYixiExplicitAddressFromNoteV6_(note);
+  var fromNoteAddress = whYixiLocationAliasV5_(noteAddress);
+  if (fromNoteAddress) return fromNoteAddress;
+  return whYixiLocationAliasV5_(store);
+}
+
+function whCanonicalYixiStoreV6_(location) {
+  var stores = {
+    "STONESTOWN GALLERIA": "STONESTOWN GALLERIA",
+    "HILLSDALE READYSPACES": "HILLSDALE / READYSPACES",
+    "CHINATOWN": "CHINATOWN",
+    "JAPAN CENTER": "JAPAN CENTER"
+  };
+  return stores[String(location || "")] || "";
+}
+
+function whCanonicalYixiCustomerNameV6_(customer, address, store, note) {
+  var raw = String(customer || "").trim();
+  var customerKey = whLocationNormV5_(raw);
+  if (!/YIXI|FANLOLI/.test(customerKey)) return raw;
+
+  var location = whYixiLocationFromEvidenceV6_(address, store, note);
+  var canonicalByLocation = {
+    "STONESTOWN GALLERIA": "YIXI TRADING (FANLOLI) - GALLERIA (SF)",
+    "HILLSDALE READYSPACES": "YIXI Trading LLC (dba Fanloli) (HILLSDALE READYSPACE)",
+    "CHINATOWN": "YIXI Trading LLC (dba Fanloli) (CHINATOWN)",
+    "JAPAN CENTER": "YIXI Trading LLC (dba Fanloli) (JAPAN CENTER)"
+  };
+  return canonicalByLocation[location] || raw;
+}
+
 function whLocationIdentityV5_(customer, address, store, note) {
   var customerKey = whLocationNormV5_(customer);
-  var combined = [store, address, note].map(whLocationNormV5_).filter(Boolean).join(" | ");
   if (/YIXI|FANLOLI/.test(customerKey)) {
-    var yixi = whYixiLocationAliasV5_(combined);
+    var yixi = whYixiLocationFromEvidenceV6_(address, store, note);
     if (yixi) return "YIXI:" + yixi;
   }
   return whLocationNormV5_(store) || whLocationNormV5_(address) || "";
@@ -65,8 +112,9 @@ function whDedupeKeyV5_(row, map) {
   var pro = map["PRO"] !== undefined ? row[map["PRO"]] : "";
   var invoices = whInvoiceTokensV5_(invoice);
   if (!customer || !shipDate || !invoices.length) return "";
+  var canonicalCustomer = whCanonicalYixiCustomerNameV6_(customer, address, store, note);
   var location = whLocationIdentityV5_(customer, address, store, note);
-  return [whLocationNormV5_(customer), whLocationNormV5_(shipDate), invoices.join("+"), location, whLocationNormV5_(pro)].join("|");
+  return [whLocationNormV5_(canonicalCustomer), whLocationNormV5_(shipDate), invoices.join("+"), location, whLocationNormV5_(pro)].join("|");
 }
 
 function whRowSubsetV5_(sparse, rich) {
@@ -208,17 +256,45 @@ function whBackfillLocationStoreV5_() {
   var changed = 0;
   for (var t = headerIndex + 1; t < targetData.length; t++) {
     var targetRow = targetData[t];
-    if (String(targetRow[targetMap["LOCATION STORE"]] || "").trim()) continue;
-    var invoices = whInvoiceTokensV5_(targetRow[targetMap["INVOICE NO"]]);
-    var destinations = {};
-    invoices.forEach(function (invoiceNo) {
-      var destination = destinationByInvoice[invoiceNo];
-      if (destination) destinations[destination] = true;
-    });
-    var keys = Object.keys(destinations);
-    if (keys.length !== 1) continue;
-    targetSheet.getRange(t + 1, targetMap["LOCATION STORE"] + 1).setValue(keys[0]);
-    changed++;
+    var storeValue = String(targetRow[targetMap["LOCATION STORE"]] || "").trim();
+
+    if (!storeValue) {
+      var invoices = whInvoiceTokensV5_(targetRow[targetMap["INVOICE NO"]]);
+      var destinations = {};
+      invoices.forEach(function (invoiceNo) {
+        var destination = destinationByInvoice[invoiceNo];
+        if (destination) destinations[destination] = true;
+      });
+      var keys = Object.keys(destinations);
+      if (keys.length === 1) {
+        storeValue = keys[0];
+        targetSheet.getRange(t + 1, targetMap["LOCATION STORE"] + 1).setValue(storeValue);
+        targetRow[targetMap["LOCATION STORE"]] = storeValue;
+        changed++;
+      }
+    }
+
+    if (targetMap["CUSTOMER"] !== undefined) {
+      var currentCustomer = String(targetRow[targetMap["CUSTOMER"]] || "").trim();
+      var addressValue = targetMap["ADDRESS"] !== undefined ? String(targetRow[targetMap["ADDRESS"]] || "").trim() : "";
+      var noteValue = targetMap["NOTE"] !== undefined ? String(targetRow[targetMap["NOTE"]] || "").trim() : "";
+      var provenLocation = whYixiLocationFromEvidenceV6_(addressValue, storeValue, noteValue);
+      if (/YIXI|FANLOLI/.test(whLocationNormV5_(currentCustomer)) && provenLocation) {
+        var canonicalStore = whCanonicalYixiStoreV6_(provenLocation);
+        if (canonicalStore && canonicalStore !== storeValue) {
+          targetSheet.getRange(t + 1, targetMap["LOCATION STORE"] + 1).setValue(canonicalStore);
+          storeValue = canonicalStore;
+          targetRow[targetMap["LOCATION STORE"]] = canonicalStore;
+          changed++;
+        }
+      }
+      var canonicalCustomer = whCanonicalYixiCustomerNameV6_(currentCustomer, addressValue, storeValue, noteValue);
+      if (canonicalCustomer && canonicalCustomer !== currentCustomer) {
+        targetSheet.getRange(t + 1, targetMap["CUSTOMER"] + 1).setValue(canonicalCustomer);
+        targetRow[targetMap["CUSTOMER"]] = canonicalCustomer;
+        changed++;
+      }
+    }
   }
   if (changed) SpreadsheetApp.flush();
   return changed;

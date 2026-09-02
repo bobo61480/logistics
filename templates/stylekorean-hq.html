@@ -1,0 +1,574 @@
+<!doctype html>
+<html><head><meta charset="utf8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>:root{color-scheme:light}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}</style></head><body>
+<title>StyleKorean HQ (Copy)</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&amp;family=Inter:wght@400;500&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap">
+<style>
+:root {
+  --bg:          #F7F8FA;
+  --bg2:         #FFFFFF;
+  --text:        #1A1D25;
+  --text2:       #5C6070;
+  --text3:       #8A8FA8;
+  --border:      #E2E5EF;
+  --accent:      #3B6FE8;
+  --accent-soft: #EEF2FD;
+  --green:       #18B87A;
+  --green-soft:  #E6F8F2;
+  --amber:       #E8952A;
+  --amber-soft:  #FEF4E6;
+  --red:         #D93025;
+  --red-soft:    #FDECEA;
+  --shadow:      0 1px 3px rgba(26,29,37,.05), 0 4px 16px rgba(26,29,37,.04);
+  --font-ui:     'Outfit', system-ui, sans-serif;
+  --font-body:   'Inter', system-ui, sans-serif;
+  --font-mono:   'IBM Plex Mono', monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:          #111318;
+    --bg2:         #1A1E2A;
+    --text:        #E6E8F0;
+    --text2:       #9098B2;
+    --text3:       #555D78;
+    --border:      #272C3E;
+    --accent:      #6090FF;
+    --accent-soft: #182040;
+    --green:       #26D48A;
+    --green-soft:  #0B2219;
+    --amber:       #F5A83A;
+    --amber-soft:  #261A07;
+    --red:         #FF6B60;
+    --red-soft:    #2A0E0C;
+    --shadow:      0 1px 3px rgba(0,0,0,.25), 0 4px 16px rgba(0,0,0,.18);
+  }
+}
+:root[data-theme="dark"] {
+  --bg:          #111318;
+  --bg2:         #1A1E2A;
+  --text:        #E6E8F0;
+  --text2:       #9098B2;
+  --text3:       #555D78;
+  --border:      #272C3E;
+  --accent:      #6090FF;
+  --accent-soft: #182040;
+  --green:       #26D48A;
+  --green-soft:  #0B2219;
+  --amber:       #F5A83A;
+  --amber-soft:  #261A07;
+  --red:         #FF6B60;
+  --red-soft:    #2A0E0C;
+  --shadow:      0 1px 3px rgba(0,0,0,.25), 0 4px 16px rgba(0,0,0,.18);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: var(--font-body); background: var(--bg); color: var(--text); min-height: 100vh; -webkit-font-smoothing: antialiased; }
+
+/* ── Header ── */
+.hdr {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 28px; background: var(--bg2); border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 20;
+}
+.hdr-left { display: flex; align-items: baseline; gap: 14px; }
+.logo { font-family: var(--font-ui); font-size: 17px; font-weight: 700; color: var(--text); letter-spacing: -0.4px; }
+.logo em { color: var(--accent); font-style: normal; }
+.hdr-date { font-family: var(--font-mono); font-size: 11px; color: var(--text3); letter-spacing: 0.03em; }
+.hdr-right { display: flex; align-items: center; gap: 14px; }
+.clock { font-family: var(--font-mono); font-size: 13px; font-weight: 500; color: var(--text2); letter-spacing: 0.06em; font-variant-numeric: tabular-nums; }
+.btn { display: flex; align-items: center; gap: 5px; font-family: var(--font-ui); font-size: 12px; font-weight: 500; color: var(--text2); background: none; border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; cursor: pointer; transition: color .12s, border-color .12s, background .12s; }
+.btn:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ── Pipeline alert ── */
+.pipeline-alert {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 12px 28px; background: var(--red-soft);
+  border-bottom: 1px solid color-mix(in srgb, var(--red) 25%, transparent);
+}
+.pipeline-alert .icon { font-size: 15px; flex-shrink: 0; margin-top: 1px; }
+.pipeline-alert .body { flex: 1; min-width: 0; }
+.pipeline-alert .title { font-family: var(--font-ui); font-size: 13px; font-weight: 600; color: var(--red); margin-bottom: 2px; }
+.pipeline-alert .desc { font-size: 12px; color: var(--text2); line-height: 1.5; }
+.pipeline-alert .fix { font-family: var(--font-mono); font-size: 11px; color: var(--text3); margin-top: 3px; }
+.pipeline-alert .count { font-family: var(--font-mono); font-size: 11px; color: var(--red); font-weight: 500; white-space: nowrap; flex-shrink: 0; padding-top: 2px; }
+
+/* ── KPI strip ── */
+.kpi-strip {
+  display: grid; grid-template-columns: repeat(5, 1fr);
+  gap: 12px; padding: 18px 28px; background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+}
+@media (max-width: 900px) { .kpi-strip { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 600px) { .kpi-strip { grid-template-columns: repeat(2, 1fr); } }
+
+.kpi {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 12px 14px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--bg);
+}
+.kpi.warn { background: var(--amber-soft); border-color: color-mix(in srgb, var(--amber) 30%, transparent); }
+.kpi.crit { background: var(--red-soft); border-color: color-mix(in srgb, var(--red) 25%, transparent); }
+.kpi.good { background: var(--green-soft); border-color: color-mix(in srgb, var(--green) 25%, transparent); }
+
+.kpi-label { font-family: var(--font-ui); font-size: 10.5px; font-weight: 500; color: var(--text3); letter-spacing: 0.04em; text-transform: uppercase; }
+.kpi.warn .kpi-label { color: var(--amber); }
+.kpi.crit .kpi-label { color: var(--red); }
+.kpi.good .kpi-label { color: var(--green); }
+
+.kpi-value { font-family: var(--font-mono); font-size: 22px; font-weight: 500; color: var(--text); letter-spacing: -0.5px; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.kpi.warn .kpi-value { color: var(--amber); }
+.kpi.crit .kpi-value { color: var(--red); }
+.kpi.good .kpi-value { color: var(--green); }
+
+.kpi-sub { font-family: var(--font-ui); font-size: 11px; color: var(--text3); }
+
+/* ── Main grid ── */
+.grid {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 18px; padding: 20px 28px; max-width: 1440px; margin: 0 auto;
+}
+@media (max-width: 1000px) { .grid { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 650px) { .grid { grid-template-columns: 1fr; padding: 14px; gap: 14px; } .hdr { padding: 12px 16px; } .kpi-strip { padding: 14px 16px; } .pipeline-alert { padding: 12px 16px; } }
+
+/* ── Panel ── */
+.panel {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: 12px; overflow: hidden; box-shadow: var(--shadow);
+  display: flex; flex-direction: column; height: 460px;
+}
+.panel-hdr {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 13px 18px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.panel-title-row { display: flex; align-items: center; gap: 9px; }
+.panel-icon { width: 28px; height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.icon-gmail  { background: var(--red-soft);   color: var(--red); }
+.icon-inb    { background: var(--accent-soft); color: var(--accent); }
+.icon-inv    { background: var(--amber-soft);  color: var(--amber); }
+.panel-title { font-family: var(--font-ui); font-size: 14px; font-weight: 600; letter-spacing: -0.2px; color: var(--text); }
+.panel-meta  { display: flex; align-items: center; gap: 7px; }
+.badge { font-family: var(--font-mono); font-size: 10px; font-weight: 500; padding: 2px 7px; border-radius: 20px; letter-spacing: 0.02em; font-variant-numeric: tabular-nums; display: none; }
+.badge-red  { background: var(--red-soft);   color: var(--red); }
+.badge-blue { background: var(--accent-soft); color: var(--accent); }
+.badge-amb  { background: var(--amber-soft);  color: var(--amber); }
+.snap-label { font-family: var(--font-mono); font-size: 10px; color: var(--text3); letter-spacing: 0.02em; white-space: nowrap; }
+
+/* bars */
+.bar { display: none; align-items: center; gap: 6px; padding: 5px 18px; font-family: var(--font-ui); font-size: 11px; flex-shrink: 0; }
+.bar.stale { background: var(--amber-soft); color: var(--amber); }
+.bar.err   { background: var(--red-soft);   color: var(--red); }
+.bar.show  { display: flex; }
+
+/* panel body */
+.panel-body { flex: 1; overflow-y: auto; overflow-x: hidden; }
+
+/* empty */
+.empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 10px; padding: 40px; text-align: center; }
+.empty-icon { width: 36px; height: 36px; opacity: .18; }
+.empty-title { font-family: var(--font-ui); font-size: 14px; font-weight: 500; color: var(--text2); }
+.empty-sub { font-size: 12px; color: var(--text3); line-height: 1.55; max-width: 220px; }
+.spinner { width: 22px; height: 22px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .75s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; opacity: .4; } }
+
+/* ── Thread list ── */
+.thread-list { list-style: none; }
+.thread-item { display: flex; align-items: flex-start; gap: 10px; padding: 10px 18px; border-bottom: 1px solid var(--border); transition: background .1s; }
+.thread-item:last-child { border-bottom: none; }
+.thread-item:hover { background: var(--bg); }
+.t-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; margin-top: 5px; background: var(--accent); }
+.t-dot.read { background: transparent; border: 1.5px solid var(--border); }
+.t-info { flex: 1; min-width: 0; }
+.t-sender  { font-family: var(--font-ui); font-size: 12.5px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 1px; }
+.t-subject { font-size: 12px; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 1px; }
+.t-snippet { font-size: 11px; color: var(--text3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.t-time    { font-family: var(--font-mono); font-size: 10px; color: var(--text3); flex-shrink: 0; margin-top: 1px; font-variant-numeric: tabular-nums; }
+
+/* ── Inbound list ── */
+.inbound-list { list-style: none; }
+.inb-item { display: flex; align-items: center; gap: 10px; padding: 10px 18px; border-bottom: 1px solid var(--border); }
+.inb-item:last-child { border-bottom: none; }
+.inb-item:hover { background: var(--bg); }
+.inb-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.dot-sched { background: var(--accent); }
+.dot-transit { background: var(--amber); }
+.dot-del { background: var(--green); }
+.inb-info { flex: 1; min-width: 0; }
+.inb-po { font-family: var(--font-ui); font-size: 12.5px; font-weight: 600; color: var(--text); margin-bottom: 1px; }
+.inb-meta { font-size: 11px; color: var(--text3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inb-right { text-align: right; flex-shrink: 0; }
+.inb-eta { font-family: var(--font-mono); font-size: 11px; color: var(--text2); font-variant-numeric: tabular-nums; }
+.inb-carrier { font-family: var(--font-ui); font-size: 10px; color: var(--text3); margin-top: 1px; }
+
+/* ── Inventory list ── */
+.inv-list { list-style: none; }
+.inv-item { display: flex; align-items: center; gap: 10px; padding: 9px 18px; border-bottom: 1px solid var(--border); }
+.inv-item:last-child { border-bottom: none; }
+.inv-item:hover { background: var(--bg); }
+.inv-sev {
+  width: 28px; height: 28px; border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-mono); font-size: 9px; font-weight: 700;
+  flex-shrink: 0; letter-spacing: 0.02em;
+}
+.sev-crit { background: var(--red-soft); color: var(--red); }
+.sev-low  { background: var(--amber-soft); color: var(--amber); }
+.sev-inb  { background: var(--accent-soft); color: var(--accent); }
+.inv-info { flex: 1; min-width: 0; }
+.inv-name { font-family: var(--font-ui); font-size: 12px; font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 1px; }
+.inv-sku  { font-family: var(--font-mono); font-size: 10px; color: var(--text3); }
+.inv-qty  { text-align: right; flex-shrink: 0; }
+.inv-avail { font-family: var(--font-mono); font-size: 13px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.qty-crit { color: var(--red); }
+.qty-low  { color: var(--amber); }
+.qty-inb  { color: var(--accent); }
+.inv-inbound { font-family: var(--font-ui); font-size: 10px; color: var(--text3); margin-top: 1px; white-space: nowrap; }
+</style>
+
+<!-- Header -->
+<header class="hdr">
+  <div class="hdr-left">
+    <div class="logo">Style<em>Korean</em> HQ</div>
+    <div class="hdr-date" id="hdr-date">Mon, Aug 31, 2026</div>
+  </div>
+  <div class="hdr-right">
+    <div class="clock" id="clock">19:25:55</div>
+    <button class="btn" onclick="forceRefresh()">
+      <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M10.5 2A5 5 0 0 0 1.5 6M1.5 10A5 5 0 0 0 10.5 6"></path>
+        <path d="M10.5 2v2.5h-2.5M1.5 10v-2.5h2.5"></path>
+      </svg>
+      Refresh
+    </button>
+  </div>
+</header>
+
+<!-- Pipeline alert -->
+<div class="pipeline-alert">
+  <div class="icon">🔴</div>
+  <div class="body">
+    <div class="title">Gmail Automation Pipeline — Down since Aug 26</div>
+    <div class="desc">OAuth refresh token is missing. The pipeline has failed 1,008+ times and is ingesting no email data.</div>
+    <div class="fix">Fix: Re-run OAuth flow in Apps Script → Script Properties → store new refresh_token</div>
+  </div>
+  <div class="count">1,008 errors</div>
+</div>
+
+<!-- KPI strip -->
+<div class="kpi-strip">
+  <div class="kpi good">
+    <div class="kpi-label">YTD Revenue</div>
+    <div class="kpi-value">$14.5M</div>
+    <div class="kpi-sub">$14,508,334 outbound</div>
+  </div>
+  <div class="kpi">
+    <div class="kpi-label">MTD Revenue</div>
+    <div class="kpi-value">$2.0M</div>
+    <div class="kpi-sub">$2,034,342 this month</div>
+  </div>
+  <div class="kpi">
+    <div class="kpi-label">Units Available</div>
+    <div class="kpi-value">214K</div>
+    <div class="kpi-sub">217,520 on hand · 100,992 inbound</div>
+  </div>
+  <div class="kpi warn">
+    <div class="kpi-label">Low Stock SKUs</div>
+    <div class="kpi-value">61</div>
+    <div class="kpi-sub">of 164 tracked SKUs</div>
+  </div>
+  <div class="kpi">
+    <div class="kpi-label">Outbound Pending</div>
+    <div class="kpi-value">39</div>
+    <div class="kpi-sub">78 delivered · 2 scheduled</div>
+  </div>
+</div>
+
+<!-- Panels -->
+<main class="grid">
+
+  <!-- Gmail -->
+  <section class="panel">
+    <div class="panel-hdr">
+      <div class="panel-title-row">
+        <div class="panel-icon icon-gmail">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4-8 5-8-5V6l8 5 8-5v2z"></path></svg>
+        </div>
+        <div class="panel-title">Inbox</div>
+      </div>
+      <div class="panel-meta">
+        <span class="badge badge-red" id="gmail-badge">8 unread</span>
+        <span class="snap-label" id="gmail-upd">live</span>
+      </div>
+    </div>
+    <div class="bar stale" id="gmail-stale">Refreshing…</div>
+    <div class="bar err" id="gmail-err"></div>
+    <div class="panel-body" id="gmail-body"><ul class="thread-list"><li class="thread-item"><div class="t-dot read"></div><div class="t-info"><div class="t-sender">Ups</div><div class="t-subject">UPS: Your Delivery Is Coming on a Different Date</div><div class="t-snippet">UPS Hi Alex Kim, Your CURRENT RESIDENT delivery has been rescheduled. Reference Number: 4035341933841191857 Rescheduled Delivery Tuesday 09/01/2026 9:15 AM - 12:15 PM See Your Shipments › Change</div></div><div class="t-time">5h ago</div></li><li class="thread-item"><div class="t-dot"></div><div class="t-info"><div class="t-sender">Siliconii</div><div class="t-subject">[US] MBX Air 직발송 물량 출고 공유의 건_26.09.01</div><div class="t-snippet">안녕하세요, 매니저님. 실리콘투 US팀 김훈입니다. 요청하신 MBX Air 직발송 물량 출고 되었다고 합니다. 인보이스 참고 부탁드립니다. 감사합니다. 김훈 드림 SILICON2 CO., LTD Global Retail US / 글로벌 리테일 US팀 Ian / 김훈 M : +82-10-9295-3773 Website : www.stylekorean.com #</div></div><div class="t-time">21m ago</div></li><li class="thread-item"><div class="t-dot"></div><div class="t-info"><div class="t-sender">Mail</div><div class="t-subject">Security alert: new trusted device added to your Claude account</div><div class="t-snippet">A new trusted device was added to your Claude account If this was you, no action is needed. If you don&amp;#39;t recognize this activity, review your devices and secure your account now. Device Chrome on</div></div><div class="t-time">24m ago</div></li><li class="thread-item"><div class="t-dot read"></div><div class="t-info"><div class="t-sender">Xpo</div><div class="t-subject">Shipment Progress for Pro 08120718885 - Arrived at interim</div><div class="t-snippet">Status: Arrived at interim Shipment: 812-718885 Status: Arrived at interim (LJS of LFW) RICHLAND, MS Service Center information at: RICHLAND, MS Status Date: 08/28/2026 Possible Delay Notification:</div></div><div class="t-time">9h ago</div></li><li class="thread-item"><div class="t-dot"></div><div class="t-info"><div class="t-sender">Ups</div><div class="t-subject">Your Packages Have Shipped</div><div class="t-snippet">UPS Hi Alex Kim, You have 2 packages on the way! Estimated Delivery Friday 09/04/2026 From CURRENT RESIDENT Reference Number: 4035342808436674948 1ZR08J349007331089 9:15 AM - 12:15 PM From CURRENT</div></div><div class="t-time">55m ago</div></li><li class="thread-item"><div class="t-dot"></div><div class="t-info"><div class="t-sender">Linkedin</div><div class="t-subject">Logistics Manager insights: $120K/yr+ salary at 596 job openings</div><div class="t-snippet">Hiring and salary trends for your role Logistics Manager ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏ ͏</div></div><div class="t-time">1h ago</div></li><li class="thread-item"><div class="t-dot read"></div><div class="t-info"><div class="t-sender">Ups</div><div class="t-subject">Your Packages Have Been Delivered</div><div class="t-snippet">UPS Hi Alex Kim, 9 packages have been delivered. Delivered Monday 08/31/2026 8:28 AM From STYLEKOREAN INC Ship to ULTA JACKSONVILLE 808 Reference Number: 50000230-1095011000 1Z1RW5550395703221 8:28 AM</div></div><div class="t-time">13h ago</div></li><li class="thread-item"><div class="t-dot read"></div><div class="t-info"><div class="t-sender">Stylekoreanus</div><div class="t-subject">PRO# 175196013</div><div class="t-snippet">Good afternoon, Team. For subject shipment, could I get a status update? Recently we have been missing the delivery dates, and by that i mean, quite few days. This was picked up on the 19th, when can</div></div><div class="t-time">5d ago</div></li></ul></div>
+  </section>
+
+  <!-- Inbound Schedule -->
+  <section class="panel">
+    <div class="panel-hdr">
+      <div class="panel-title-row">
+        <div class="panel-icon icon-inb">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M20 8h-3V4H3c-1.1 0-2 .9-2 2v11h2c0 1.66 1.34 3 3 3s3-1.34 3-3h6c0 1.66 1.34 3 3 3s3-1.34 3-3h2v-5l-3-4zM6 18.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm13.5-9 1.96 2.5H17V9.5h2.5zm-1.5 9c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"></path></svg>
+        </div>
+        <div class="panel-title">Inbound Schedule</div>
+      </div>
+      <div class="panel-meta">
+        <span class="badge badge-blue" id="inb-badge" style="display:inline;">10 active</span>
+        <span class="snap-label">Snapshot · Aug 27</span>
+      </div>
+    </div>
+    <div class="panel-body" id="inb-body"><ul class="inbound-list"><li class="inb-item" style="background: var(--green-soft);"><div class="inb-dot dot-del"></div><div class="inb-info"><div class="inb-po" style="color:var(--green)">70 Shipments Delivered</div><div class="inb-meta">80 total inbound — all past ETAs cleared</div></div></li><li class="inb-item"><div class="inb-dot dot-sched"></div><div class="inb-info"><div class="inb-po">IN00395028</div><div class="inb-meta">TW Vendors</div></div><div class="inb-right"><div class="inb-eta">Dec 28</div><div class="inb-carrier">HMM</div></div></li><li class="inb-item"><div class="inb-dot dot-sched"></div><div class="inb-info"><div class="inb-po">IN00395520</div><div class="inb-meta">TW Vendors</div></div><div class="inb-right"><div class="inb-eta">Dec 28</div><div class="inb-carrier">HMM</div></div></li><li class="inb-item"><div class="inb-dot dot-sched"></div><div class="inb-info"><div class="inb-po">IN00395537</div><div class="inb-meta">TW Vendors</div></div><div class="inb-right"><div class="inb-eta">Dec 28</div><div class="inb-carrier">SM Line</div></div></li><li class="inb-item"><div class="inb-dot dot-sched"></div><div class="inb-info"><div class="inb-po">IN00397394</div><div class="inb-meta">HJ Vendors</div></div><div class="inb-right"><div class="inb-eta">Dec 28</div><div class="inb-carrier">SM Line</div></div></li><li class="inb-item"><div class="inb-dot dot-sched"></div><div class="inb-info"><div class="inb-po">IN00397396</div><div class="inb-meta">HJ Vendors</div></div><div class="inb-right"><div class="inb-eta">Dec 28</div><div class="inb-carrier">HMM</div></div></li><li class="inb-item"><div class="inb-dot dot-sched"></div><div class="inb-info"><div class="inb-po">UNIX</div><div class="inb-meta">UNIX</div></div><div class="inb-right"><div class="inb-eta">Dec 28</div><div class="inb-carrier">SM Line</div></div></li></ul></div>
+  </section>
+
+  <!-- Inventory Alerts -->
+  <section class="panel">
+    <div class="panel-hdr">
+      <div class="panel-title-row">
+        <div class="panel-icon icon-inv">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"></path></svg>
+        </div>
+        <div class="panel-title">Inventory Alerts</div>
+      </div>
+      <div class="panel-meta">
+        <span class="badge badge-amb" style="display:inline;">61 low stock</span>
+        <span class="snap-label">Snapshot · Aug 27</span>
+      </div>
+    </div>
+    <div class="panel-body" id="inv-body"><ul class="inv-list"><li class="inv-item">
+      <div class="inv-sev sev-crit">CRIT</div>
+      <div class="inv-info">
+        <div class="inv-name">Licorice Serum 30ml</div>
+        <div class="inv-sku">ACS01-SLR · ACWELL</div>
+      </div>
+      <div class="inv-qty">
+        <div class="inv-avail qty-crit">-120</div>
+        
+      </div></li><li class="inv-item">
+      <div class="inv-sev sev-low">LOW</div>
+      <div class="inv-info">
+        <div class="inv-name">Glasting Water Gloss 01</div>
+        <div class="inv-sku">A-RNCM17-LWG01 · rom&amp;nd</div>
+      </div>
+      <div class="inv-qty">
+        <div class="inv-avail qty-low">1</div>
+        
+      </div></li><li class="inv-item">
+      <div class="inv-sev sev-low">LOW</div>
+      <div class="inv-info">
+        <div class="inv-name">Signature Essence Pact 17N</div>
+        <div class="inv-sku">AGE20M01-EP17N · age20</div>
+      </div>
+      <div class="inv-qty">
+        <div class="inv-avail qty-low">1</div>
+        
+      </div></li><li class="inv-item">
+      <div class="inv-sev sev-inb">INB</div>
+      <div class="inv-info">
+        <div class="inv-name">Heartleaf Pore Clay Pack 100ml</div>
+        <div class="inv-sku">ANP01-PKPR · ANUA</div>
+      </div>
+      <div class="inv-qty">
+        <div class="inv-avail qty-inb">0</div>
+        <div class="inv-inbound">+2,240 inbound</div>
+      </div></li><li class="inv-item">
+      <div class="inv-sev sev-inb">INB</div>
+      <div class="inv-info">
+        <div class="inv-name">Niacinamide TXA Serum Mask 28ml</div>
+        <div class="inv-sku">ANP10-MW · ANUA</div>
+      </div>
+      <div class="inv-qty">
+        <div class="inv-avail qty-inb">0</div>
+        <div class="inv-inbound">+10,080 inbound</div>
+      </div></li><li class="inv-item">
+      <div class="inv-sev sev-inb">INB</div>
+      <div class="inv-info">
+        <div class="inv-name">Azelaic Acid Redness Serum Mask</div>
+        <div class="inv-sku">ANP10-MAW · ANUA</div>
+      </div>
+      <div class="inv-qty">
+        <div class="inv-avail qty-inb">0</div>
+        <div class="inv-inbound">+10,080 inbound</div>
+      </div></li><li class="inv-item">
+      <div class="inv-sev sev-inb">INB</div>
+      <div class="inv-info">
+        <div class="inv-name">Retinol Niacin Night Care Mask</div>
+        <div class="inv-sku">ANP10-MRW · ANUA</div>
+      </div>
+      <div class="inv-qty">
+        <div class="inv-avail qty-inb">0</div>
+        <div class="inv-inbound">+10,080 inbound</div>
+      </div></li><li class="inv-item">
+      <div class="inv-sev sev-inb">INB</div>
+      <div class="inv-info">
+        <div class="inv-name">Rice 70 Moisturizing Milk Mask</div>
+        <div class="inv-sku">ANP11-MW · ANUA</div>
+      </div>
+      <div class="inv-qty">
+        <div class="inv-avail qty-inb">0</div>
+        <div class="inv-inbound">+6,000 inbound</div>
+      </div></li><li class="inv-item">
+      <div class="inv-sev sev-inb">INB</div>
+      <div class="inv-info">
+        <div class="inv-name">8 Hyaluronic Acid Cool Slim Mask</div>
+        <div class="inv-sku">ANP12-MW · ANUA</div>
+      </div>
+      <div class="inv-qty">
+        <div class="inv-avail qty-inb">0</div>
+        <div class="inv-inbound">+10,080 inbound</div>
+      </div></li><li class="inv-item">
+      <div class="inv-sev sev-inb">INB</div>
+      <div class="inv-info">
+        <div class="inv-name">Signature Essence Pact Intense 21N</div>
+        <div class="inv-sku">AGE20M04-CU21N · age20</div>
+      </div>
+      <div class="inv-qty">
+        <div class="inv-avail qty-inb">0</div>
+        <div class="inv-inbound">+504 inbound</div>
+      </div></li></ul></div>
+  </section>
+
+</main>
+
+<script>
+// ── Clock ─────────────────────────────────────────────────────
+function tick() {
+  const now = new Date();
+  document.getElementById('clock').textContent = now.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+  document.getElementById('hdr-date').textContent = now.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',year:'numeric'});
+}
+setInterval(tick,1000); tick();
+
+// ── Helpers ───────────────────────────────────────────────────
+function esc(s){ return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function relTime(d){ const m=Math.floor((Date.now()-d)/60000); if(m<1)return 'just now'; if(m<60)return m+'m ago'; const h=Math.floor(m/60); if(h<24)return h+'h ago'; return Math.floor(h/24)+'d ago'; }
+function updLabel(s){ return s?'updated '+relTime(new Date(s)):'live'; }
+function senderName(r){ const m=r.match(/^"?([^"<@\n]+)"?\s*</); if(m)return m[1].trim(); const d=r.match(/@([^.]+)\./); return d?d[1].charAt(0).toUpperCase()+d[1].slice(1):r; }
+function isAuthz(c){ return ['needs_reauth','server_not_connected','blocked_by_policy','approval_required','selection_required'].includes(c); }
+function errCopy(e){ const s=e.server||'connector'; if(e.code==='needs_reauth')return`Reconnect ${s} in claude.ai Settings → Connectors`; if(e.code==='server_not_connected')return`Add ${s} in claude.ai Settings → Connectors`; return e.message||'Connector error'; }
+
+// ── Gmail render ──────────────────────────────────────────────
+function renderGmail(payload){
+  const threads=payload?.threads||[], count=payload?.resultCountEstimate;
+  const badge=document.getElementById('gmail-badge');
+  if(count){badge.textContent=count+' unread';badge.style.display='';}
+  if(!threads.length){
+    document.getElementById('gmail-body').innerHTML='<div class="empty"><div class="empty-title">Inbox zero</div></div>';
+    return;
+  }
+  const ul=document.createElement('ul'); ul.className='thread-list';
+  threads.forEach(th=>{
+    const msg=th.messages?.[0]; if(!msg)return;
+    const unread=msg.labelIds?.includes('UNREAD');
+    const li=document.createElement('li'); li.className='thread-item';
+    li.innerHTML=`<div class="t-dot${unread?'':' read'}"></div><div class="t-info"><div class="t-sender">${esc(senderName(msg.sender||''))}</div><div class="t-subject">${esc(msg.subject||'(no subject)')}</div><div class="t-snippet">${esc((msg.snippet||'').replace(/\s+/g,' ').trim())}</div></div><div class="t-time">${relTime(new Date(msg.date))}</div>`;
+    ul.appendChild(li);
+  });
+  document.getElementById('gmail-body').replaceChildren(ul);
+}
+
+// ── Inbound render (baked data) ───────────────────────────────
+const INBOUND = [
+  {po:'IN00395028', vendor:'TW Vendors', carrier:'HMM',     eta:'2026-12-29', status:'Scheduled'},
+  {po:'IN00395520', vendor:'TW Vendors', carrier:'HMM',     eta:'2026-12-29', status:'Scheduled'},
+  {po:'IN00395537', vendor:'TW Vendors', carrier:'SM Line', eta:'2026-12-29', status:'Scheduled'},
+  {po:'IN00397394', vendor:'HJ Vendors', carrier:'SM Line', eta:'2026-12-29', status:'Scheduled'},
+  {po:'IN00397396', vendor:'HJ Vendors', carrier:'HMM',     eta:'2026-12-29', status:'Scheduled'},
+  {po:'UNIX',       vendor:'UNIX',       carrier:'SM Line', eta:'2026-12-29', status:'Scheduled'},
+];
+function renderInbound(){
+  const ul=document.createElement('ul'); ul.className='inbound-list';
+  // Show summary row for delivered first
+  const hdr=document.createElement('li'); hdr.className='inb-item'; hdr.style.cssText='background:var(--green-soft);';
+  hdr.innerHTML=`<div class="inb-dot dot-del"></div><div class="inb-info"><div class="inb-po" style="color:var(--green)">70 Shipments Delivered</div><div class="inb-meta">80 total inbound — all past ETAs cleared</div></div>`;
+  ul.appendChild(hdr);
+  INBOUND.forEach(s=>{
+    const li=document.createElement('li'); li.className='inb-item';
+    const eta=new Date(s.eta);
+    li.innerHTML=`<div class="inb-dot dot-sched"></div><div class="inb-info"><div class="inb-po">${esc(s.po)}</div><div class="inb-meta">${esc(s.vendor)}</div></div><div class="inb-right"><div class="inb-eta">${eta.toLocaleDateString('en-US',{month:'short',day:'numeric'})}</div><div class="inb-carrier">${esc(s.carrier)}</div></div>`;
+    ul.appendChild(li);
+  });
+  document.getElementById('inb-body').replaceChildren(ul);
+}
+
+// ── Inventory render (baked data) ─────────────────────────────
+const INVENTORY = [
+  {sku:'ACS01-SLR',    name:'Licorice Serum 30ml',               brand:'ACWELL', avail:-120, inbound:0,     sev:'crit'},
+  {sku:'A-RNCM17-LWG01',name:'Glasting Water Gloss 01',          brand:"rom&nd", avail:1,    inbound:0,     sev:'low'},
+  {sku:'AGE20M01-EP17N',name:'Signature Essence Pact 17N',        brand:'age20',  avail:1,    inbound:0,     sev:'low'},
+  {sku:'ANP01-PKPR',   name:'Heartleaf Pore Clay Pack 100ml',     brand:'ANUA',   avail:0,    inbound:2240,  sev:'inb'},
+  {sku:'ANP10-MW',     name:'Niacinamide TXA Serum Mask 28ml',    brand:'ANUA',   avail:0,    inbound:10080, sev:'inb'},
+  {sku:'ANP10-MAW',    name:'Azelaic Acid Redness Serum Mask',    brand:'ANUA',   avail:0,    inbound:10080, sev:'inb'},
+  {sku:'ANP10-MRW',    name:'Retinol Niacin Night Care Mask',     brand:'ANUA',   avail:0,    inbound:10080, sev:'inb'},
+  {sku:'ANP11-MW',     name:'Rice 70 Moisturizing Milk Mask',     brand:'ANUA',   avail:0,    inbound:6000,  sev:'inb'},
+  {sku:'ANP12-MW',     name:'8 Hyaluronic Acid Cool Slim Mask',   brand:'ANUA',   avail:0,    inbound:10080, sev:'inb'},
+  {sku:'AGE20M04-CU21N',name:'Signature Essence Pact Intense 21N',brand:'age20',  avail:0,    inbound:504,   sev:'inb'},
+];
+function renderInventory(){
+  const ul=document.createElement('ul'); ul.className='inv-list';
+  INVENTORY.forEach(item=>{
+    const li=document.createElement('li'); li.className='inv-item';
+    const sevLabel = item.sev==='crit'?'CRIT': item.sev==='low'?'LOW':'INB';
+    const sevCls   = 'sev-'+item.sev;
+    const qtyCls   = 'qty-'+item.sev;
+    const availStr = item.avail < 0 ? item.avail.toString() : item.avail === 0 ? '0' : item.avail.toString();
+    li.innerHTML=`
+      <div class="inv-sev ${sevCls}">${sevLabel}</div>
+      <div class="inv-info">
+        <div class="inv-name">${esc(item.name)}</div>
+        <div class="inv-sku">${esc(item.sku)} · ${esc(item.brand)}</div>
+      </div>
+      <div class="inv-qty">
+        <div class="inv-avail ${qtyCls}">${esc(availStr)}</div>
+        ${item.inbound>0?`<div class="inv-inbound">+${item.inbound.toLocaleString()} inbound</div>`:''}
+      </div>`;
+    ul.appendChild(li);
+  });
+  document.getElementById('inv-body').replaceChildren(ul);
+}
+
+// ── MCP / Gmail live ──────────────────────────────────────────
+let mcp=null, unsubs=[];
+
+async function startWatchers(){
+  mcp=await claude.use('mcp');
+  if(!mcp){
+    document.getElementById('gmail-body').innerHTML='<div class="empty"><div class="empty-title">MCP unavailable</div><div class="empty-sub">Live connector access not available in this view.</div></div>';
+    return;
+  }
+  unsubs.push(mcp.watchTool('Gmail','search_threads',
+    {query:'is:unread in:inbox',pageSize:8,view:'THREAD_VIEW_MINIMAL'},
+    ev=>{
+      const stale=document.getElementById('gmail-stale'), err=document.getElementById('gmail-err');
+      if(ev.type==='data'){
+        stale.classList.toggle('show',!!ev.result.cache?.revalidating);
+        err.classList.remove('show');
+        document.getElementById('gmail-upd').textContent=updLabel(ev.result.cache?.storedAt);
+        renderGmail(ev.result.payload);
+      } else {
+        stale.classList.remove('show');
+        if(isAuthz(ev.error.code)){ document.getElementById('gmail-body').innerHTML=`<div class="empty"><div class="empty-title">Connection needed</div><div class="empty-sub">${esc(errCopy(ev.error))}</div></div>`; }
+        else if(ev.error.retryable){ err.textContent='Temporary error — will retry'; err.classList.add('show'); }
+        else { err.textContent='⚠ '+errCopy(ev.error); err.classList.add('show'); }
+      }
+    },
+    {refetchInterval:60000,cache:{staleTime:30000,gcTime:300000}}
+  ));
+}
+
+function forceRefresh(){
+  unsubs.forEach(u=>u()); unsubs=[];
+  if(mcp) mcp.invalidate().catch(()=>{});
+  document.getElementById('gmail-body').innerHTML='<div class="empty"><div class="spinner"></div><div class="empty-title">Refreshing…</div></div>';
+  document.getElementById('gmail-upd').textContent='';
+  startWatchers();
+}
+
+// Init
+renderInbound();
+renderInventory();
+startWatchers();
+</script>
+
+</body></html>

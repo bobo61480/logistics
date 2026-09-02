@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { DashboardControlTowerLinks } from "./dashboard-control-tower-links";
 import { ProductionHealth } from "./production-health";
 import { StyleSwitcher } from "./style-switcher";
 import { THEME_BOOT_SCRIPT } from "./theme";
@@ -41,6 +42,7 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
+        <DashboardControlTowerLinks />
         <StyleSwitcher />
         <ProductionHealth />
         {children}

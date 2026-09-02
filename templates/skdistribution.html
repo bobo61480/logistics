@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SK Distribution — Inbound &amp; Outbound Operations</title>
+<style>
+  :root{
+    --paper:#f6f3ec;--paper-2:#efeae0;--ink:#1b1917;--ink-soft:#4b4640;
+    --muted:#8a837a;--rust:#c14a20;--rust-dark:#a03c19;--line:#ddd6ca;
+    --amber-bg:#f6e6c9;--amber-ink:#8a5a12;--green-bg:#d7ecdd;--green-ink:#1f6b40;
+    --blue-bg:#dbe6f2;--blue-ink:#2b5580;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;}
+  body{background:var(--paper);color:var(--ink);font-family:"Helvetica Neue",Arial,sans-serif;line-height:1.5;-webkit-font-smoothing:antialiased;}
+  a{color:inherit;}
+  .wrap{max-width:1180px;margin:0 auto;padding:0 24px;}
+  header.site{position:sticky;top:0;z-index:20;background:rgba(246,243,236,.92);backdrop-filter:saturate(140%) blur(6px);border-bottom:1px solid var(--line);}
+  .bar{display:flex;align-items:center;gap:28px;height:66px;}
+  .logo{display:flex;align-items:center;gap:12px;text-decoration:none;}
+  .logo .mark{font-weight:800;font-size:22px;letter-spacing:1px;border:2px solid var(--ink);padding:2px 6px;line-height:1;}
+  .logo .mark span{color:var(--rust);}
+  .logo .word{font-weight:700;letter-spacing:3px;font-size:13px;text-transform:uppercase;}
+  nav.primary{display:flex;gap:22px;margin-left:8px;}
+  nav.primary a,nav.primary button{background:none;border:0;cursor:pointer;font:inherit;font-size:13px;letter-spacing:.5px;color:var(--ink-soft);text-transform:uppercase;text-decoration:none;padding:6px 0;}
+  nav.primary a:hover,nav.primary button:hover{color:var(--rust);}
+  .ver{margin-left:auto;display:flex;gap:6px;}
+  .share{border:1px solid var(--ink);background:transparent;color:var(--ink);font-size:12px;letter-spacing:.5px;text-transform:uppercase;padding:8px 14px;cursor:pointer;}
+  .eyebrow{text-transform:uppercase;letter-spacing:3px;font-size:12px;color:var(--rust);font-weight:700;margin:44px 0 14px;}
+  h1.hero{font-size:clamp(40px,7vw,86px);line-height:.96;margin:0;font-weight:800;letter-spacing:-1px;text-transform:uppercase;}
+  .lead{max-width:620px;color:var(--ink-soft);font-size:18px;margin:22px 0 26px;}
+  .cta-row{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:36px;}
+  .btn{font:inherit;font-size:13px;letter-spacing:1px;text-transform:uppercase;padding:16px 22px;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:10px;border:1px solid var(--ink);}
+  .btn.solid{background:var(--rust);border-color:var(--rust);color:#fff;font-weight:700;}
+  .btn.solid:hover{background:var(--rust-dark);}
+  .btn.ghost{background:transparent;color:var(--ink);}
+  .btn.ghost:hover{background:var(--paper-2);}
+  .heroimg{height:280px;border-radius:2px;background:linear-gradient(180deg,rgba(27,25,23,.15),rgba(27,25,23,.55)),repeating-linear-gradient(115deg,#5b4636 0 40px,#6b5340 40px 80px);display:flex;align-items:flex-end;padding:22px;color:#f6f3ec;font-size:12px;letter-spacing:2px;text-transform:uppercase;}
+  .kpis{display:grid;grid-template-columns:repeat(5,1fr);border:1px solid var(--line);border-top:0;}
+  .kpi{padding:26px 22px;border-right:1px solid var(--line);text-align:center;}
+  .kpi:last-child{border-right:0;}
+  .kpi .k-label{text-transform:uppercase;letter-spacing:2px;font-size:11px;color:var(--muted);font-weight:700;}
+  .kpi .k-num{font-size:42px;font-weight:800;color:var(--rust);margin:8px 0 4px;line-height:1;}
+  .kpi .k-sub{font-size:12px;color:var(--muted);}
+  .monitor{display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:var(--paper-2);border:1px solid var(--line);border-top:0;padding:16px 22px;font-size:13px;color:var(--ink-soft);}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--green-ink);display:inline-block;}
+  .dot.err{background:var(--rust);}
+  .monitor .pill{margin-left:auto;background:var(--amber-bg);color:var(--amber-ink);padding:4px 10px;border-radius:20px;font-size:12px;font-weight:700;}
+  .board-eyebrow{text-transform:uppercase;letter-spacing:3px;font-size:12px;color:var(--rust);font-weight:700;margin-top:48px;}
+  h2.board{font-size:clamp(30px,5vw,52px);margin:6px 0 10px;font-weight:800;text-transform:uppercase;letter-spacing:-.5px;}
+  .checked{font-size:13px;color:var(--ink-soft);display:flex;align-items:center;gap:8px;}
+  .controls{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:22px 0 14px;}
+  .tabs{display:flex;border:1px solid var(--line);background:#fbf9f4;}
+  .tabs button{font:inherit;background:none;border:0;cursor:pointer;padding:12px 22px;font-size:13px;letter-spacing:1px;color:var(--ink-soft);display:flex;align-items:center;gap:8px;}
+  .tabs button.on{background:#fff;color:var(--ink);font-weight:700;box-shadow:inset 0 -3px 0 var(--rust);}
+  .tabs .count{background:var(--rust);color:#fff;border-radius:20px;font-size:11px;padding:2px 9px;font-weight:700;}
+  .field{flex:1;min-width:240px;}
+  .field input,.controls select{width:100%;font:inherit;font-size:14px;padding:12px 14px;border:1px solid var(--line);background:#fff;color:var(--ink);}
+  .controls select{min-width:170px;width:auto;}
+  .checkline{display:flex;gap:20px;align-items:center;font-size:13px;color:var(--ink-soft);margin-bottom:14px;flex-wrap:wrap;}
+  .checkline label{display:flex;gap:7px;align-items:center;cursor:pointer;}
+  .tablewrap{border:1px solid var(--line);overflow:auto;background:#fff;max-height:70vh;}
+  table{border-collapse:collapse;width:100%;min-width:960px;font-size:13px;}
+  thead th{text-align:left;text-transform:uppercase;letter-spacing:1px;font-size:11px;color:var(--muted);padding:14px 16px;border-bottom:2px solid var(--line);background:var(--paper-2);position:sticky;top:0;white-space:nowrap;z-index:2;}
+  tbody td{padding:13px 16px;border-bottom:1px solid var(--line);vertical-align:top;}
+  tbody tr:hover{background:#faf7f0;}
+  td .primary{font-weight:700;}
+  td .muted{color:var(--muted);font-size:12px;white-space:pre-line;}
+  .track{color:var(--rust);text-decoration:none;font-weight:700;font-size:12px;white-space:nowrap;}
+  .track:hover{text-decoration:underline;}
+  .flag{background:var(--amber-bg);color:var(--amber-ink);border-radius:4px;padding:2px 8px;font-size:11px;font-weight:700;display:inline-block;}
+  .flag.ok{background:var(--green-bg);color:var(--green-ink);}
+  .status{padding:5px 11px;border-radius:20px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;}
+  .status.wip{background:var(--amber-bg);color:var(--amber-ink);}
+  .status.ready,.status.done{background:var(--green-bg);color:var(--green-ink);}
+  .status.booked{background:var(--blue-bg);color:var(--blue-ink);}
+  .status.other{background:var(--paper-2);color:var(--ink-soft);}
+  footer.site{border-top:1px solid var(--line);margin-top:56px;padding:30px 0;color:var(--muted);font-size:12px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;}
+  .loading{padding:50px;text-align:center;color:var(--muted);}
+  @media(max-width:900px){.kpis{grid-template-columns:1fr 1fr;}.kpi{border-bottom:1px solid var(--line);}nav.primary,.ver{display:none;}}
+</style>
+</head>
+<body>
+<header class="site">
+  <div class="wrap bar">
+    <a class="logo" href="#top"><span class="mark">S<span>K</span></span><span class="word">Distribution</span></a>
+    <nav class="primary">
+      <a href="#schedule">Overview</a>
+      <button onclick="setDir('inbound')">Inbound</button>
+      <button onclick="setDir('outbound')">Outbound</button>
+      <a href="#sources">Sources</a>
+    </nav>
+    <div class="ver"></div>
+    <button class="share" onclick="location.reload()">Refresh ↻</button>
+  </div>
+</header>
+
+<main id="top">
+  <div class="wrap">
+    <p class="eyebrow">Buena Park · Internal operations board</p>
+    <h1 class="hero">Expected inbound &amp; outbound shipping schedules</h1>
+    <p class="lead">One shared view of arrivals, customer shipments, carrier handoffs, and source-sheet status across the distribution operation.</p>
+    <div class="cta-row">
+      <a class="btn solid" href="#schedule">Open operations board ↓</a>
+      <button class="btn ghost" onclick="refresh()">Refresh sources</button>
+    </div>
+  </div>
+  <div class="wrap"><div class="heroimg">Port · Buena Park warehouse · Customer</div></div>
+
+  <div class="wrap">
+    <div class="kpis">
+      <div class="kpi"><div class="k-label">Expected inbound</div><div class="k-num" id="kpi-in">—</div><div class="k-sub">active shipments</div></div>
+      <div class="kpi"><div class="k-label">Expected outbound</div><div class="k-num" id="kpi-out">—</div><div class="k-sub">active schedules</div></div>
+      <div class="kpi"><div class="k-label">Needs data review</div><div class="k-num" id="kpi-flag">—</div><div class="k-sub">records flagged</div></div>
+      <div class="kpi"><div class="k-label">Live sources</div><div cla
