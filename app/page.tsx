@@ -83,6 +83,12 @@ export type ScheduleItem = {
   pod?: string;
   eta?: string;
   deliveryExpected?: string;
+  // Live CMS enrichment (IMPORTS only): actual arrival + received-vs-invoiced
+  // qty. Present only when the CMS has a matching invoice; each field may be
+  // empty when the CMS access grade masks it. Purely additive to the row.
+  cmsActualArrival?: string;
+  cmsReceivedQty?: number;
+  cmsInvoicedQty?: number;
   isSmallParcel?: boolean;
   shippingMethod?: string;
   sourceType?: string;
@@ -1169,6 +1175,19 @@ async function fetchMonthlyKpis(month: string): Promise<KpiSnapshot> {
   return payload.kpis;
 }
 
+// Live CMS enrichment for the IMPORTS view, keyed by invoice number. Mirrors
+// worker/cms-imports.ts CmsImportRow; actualArrival/receivedQty come back empty
+// when the caller's CMS access grade masks the TB_PNFM columns.
+export type CmsImportRow = {
+  invoiceNo: string;
+  etaDate: string;
+  actualArrival: string;
+  outboundDate: string;
+  carrier: string;
+  invoicedQty: number;
+  receivedQty: number;
+};
+
 type WorkerSnapshot = {
   ok: true;
   generatedAt?: string;
@@ -1189,6 +1208,8 @@ type WorkerSnapshot = {
     gmailIngestion?: GmailIngestionEvent[] | null;
     cmsInventory?: CmsInventoryItem[];
     cmsInventoryConfigured?: boolean;
+    cmsImports?: CmsImportRow[];
+    cmsImportsConfigured?: boolean;
   };
   kpis?: KpiSnapshot | null;
 };
@@ -1335,6 +1356,8 @@ async function fetchOperationalSnapshot() {
       gmailIngestion: sources.gmailIngestion ?? null,
       cmsInventory: sources.cmsInventory ?? [],
       cmsInventoryConfigured: sources.cmsInventoryConfigured ?? false,
+      cmsImports: sources.cmsImports ?? [],
+      cmsImportsConfigured: sources.cmsImportsConfigured ?? false,
       connection: {
         mode: snapshot.stale ? "stale" as const : "worker" as const,
         storage: snapshot.storage,
@@ -1416,8 +1439,18 @@ function importSourceRecords(rows: string[][]): ImportSourceRecord[] {
   });
 }
 
-function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
+function cmsImportsByInvoice(cmsImports: CmsImportRow[]): Map<string, CmsImportRow> {
+  const map = new Map<string, CmsImportRow>();
+  for (const row of cmsImports) {
+    const key = clean(row.invoiceNo).toUpperCase();
+    if (key && !map.has(key)) map.set(key, row);
+  }
+  return map;
+}
+
+function pendingImportItems(importsRows: string[][], cmsImports: CmsImportRow[] = []): ScheduleItem[] {
   const today = startOfToday();
+  const cmsByInvoice = cmsImportsByInvoice(cmsImports);
 
   return importSourceRecords(importsRows).flatMap((record) => {
     const status = normalizeStatus(record.status);
@@ -1445,6 +1478,12 @@ function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
     const trackingNumber = record.container;
     const invoice = correctedInboundInvoice(record.shipmentNo, record.invoice);
     const folderUrl = INBOUND_DOCUMENT_LINKS[record.shipmentNo] ?? importsCellUrl(record.sourceRow, "B");
+
+    // Match live CMS data on any invoice number carried by this row (a row may
+    // list several); the first hit enriches it. No match → no extra fields.
+    const cms = splitValues(invoice)
+      .map((value) => cmsByInvoice.get(clean(value).toUpperCase()))
+      .find(Boolean);
 
     return [{
       id: `pending-import-${record.sourceRow}`,
@@ -1476,6 +1515,9 @@ function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
       pod: /^OSL/i.test(record.shipmentNo) ? "LGB" : "LAX",
       eta,
       deliveryExpected: record.deliveryExpected,
+      cmsActualArrival: cms?.actualArrival || undefined,
+      cmsReceivedQty: cms && cms.receivedQty > 0 ? cms.receivedQty : undefined,
+      cmsInvoicedQty: cms && cms.invoicedQty > 0 ? cms.invoicedQty : undefined,
       isSmallParcel: false,
       // No dedicated carrier column exists in IMPORTS for Air/Ocean freight —
       // vessel is the closest available proxy (ocean vessel names are usually
@@ -2369,6 +2411,18 @@ function ScheduleCard({
               : null}
           </dl>
         )}
+        {item.direction === "inbound" && (item.cmsActualArrival || item.cmsReceivedQty) ? (
+          <p className="cms-enrichment">
+            <span className="cms-enrichment-tag">CMS LIVE</span>
+            {item.cmsActualArrival ? <span>Arrived {item.cmsActualArrival}</span> : null}
+            {item.cmsReceivedQty ? (
+              <span>
+                Received {item.cmsReceivedQty}
+                {item.cmsInvoicedQty ? `/${item.cmsInvoicedQty}` : ""}
+              </span>
+            ) : null}
+          </p>
+        ) : null}
         {secondary ? <p className="secondary">{secondary}</p> : null}
         <div className="card-actions">
           {item.editable ? (
@@ -2851,12 +2905,13 @@ export default function Home() {
         gmailIngestion: nextGmailIngestion,
         cmsInventory: nextCmsInventory,
         cmsInventoryConfigured: nextCmsInventoryConfigured,
+        cmsImports: nextCmsImports,
         connection: nextConnection,
       } = await fetchOperationalSnapshot();
       // Each source row remains its own operational move except same-customer,
       // same-date trucking rows, which consolidateTruckingItems merges into one card.
       setItems(enrichScheduleItemsFromEmail(consolidateTruckingItems([
-        ...pendingImportItems(imports),
+        ...pendingImportItems(imports, nextCmsImports),
         ...inboundParcelItems(imports),
         ...outboundItems(outbound, outboundMeta),
         ...nationalOutboundItems(nationalOutbound),

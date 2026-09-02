@@ -1035,6 +1035,28 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
   white-space: nowrap;
 }
 
+/* Additive live-CMS arrival / received-qty line on inbound import cards. */
+.cms-enrichment {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 6px 0 0;
+  color: var(--accent-transfers);
+  font-size: 10px;
+  line-height: 1.35;
+  font-weight: 600;
+}
+
+.cms-enrichment-tag {
+  padding: 1px 5px;
+  border: 1px solid var(--accent-transfers);
+  border-radius: 4px;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: .04em;
+}
+
 .data-grid {
   display: grid;
   gap: 0;

@@ -16,6 +16,7 @@ import { handleStatusCommand } from "./status-command";
 import { handlePendingReviewCommand } from "./pending-review-command";
 import { handleTrackingCommand } from "./tracking-command";
 import { fetchCmsInventory } from "./cms-inventory";
+import { fetchCmsImports } from "./cms-imports";
 import { fetchCmsSalesKpis } from "./cms-sales-kpis";
 
 const WORKER_VERSION = "2026-09-02-worker-v11-cms-sales-fallback";
@@ -103,9 +104,10 @@ function dedupeOperationalPayload(snapshot: Awaited<ReturnType<typeof fetchOpera
 
 async function buildSnapshotPayload(env: Env): Promise<OperationalSnapshot> {
   const generatedAt = new Date().toISOString();
-  const [raw, cmsInventory, cmsSalesResult] = await Promise.all([
+  const [raw, cmsInventory, cmsImports, cmsSalesResult] = await Promise.all([
     fetchOperationalSources(env.APPS_SCRIPT_WRITE_URL),
     fetchCmsInventory(env),
+    fetchCmsImports(env),
     fetchCmsSalesKpis(env)
       .then((value) => ({ ok: true as const, value }))
       .catch((error) => ({
@@ -114,9 +116,12 @@ async function buildSnapshotPayload(env: Env): Promise<OperationalSnapshot> {
       })),
   ]);
   raw.sourceHealth.push(cmsInventory.health);
+  raw.sourceHealth.push(cmsImports.health);
   const rawSources = raw.sources as Record<string, unknown>;
   rawSources.cmsInventory = cmsInventory.rows;
   rawSources.cmsInventoryConfigured = cmsInventory.configured;
+  rawSources.cmsImports = cmsImports.rows;
+  rawSources.cmsImportsConfigured = cmsImports.configured;
   const snapshot = dedupeOperationalPayload(raw);
   const outboundMeta = snapshot.sources.outboundMeta as { rowCount?: number } | undefined;
   const hasOutboundRows = Number(outboundMeta?.rowCount ?? 0) > 0;
