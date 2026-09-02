@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aggregateCmsImports } from "../app/page";
+import { aggregateCmsImports, resolveImportCmsLookups } from "../app/page";
 import type { CmsImportRow } from "../worker/cms-imports";
 
 function row(partial: Partial<CmsImportRow>): CmsImportRow {
@@ -65,5 +65,30 @@ describe("aggregateCmsImports", () => {
       row({ invoicedQty: 300, receivedQty: 300 }),
     ]);
     expect(agg?.partial).toBe(false);
+  });
+});
+
+describe("resolveImportCmsLookups", () => {
+  const in001 = row({ invoiceNo: "IN001", invoicedQty: 200, receivedQty: 100 });
+  const byInvoice = new Map<string, CmsImportRow>([["IN001", in001]]);
+
+  it("resolves a repeated invoice cell value to a single lookup (no double-count)", () => {
+    const lookups = resolveImportCmsLookups("IN001, IN001", byInvoice);
+    expect(lookups).toEqual([in001]);
+    // Aggregating the deduped lookups must not sum the same record twice.
+    const agg = aggregateCmsImports(lookups);
+    expect(agg).toEqual({ actualArrival: "", invoicedQty: 200, receivedQty: 100, partial: false });
+  });
+
+  it("dedupes case- and whitespace-variant duplicates of the same invoice", () => {
+    const lookups = resolveImportCmsLookups("in001\n IN001 ", byInvoice);
+    expect(lookups).toEqual([in001]);
+    expect(aggregateCmsImports(lookups)?.invoicedQty).toBe(200);
+  });
+
+  it("keeps a distinct unmatched invoice as its own miss slot (still flags partial)", () => {
+    const lookups = resolveImportCmsLookups("IN001, IN999", byInvoice);
+    expect(lookups).toEqual([in001, undefined]);
+    expect(aggregateCmsImports(lookups)?.partial).toBe(true);
   });
 });

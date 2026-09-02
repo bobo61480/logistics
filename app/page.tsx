@@ -1450,6 +1450,22 @@ function cmsImportsByInvoice(cmsImports: CmsImportRow[]): Map<string, CmsImportR
   return map;
 }
 
+// Resolve each DISTINCT invoice an IMPORTS row carries to its CMS record (or a
+// miss). Deduping the normalized keys — not the resolved rows — means a
+// repeated cell value ("IN001, IN001" or mixed case) resolves the same CMS
+// record only once (no double-counting in aggregateCmsImports), while a
+// distinct invoice with no CMS row still contributes its own miss slot so a
+// partial shipment total is still flagged.
+export function resolveImportCmsLookups(
+  invoiceCell: string,
+  cmsByInvoice: Map<string, CmsImportRow>,
+): (CmsImportRow | undefined)[] {
+  const keys = Array.from(
+    new Set(splitValues(invoiceCell).map((value) => clean(value).toUpperCase())),
+  );
+  return keys.map((key) => cmsByInvoice.get(key));
+}
+
 type CmsImportAggregate = {
   actualArrival: string;
   receivedQty: number | null;
@@ -1522,14 +1538,12 @@ function pendingImportItems(importsRows: string[][], cmsImports: CmsImportRow[] 
     const invoice = correctedInboundInvoice(record.shipmentNo, record.invoice);
     const folderUrl = INBOUND_DOCUMENT_LINKS[record.shipmentNo] ?? importsCellUrl(record.sourceRow, "B");
 
-    // Match live CMS data on every invoice the row carries (a row may list
-    // several) and aggregate them into one shipment-level view. No match → no
-    // extra fields.
-    // Pass the raw lookups (including misses) so aggregateCmsImports can flag a
-    // partial total when the row lists an invoice the CMS query didn't return.
-    const cms = aggregateCmsImports(
-      splitValues(invoice).map((value) => cmsByInvoice.get(clean(value).toUpperCase())),
-    );
+    // Match live CMS data on every DISTINCT invoice the row carries (a row may
+    // list several) and aggregate them into one shipment-level view. No match →
+    // no extra fields. Passing the raw lookups (misses included) lets
+    // aggregateCmsImports flag a partial total when the row lists an invoice the
+    // CMS query didn't return; deduping happens inside resolveImportCmsLookups.
+    const cms = aggregateCmsImports(resolveImportCmsLookups(invoice, cmsByInvoice));
 
     return [{
       id: `pending-import-${record.sourceRow}`,

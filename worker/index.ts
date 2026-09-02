@@ -19,7 +19,7 @@ import { fetchCmsInventory } from "./cms-inventory";
 import { fetchCmsImports, reduceCmsImportsToImports } from "./cms-imports";
 import { fetchCmsSalesKpis } from "./cms-sales-kpis";
 
-const WORKER_VERSION = "2026-09-02-worker-v11-cms-sales-fallback";
+const WORKER_VERSION = "2026-09-02-worker-v12-cms-imports";
 const SNAPSHOT_CACHE_URL = "https://stylekorean.internal/api/logistics/snapshot";
 const SNAPSHOT_CACHE_SECONDS = 60;
 const SNAPSHOT_REFRESH_SECONDS = 15 * 60;
