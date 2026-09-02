@@ -7,6 +7,8 @@ const BACKGROUND_REFRESH_AFTER_MS = 5 * 60 * 1000;
 const STALE_AFTER_MS = 20 * 60 * 1000;
 const MAX_LIVE_CACHE_AGE_MS = 2 * 60 * 60 * 1000;
 
+type DatabaseEnv = Env & { DB: D1Database };
+
 type FulfillmentPayload = {
   ok: true;
   jobs: unknown[];
@@ -25,6 +27,10 @@ type LiveCache = {
   updatedAt: string;
   sourceUrl: string;
 };
+
+function hasDatabase(env: Env): env is DatabaseEnv {
+  return "DB" in env;
+}
 
 function withSecurityHeaders(response: Response) {
   const secured = new Response(response.body, response);
@@ -57,6 +63,7 @@ function validatePayload(value: unknown): FulfillmentPayload {
 }
 
 async function readLiveCache(env: Env): Promise<LiveCache | null> {
+  if (!hasDatabase(env)) return null;
   try {
     const row = await env.DB.prepare(`SELECT payload_json, job_count, source_url, updated_at
       FROM fulfillment_live_cache WHERE cache_key = ?`)
@@ -73,6 +80,7 @@ async function readLiveCache(env: Env): Promise<LiveCache | null> {
 }
 
 async function writeLiveCache(env: Env, payload: FulfillmentPayload, sourceUrl: string) {
+  if (!hasDatabase(env)) throw new Error("Fulfillment live cache D1 binding is not configured");
   const updatedAt = new Date().toISOString();
   await env.DB.prepare(`INSERT INTO fulfillment_live_cache
     (cache_key, payload_json, job_count, source_url, updated_at)
