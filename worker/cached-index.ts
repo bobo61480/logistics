@@ -1,4 +1,5 @@
 import baseHandler from "./index";
+import { handleSheetsRead } from "./sheets-api";
 
 const FULFILLMENT_CACHE_KEY = "sales-overview";
 const DEFAULT_FULFILLMENT_GAS_URL =
@@ -195,6 +196,9 @@ async function handleCachedFulfillment(request: Request, env: Env, context: Exec
 export default {
   async fetch(request: Request, env: Env, context: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname === "/api/logistics/sheets") {
+      return handleSheetsRead(request, env);
+    }
     if (url.pathname === "/api/logistics/fulfillment") {
       const cached = await handleCachedFulfillment(request, env, context);
       if (cached) return cached;
