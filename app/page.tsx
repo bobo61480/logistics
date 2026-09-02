@@ -136,30 +136,6 @@ type InventoryCollections = {
   inStock: InventoryItem[];
 };
 
-const EMPTY_KPIS: KpiSnapshot = {
-  shippingMtd: 0,
-  shippingYtd: 0,
-  transfersMtd: 0,
-  transfersYtd: 0,
-  njTransferMtd: 0,
-  njTransferYtd: 0,
-  nationalsSalesMtd: 0,
-  nationalsSalesYtd: 0,
-  wmsSalesMtd: 0,
-  wmsSalesYtd: 0,
-  topCarriers: [],
-  ltlPercent: 0,
-  ftlPercent: 0,
-  truckingMtd: 0,
-  truckingYtd: 0,
-  totalLocal: 0,
-  totalCalifornia: 0,
-  totalOutOfState: 0,
-  totalLocalMtd: 0,
-  totalCaliforniaMtd: 0,
-  totalOutOfStateMtd: 0,
-};
-
 const SOURCE_LEGEND = [
   "Wholesale",
   "Ocean",
@@ -1158,6 +1134,20 @@ function currentMtdMonth() {
   return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
 }
 
+// The YYYY-MM (America/Los_Angeles) an instant falls in. Used to confirm a
+// snapshot's month-to-date KPIs were actually computed in the month being
+// displayed — a snapshot generated last month but served past midnight on the
+// 1st (stale-while-revalidate) otherwise reads as this month's MTD.
+function laMonthOf(date: Date) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(date);
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${value.year}-${value.month}`;
+}
+
 function availableMtdMonths() {
   const [yearText, monthText] = currentMtdMonth().split("-");
   const year = Number(yearText);
@@ -1327,11 +1317,16 @@ async function fetchOperationalSnapshot() {
       outboundMeta: sources.outboundMeta ?? OUTBOUND_SCHEDULE_META,
       nationalOutbound: sources.nationalOutbound ?? { cols: [], rows: [] },
       salesOutbound: sources.salesOutbound ?? { cols: [], rows: [] },
-      // D1 is authoritative for KPIs too. When the Worker could not compute
-      // them (it then ships kpis: null), degrade to empty KPIs rather than
-      // reading Google Sheets directly from the browser — a direct-Sheets read
-      // would bypass D1, which the frontend contract forbids.
-      liveKpis: snapshot.kpis ?? EMPTY_KPIS,
+      // D1 is authoritative for KPIs. When the Worker could not compute them
+      // (it then ships kpis: null) the browser must neither read Google Sheets
+      // directly (forbidden) nor manufacture zeros that read as real totals —
+      // it carries null through so the UI can show an explicit unavailable
+      // state.
+      liveKpis: snapshot.kpis ?? null,
+      // The LA month the snapshot's month-to-date KPIs represent (from when the
+      // Worker computed it), so the UI can tell a fresh current-month snapshot
+      // from one that rolled over a month boundary while being revalidated.
+      kpiMonth: snapshot.generatedAt ? laMonthOf(new Date(snapshot.generatedAt)) : null,
       inventoryDashboardTable: sources.inventoryDashboardTable ?? null,
       skwInboundTable: sources.skwInboundTable ?? null,
       skwStockTable: sources.skwStockTable ?? null,
@@ -2809,7 +2804,14 @@ export default function Home() {
   const [savingId, setSavingId] = useState("");
   const [reviewingKey, setReviewingKey] = useState("");
   const [notice, setNotice] = useState("");
-  const [kpis, setKpis] = useState<KpiSnapshot>(EMPTY_KPIS);
+  // null = KPIs unavailable (Worker shipped none / a past-month projection
+  // failed). The current month and YTD are read from `baseKpis` (the D1
+  // snapshot); only a selected past month is fetched separately.
+  const [kpis, setKpis] = useState<KpiSnapshot | null>(null);
+  const [baseKpis, setBaseKpis] = useState<KpiSnapshot | null>(null);
+  // The LA month the D1 snapshot's MTD KPIs were computed for; the current
+  // month is served from baseKpis only when this still matches.
+  const [baseKpisMonth, setBaseKpisMonth] = useState<string | null>(null);
   const [inboundInventory, setInboundInventory] = useState<InventoryItem[]>([]);
   const [warehouseStock, setWarehouseStock] = useState<InventoryItem[]>([]);
   const [cmsInventory, setCmsInventory] = useState<CmsInventoryItem[]>([]);
@@ -2842,6 +2844,7 @@ export default function Home() {
         nationalOutbound,
         salesOutbound,
         liveKpis,
+        kpiMonth,
         inventoryDashboardTable,
         skwInboundTable,
         skwStockTable,
@@ -2859,7 +2862,10 @@ export default function Home() {
         ...nationalOutboundItems(nationalOutbound),
         ...salesOutboundItems(salesOutbound),
       ]), nextGmailIngestion));
-      setKpis(liveKpis);
+      // Hold the D1 snapshot's KPIs as the authoritative base; the effect below
+      // derives what is displayed (current month / YTD use this base directly).
+      setBaseKpis(liveKpis);
+      setBaseKpisMonth(kpiMonth);
       const dashboardInventory = dashboardInventoryItems(inventoryDashboardTable);
       setInboundInventory(uniqueInventoryItems([
         ...dashboardInventory.inbound,
@@ -2910,7 +2916,19 @@ export default function Home() {
   }, [load]);
 
   useEffect(() => {
-    if (period !== "mtd") return;
+    // YTD is cumulative for the year, so the D1 snapshot's YTD figures stand.
+    if (period === "ytd") {
+      setKpis(baseKpis);
+      return;
+    }
+    // The current month is authoritative from the D1 snapshot — but only when
+    // that snapshot's MTD was actually computed in the current month. A stale
+    // snapshot served across a month boundary carries last month's MTD, so show
+    // the explicit unavailable state rather than mislabel it as this month.
+    if (selectedMtdMonth === currentMtdMonth()) {
+      setKpis(baseKpisMonth === currentMtdMonth() ? baseKpis : null);
+      return;
+    }
     let cancelled = false;
     fetchMonthlyKpis(selectedMtdMonth)
       .then((nextKpis) => {
@@ -2918,13 +2936,15 @@ export default function Home() {
       })
       .catch((monthlyError) => {
         if (!cancelled) {
+          // Show the explicit unavailable state rather than stale or zeroed KPIs.
+          setKpis(null);
           setNotice(monthlyError instanceof Error ? monthlyError.message : "Monthly KPI data is unavailable.");
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [period, selectedMtdMonth]);
+  }, [period, selectedMtdMonth, baseKpis, baseKpisMonth]);
 
   const visibleItems = useMemo(() => {
     const first = days[0].getTime();
@@ -3231,20 +3251,21 @@ export default function Home() {
         </a>
       </div>
 
-      {!error && connection && connection.mode !== "worker" && (
+      {!error && connection && connection.mode === "stale" && (
         <div className="alert warning" role="status">
-          <strong>{connection.mode === "stale" ? "Continuity mode." : "Fallback mode."}</strong>{" "}
-          {connection.mode === "stale"
-            ? "The last verified snapshot is still available while live workbook sources recover."
-            : "The dashboard is reading Google Sheets directly; status writes still require the Worker."}
+          <strong>Continuity mode.</strong>{" "}
+          The last verified D1 snapshot is still being served while the Worker refreshes it from
+          the live sources. No browser action is needed.
           {connection.detail ? ` ${connection.detail}` : ""}
         </div>
       )}
 
       {error && (
         <div className="alert" role="alert">
-          <strong>Schedule unavailable.</strong> {error} Confirm the workbook is link-readable or
-          open it while signed in to your StyleKorean Google account.
+          <strong>Schedule unavailable.</strong> {error} The dashboard reads only the D1-backed
+          Worker snapshot, so this is a Worker or D1 service outage — not a workbook permission
+          issue. It recovers automatically once the Worker responds; if it persists, check the
+          Worker health endpoint.
         </div>
       )}
 
@@ -3298,6 +3319,7 @@ export default function Home() {
             )}
           </div>
         </div>
+        {kpis ? (
         <div className="kpi-grid">
           <article className="kpi-card">
             <span>SHIPPING COSTS</span>
@@ -3356,6 +3378,23 @@ export default function Home() {
             <div><small>OUT OF STATE</small><strong>{money(kpis.totalOutOfStateMtd)}</strong><strong>{money(kpis.totalOutOfState)}</strong></div>
           </article>
         </div>
+        ) : (
+        <div className="kpi-grid kpi-grid-unavailable" role="status">
+          <article className="kpi-card kpi-placeholder-card">
+            <span>KPI TOTALS</span>
+            <div className="kpi-placeholder">
+              <strong>—</strong>
+              <small>
+                {loading
+                  ? "Loading KPIs…"
+                  : period === "mtd" && selectedMtdMonth !== currentMtdMonth()
+                    ? "KPIs unavailable for the selected month."
+                    : "KPIs unavailable — the current D1 snapshot did not include computed totals."}
+              </small>
+            </div>
+          </article>
+        </div>
+        )}
         <details className="kpi-method">
           <summary>Methodology notes</summary>
           <p>

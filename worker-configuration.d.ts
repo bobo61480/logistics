@@ -4,6 +4,7 @@ interface __BaseEnv_Env {
 	STATUS_WRITE_RATE_LIMITER: RateLimit;
 	ASSETS: Fetcher;
 	APPS_SCRIPT_WRITE_URL: "https://script.google.com/macros/s/AKfycbz770kmpwqMTA-h-lzeLARgVnDh_VDjh-70OOKk_yE-iXJTmzAsVXUtln17QTOURO1R/exec";
+	FULFILLMENT_GAS_URL: "https://script.google.com/macros/s/AKfycbykK9DWjem9ORHxfR_mpdZl5DVh-en0D6JpCdIuel305QmfqxoNU_NqSnjkhFk401hI/exec";
 	CMS_MCP_URL: "https://cms.mcp.siliconii.com/mcp/";
 	CMS_GATEWAY_URL: "https://stylekorean-cms-gateway.stylekorean.workers.dev";
 	CMS_MCP_AUTH_TOKEN?: string;

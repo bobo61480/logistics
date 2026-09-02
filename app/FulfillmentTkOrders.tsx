@@ -4,8 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import styles from "./fulfillment-tk-orders.module.css";
 
 const SOURCE_URL = "https://sk-b2b-mobile.github.io/fulfillment/sales.html";
-const DEFAULT_GAS_URL = "https://script.google.com/macros/s/AKfycbykK9DWjem9ORHxfR_mpdZl5DVh-en0D6JpCdIuel305QmfqxoNU_NqSnjkhFk401hI/exec";
-const GAS_URL = process.env.NEXT_PUBLIC_FULFILLMENT_GAS_URL ?? DEFAULT_GAS_URL;
+// D1-only frontend contract: the browser reaches the fulfillment feed only
+// through the same-origin Worker proxy, never Apps Script directly.
+const FULFILLMENT_ENDPOINT = process.env.NEXT_PUBLIC_FULFILLMENT_ENDPOINT ?? "/api/logistics/fulfillment";
 const AUTO_SYNC_MS = 30 * 60 * 1000;
 const METHOD_FILTER_KEY = "fulfillment-orders-method";
 const FINISHED_STATES = ["COMPLETED", "SHIPPED", "DELIVERED", "RECEIVED", "CANCELLED"];
@@ -79,7 +80,7 @@ async function gasGet<T>(params: Record<string, string>): Promise<ApiResult<T>> 
   const timer = window.setTimeout(() => controller.abort(), 25_000);
   try {
     const query = new URLSearchParams({ t: String(Date.now()), ...params });
-    const response = await fetch(`${GAS_URL}?${query.toString()}`, { cache: "no-store", signal: controller.signal });
+    const response = await fetch(`${FULFILLMENT_ENDPOINT}?${query.toString()}`, { cache: "no-store", signal: controller.signal });
     return (await response.json()) as ApiResult<T>;
   } catch (error) {
     return { ok: false, error: error instanceof DOMException && error.name === "AbortError" ? "Request timed out (25s)" : String(error) };
@@ -93,7 +94,7 @@ async function gasPost<T>(op: string, data: unknown): Promise<ApiResult<T>> {
   const timer = window.setTimeout(() => controller.abort(), 25_000);
   try {
     const body = new URLSearchParams({ op, data: JSON.stringify(data) });
-    const response = await fetch(GAS_URL, { method: "POST", body, signal: controller.signal });
+    const response = await fetch(FULFILLMENT_ENDPOINT, { method: "POST", body, signal: controller.signal });
     return (await response.json()) as ApiResult<T>;
   } catch (error) {
     return { ok: false, error: error instanceof DOMException && error.name === "AbortError" ? "Request timed out (25s)" : String(error) };
