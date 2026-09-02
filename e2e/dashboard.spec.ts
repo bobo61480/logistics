@@ -197,6 +197,42 @@ const workerSnapshot = () => ({
   },
 });
 
+const monthlyKpis = () => ({
+  ok: true,
+  month: `${laToday().getFullYear()}-${String(laToday().getMonth() + 1).padStart(2, "0")}`,
+  currency: "USD",
+  source: "wms-sheet-fallback",
+  fallback: true,
+  gatewayError: "CMS_SALES_GATEWAY_FAILED",
+  kpis: {
+    nationalsSalesMtd: 1500,
+    nationalsSalesYtd: 1500,
+    wmsSalesMtd: 2000,
+    wmsSalesYtd: 2000,
+    shippingMtd: 9600,
+    shippingYtd: 9600,
+    transfersMtd: 5000,
+    transfersYtd: 5000,
+    njTransferMtd: 5000,
+    njTransferYtd: 5000,
+    topCarriers: [
+      { name: "TRANSFER CO", earnings: 5000, moves: 1, shipmentPercent: 33.3 },
+      { name: "XYZ FREIGHT", earnings: 3400, moves: 1, shipmentPercent: 33.3 },
+      { name: "ABC TRUCKING", earnings: 1200, moves: 1, shipmentPercent: 33.3 },
+    ],
+    ltlPercent: 33,
+    ftlPercent: 67,
+    truckingMtd: 4600,
+    truckingYtd: 4600,
+    totalLocal: 1200,
+    totalCalifornia: 1200,
+    totalOutOfState: 3400,
+    totalLocalMtd: 1200,
+    totalCaliforniaMtd: 1200,
+    totalOutOfStateMtd: 3400,
+  },
+});
+
 type MockState = {
   /** Status most recently POSTed to the status write endpoint. */
   postedStatus: string;
@@ -227,6 +263,10 @@ async function mockWorkbooks(page: Page): Promise<MockState> {
 
   await page.route("**/api/logistics/snapshot**", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(workerSnapshot()) }),
+  );
+
+  await page.route("**/api/logistics/monthly-kpis**", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(monthlyKpis()) }),
   );
 
   await page.route("**/api/logistics/status**", async (route) => {
@@ -376,7 +416,9 @@ test("renders live schedules and KPI cards computed from the workbooks", async (
   // Shipment Notices card renders the snapshot's ingestion feed.
   await expect(page.getByRole("heading", { name: "Shipment Notices" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Needs review (1)" })).toBeVisible();
-  await expect(page.getByText("IN00778")).toBeVisible();
+  await expect(
+    page.getByLabel("Email ingestion and document").getByText("IN00778", { exact: true }),
+  ).toBeVisible();
   await expect(page.getByText("No ETA or ship date found.")).toBeVisible();
   // A silently-committed row surfaces its "Received: ..." summary prominently.
   await expect(page.getByText("Received: IN00777 · MSKU1234567 · ETA 8/30")).toBeVisible();
@@ -437,6 +479,6 @@ test("shows the failure banner when the workbooks are unreachable", async ({ pag
   const alert = page.locator(".alert");
   await expect(alert).toBeVisible();
   await expect(alert).toContainText("Schedule unavailable.");
-  await expect(alert).toContainText("(500)");
+  await expect(alert).toContainText("Worker snapshot unavailable (404)");
   await expect(page.getByText("Workbook connection needs attention")).toBeVisible();
 });
