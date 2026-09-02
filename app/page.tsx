@@ -3179,7 +3179,7 @@ export default function Home() {
               ? "Workbook connection needs attention"
               : loading
                 ? "Syncing live records…"
-                : connection?.mode === "sheets"
+                : connection?.storage === "sheets"
                   ? "Direct Sheets fallback · Worker reconnecting"
                   : connection?.mode === "stale"
                     ? "Last good snapshot · live sources reconnecting"

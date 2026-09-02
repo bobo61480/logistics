@@ -175,12 +175,15 @@ const gmailIngestionEvents = () => [
   },
 ];
 
-// Same shape the Worker's /api/logistics/snapshot returns. KPIs are omitted
-// so the page computes them client-side from the mocked workbook CSVs.
+// Same shape the Worker's /api/logistics/snapshot returns. The canonical
+// frontend path is D1-only (the Worker persists to and serves from D1, so
+// `storage` is always "d1" — there is no browser-side direct-Sheets
+// fallback). KPIs are omitted so the page computes them client-side from the
+// mocked workbook CSVs.
 const workerSnapshot = () => ({
   ok: true,
   generatedAt: new Date().toISOString(),
-  storage: "sheets",
+  storage: "d1",
   stale: false,
   version: "worker-e2e",
   sourceHealth: [],
@@ -321,7 +324,7 @@ test("renders live schedules and KPI cards computed from the workbooks", async (
   await page.goto("/");
 
   await expect(page.getByRole("heading", { name: /StyleKorean\s*Logistics Hub/ })).toBeVisible();
-  await expect(page.getByText("Worker snapshot · 3 live workbooks connected")).toBeVisible();
+  await expect(page.getByText("D1 snapshot · Sheets fallback ready")).toBeVisible();
 
   // Import Schedules table row from the IMPORTS fixture.
   const importTable = page.locator(".import-table");
@@ -373,14 +376,17 @@ test("renders live schedules and KPI cards computed from the workbooks", async (
   await expect(kpiCard("TOTAL TRUCKING COST")).toContainText("$1,200");
   await expect(kpiCard("TOTAL TRUCKING COST")).toContainText("$3,400");
 
-  // Shipment Notices card renders the snapshot's ingestion feed.
+  // Shipment Notices card renders the snapshot's ingestion feed. The same
+  // ingestion events also surface in the event tracker and as derived import
+  // rows, so scope these assertions to the Shipment Notices card itself.
   await expect(page.getByRole("heading", { name: "Shipment Notices" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Needs review (1)" })).toBeVisible();
-  await expect(page.getByText("IN00778")).toBeVisible();
-  await expect(page.getByText("No ETA or ship date found.")).toBeVisible();
+  const notices = page.locator("section", { has: page.getByRole("heading", { name: "Shipment Notices" }) });
+  await expect(notices.getByRole("button", { name: "Needs review (1)" })).toBeVisible();
+  await expect(notices.getByText("IN00778")).toBeVisible();
+  await expect(notices.getByText("No ETA or ship date found.")).toBeVisible();
   // A silently-committed row surfaces its "Received: ..." summary prominently.
-  await expect(page.getByText("Received: IN00777 · MSKU1234567 · ETA 8/30")).toBeVisible();
-  await expect(page.getByRole("link", { name: "Source email" }).first()).toHaveAttribute(
+  await expect(notices.getByText("Received: IN00777 · MSKU1234567 · ETA 8/30")).toBeVisible();
+  await expect(notices.getByRole("link", { name: "Source email" }).first()).toHaveAttribute(
     "href",
     "https://mail.google.com/mail/u/0/#all/pending1",
   );
@@ -426,10 +432,13 @@ test("saves a status edit through the Apps Script endpoint and confirms it", asy
 });
 
 test("shows the failure banner when the workbooks are unreachable", async ({ page }) => {
-  await page.route("https://docs.google.com/**", (route) =>
-    route.fulfill({ status: 500, headers: { "Access-Control-Allow-Origin": "*" }, body: "error" }),
+  // The frontend reads only the same-origin Worker snapshot endpoint (no
+  // direct-Sheets fallback), so a data-source outage surfaces as a failed
+  // /api/logistics/snapshot response. A body without an `error` field makes
+  // the app fall back to its "(status)" message.
+  await page.route("**/api/logistics/snapshot**", (route) =>
+    route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ ok: false }) }),
   );
-  await page.route("https://script.google.com/**", (route) => route.abort());
 
   await page.goto("/");
 
