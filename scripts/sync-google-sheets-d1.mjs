@@ -47,6 +47,8 @@ function executeFile(contents, label) {
   const file = join(dir, `${label.replace(/[^a-z0-9_.-]+/gi, "-")}.sql`);
   try {
     writeFileSync(file, contents, "utf8");
+    // Wrangler D1 file imports are already atomic. Explicit BEGIN/COMMIT is
+    // rejected by D1 and would also duplicate Wrangler's rollback protection.
     wrangler(["d1", "execute", database, "--remote", "--file", file]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -151,7 +153,7 @@ function allTabs() {
 }
 
 function registrySql(now) {
-  const statements = ["PRAGMA foreign_keys=ON;", "BEGIN;"];
+  const statements = ["PRAGMA foreign_keys=ON;"];
   for (const document of manifest.documents) {
     const sourceUrl = `https://docs.google.com/spreadsheets/d/${document.spreadsheetId}/edit`;
     statements.push(`INSERT INTO google_sheet_documents
@@ -178,7 +180,6 @@ function registrySql(now) {
       }
     }
   }
-  statements.push("COMMIT;");
   return statements.join("\n");
 }
 
@@ -189,7 +190,7 @@ function currentHashes() {
 }
 
 function tabWriteSql(document, tab, rows, contentHash, chunks, now) {
-  const statements = ["PRAGMA foreign_keys=ON;", "BEGIN;"];
+  const statements = ["PRAGMA foreign_keys=ON;"];
   statements.push(`DELETE FROM google_sheet_chunks WHERE spreadsheet_id=${sql(document.spreadsheetId)} AND sheet_id=${sql(tab.sheetId)};`);
   chunks.forEach((chunk, index) => {
     statements.push(`INSERT INTO google_sheet_chunks
@@ -202,7 +203,6 @@ function tabWriteSql(document, tab, rows, contentHash, chunks, now) {
     WHERE spreadsheet_id=${sql(document.spreadsheetId)} AND sheet_id=${sql(tab.sheetId)};`);
   statements.push(`UPDATE google_sheet_documents SET last_checked_at=${sql(now)}, last_synced_at=${sql(now)}, last_error=NULL
     WHERE spreadsheet_id=${sql(document.spreadsheetId)};`);
-  statements.push("COMMIT;");
   return statements.join("\n");
 }
 
