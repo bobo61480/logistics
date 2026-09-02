@@ -1261,6 +1261,13 @@ async function fetchWorkerSnapshot(): Promise<WorkerSnapshot> {
   if (!Array.isArray(payload.sources.imports) || !Array.isArray(payload.sources.outbound)) {
     throw new Error("Worker snapshot is missing required imports/outbound sources.");
   }
+  // D1 is the exclusive frontend read model. A payload that explicitly reports
+  // any other storage tier (a legacy, cached, or misconfigured endpoint) must
+  // be surfaced as an outage rather than presented as a working fallback, so
+  // the browser never treats non-D1 data as authoritative.
+  if (payload.storage && payload.storage !== "d1") {
+    throw new Error(`Worker snapshot is not backed by the D1 read model (storage: ${payload.storage}).`);
+  }
   return payload as WorkerSnapshot;
 }
 
@@ -3179,15 +3186,13 @@ export default function Home() {
               ? "Workbook connection needs attention"
               : loading
                 ? "Syncing live records…"
-                : connection?.storage === "sheets"
-                  ? "Direct Sheets fallback · Worker reconnecting"
-                  : connection?.mode === "stale"
-                    ? "Last good snapshot · live sources reconnecting"
-                    : connection?.degradedSources
-                      ? `${connection.degradedSources} optional source${connection.degradedSources === 1 ? "" : "s"} unavailable`
-                      : connection?.storage === "d1"
-                        ? "D1 snapshot · Sheets fallback ready"
-                        : "Worker snapshot · 3 live workbooks connected"}
+                : connection?.mode === "stale"
+                  ? "Last good snapshot · live sources reconnecting"
+                  : connection?.degradedSources
+                    ? `${connection.degradedSources} optional source${connection.degradedSources === 1 ? "" : "s"} unavailable`
+                    : connection?.storage === "d1"
+                      ? "D1 snapshot · Sheets fallback ready"
+                      : "Worker snapshot · 3 live workbooks connected"}
           </span>
           <span className="mono">
             AUTO SYNC 30 MIN · LAST SYNC {updatedAt ? updatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "America/Los_Angeles" }) : "—"}
