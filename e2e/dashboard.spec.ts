@@ -537,3 +537,31 @@ test("serves the last good D1 snapshot with a continuity marker during a source 
   await expect(page.locator(".alert.warning")).toContainText("Continuity mode.");
   await expect(page.getByText("Schedule unavailable.")).toHaveCount(0);
 });
+
+test("degrades KPIs without reading Sheets when the Worker ships no KPI payload", async ({ page }) => {
+  // The Worker persists kpis: null when its KPI computation fails. The browser
+  // must degrade to empty KPIs — never fall back to reading Google Sheets
+  // directly — so the D1 boundary holds even on the KPI-failure path.
+  const directSheetReads: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("docs.google.com")) directSheetReads.push(request.url());
+  });
+
+  await mockWorkbooks(page);
+  await page.unroute("**/api/logistics/snapshot**");
+  await page.route("**/api/logistics/snapshot**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(workerSnapshot({ kpis: null })),
+    }),
+  );
+
+  await page.goto("/");
+
+  // The rest of the D1 snapshot still renders, and the carrier KPI card
+  // degrades to its unavailable state instead of triggering a workbook read.
+  await expect(page.locator(".import-table")).toContainText("HJ99 - 2026");
+  await expect(page.locator(".carrier-ranking")).toContainText("Carrier data unavailable");
+  expect(directSheetReads, `unexpected direct Sheets reads: ${directSheetReads.join(", ")}`).toEqual([]);
+});
