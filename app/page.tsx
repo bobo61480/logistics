@@ -1261,6 +1261,14 @@ async function fetchWorkerSnapshot(): Promise<WorkerSnapshot> {
   if (!Array.isArray(payload.sources.imports) || !Array.isArray(payload.sources.outbound)) {
     throw new Error("Worker snapshot is missing required imports/outbound sources.");
   }
+  // D1 is the exclusive frontend read model. Require the payload to positively
+  // declare D1 as its storage tier: a missing marker (legacy endpoint) or any
+  // other value (a cached or misconfigured source) is surfaced as an outage
+  // rather than presented as a working fallback, so the browser never treats
+  // non-D1 data as authoritative.
+  if (payload.storage !== "d1") {
+    throw new Error(`Worker snapshot is not backed by the D1 read model (storage: ${payload.storage ?? "unset"}).`);
+  }
   return payload as WorkerSnapshot;
 }
 
@@ -1319,7 +1327,11 @@ async function fetchOperationalSnapshot() {
       outboundMeta: sources.outboundMeta ?? OUTBOUND_SCHEDULE_META,
       nationalOutbound: sources.nationalOutbound ?? { cols: [], rows: [] },
       salesOutbound: sources.salesOutbound ?? { cols: [], rows: [] },
-      liveKpis: snapshot.kpis ?? (await fetchLiveKpis()),
+      // D1 is authoritative for KPIs too. When the Worker could not compute
+      // them (it then ships kpis: null), degrade to empty KPIs rather than
+      // reading Google Sheets directly from the browser — a direct-Sheets read
+      // would bypass D1, which the frontend contract forbids.
+      liveKpis: snapshot.kpis ?? EMPTY_KPIS,
       inventoryDashboardTable: sources.inventoryDashboardTable ?? null,
       skwInboundTable: sources.skwInboundTable ?? null,
       skwStockTable: sources.skwStockTable ?? null,

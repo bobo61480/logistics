@@ -175,12 +175,50 @@ const gmailIngestionEvents = () => [
   },
 ];
 
-// Same shape the Worker's /api/logistics/snapshot returns. KPIs are omitted
-// so the page computes them client-side from the mocked workbook CSVs.
-const workerSnapshot = () => ({
+// KPI payload the Worker computes server-side and embeds in every snapshot.
+// Providing it here keeps the fixture faithful to production (the Worker
+// always ships computed KPIs) and, critically, keeps the browser off the
+// `snapshot.kpis ?? fetchLiveKpis()` path — which would read Google Sheets
+// directly and violate the D1-only frontend contract. The render test asserts
+// no docs.google.com traffic to guard that boundary. Every field is dated
+// "today" in spirit, so MTD and YTD are identical.
+const workerKpis = () => ({
+  shippingMtd: 9600,
+  shippingYtd: 9600,
+  transfersMtd: 5000,
+  transfersYtd: 5000,
+  njTransferMtd: 5000,
+  njTransferYtd: 5000,
+  nationalsSalesMtd: 1500,
+  nationalsSalesYtd: 1500,
+  wmsSalesMtd: 2000,
+  wmsSalesYtd: 2000,
+  topCarriers: [
+    { name: "TRANSFER CO", earnings: 5000, moves: 1, shipmentPercent: 33.3 },
+    { name: "XYZ FREIGHT", earnings: 3400, moves: 1, shipmentPercent: 33.3 },
+    { name: "ABC TRUCKING", earnings: 1200, moves: 1, shipmentPercent: 33.3 },
+  ],
+  ltlPercent: 33,
+  ftlPercent: 67,
+  truckingMtd: 4600,
+  truckingYtd: 4600,
+  totalLocal: 0,
+  totalCalifornia: 1200,
+  totalOutOfState: 3400,
+  totalLocalMtd: 0,
+  totalCaliforniaMtd: 1200,
+  totalOutOfStateMtd: 3400,
+});
+
+// Same shape the Worker's /api/logistics/snapshot returns. The canonical
+// frontend path is D1-only (the Worker persists to and serves from D1, so
+// `storage` is always "d1" — there is no browser-side direct-Sheets fallback),
+// and the Worker embeds the computed KPI payload so the browser never reads
+// workbooks itself.
+const workerSnapshot = (overrides: Record<string, unknown> = {}) => ({
   ok: true,
   generatedAt: new Date().toISOString(),
-  storage: "sheets",
+  storage: "d1",
   stale: false,
   version: "worker-e2e",
   sourceHealth: [],
@@ -195,6 +233,8 @@ const workerSnapshot = () => ({
     skwStockTable: null,
     gmailIngestion: gmailIngestionEvents(),
   },
+  kpis: workerKpis(),
+  ...overrides,
 });
 
 const monthlyKpis = () => ({
@@ -356,12 +396,21 @@ async function mockWorkbooks(page: Page): Promise<MockState> {
   return state;
 }
 
-test("renders live schedules and KPI cards computed from the workbooks", async ({ page }) => {
+test("renders live schedules and KPI cards from the D1 snapshot", async ({ page }) => {
+  // The frontend is D1-only: everything on the page must come from the Worker
+  // snapshot, never a direct browser read of Google Sheets. Record any such
+  // read so the assertion at the end fails loudly if the D1 boundary regresses
+  // (e.g. an omitted KPI payload falling back to fetchLiveKpis()).
+  const directSheetReads: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("docs.google.com")) directSheetReads.push(request.url());
+  });
+
   await mockWorkbooks(page);
   await page.goto("/");
 
   await expect(page.getByRole("heading", { name: /StyleKorean\s*Logistics Hub/ })).toBeVisible();
-  await expect(page.getByText("Worker snapshot · 3 live workbooks connected")).toBeVisible();
+  await expect(page.getByText("D1 snapshot · Sheets source synchronized")).toBeVisible();
 
   // Import Schedules table row from the IMPORTS fixture.
   const importTable = page.locator(".import-table");
@@ -413,7 +462,9 @@ test("renders live schedules and KPI cards computed from the workbooks", async (
   await expect(kpiCard("TOTAL TRUCKING COST")).toContainText("$1,200");
   await expect(kpiCard("TOTAL TRUCKING COST")).toContainText("$3,400");
 
-  // Shipment Notices card renders the snapshot's ingestion feed.
+  // Shipment Notices card renders the snapshot's ingestion feed. The same
+  // ingestion events also surface in the event tracker and as derived import
+  // rows, so scope these assertions to the Shipment Notices card itself.
   await expect(page.getByRole("heading", { name: "Shipment Notices" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Needs review (1)" })).toBeVisible();
   const shipmentNotices = page.getByLabel("Email ingestion and document");
@@ -429,6 +480,11 @@ test("renders live schedules and KPI cards computed from the workbooks", async (
   // Drive Archive card offers the document quick links.
   await expect(page.getByRole("heading", { name: "Document Folders" })).toBeVisible();
   await expect(page.getByRole("link", { name: /SK Logistics Email Archive/ })).toBeVisible();
+
+  // D1 boundary: the fully rendered page must not have read Google Sheets
+  // directly. Any docs.google.com request means a component bypassed the
+  // Worker snapshot (the KPI fallback being the most likely culprit).
+  expect(directSheetReads, `unexpected direct Sheets reads: ${directSheetReads.join(", ")}`).toEqual([]);
 });
 
 test("saves a status edit through the Apps Script endpoint and confirms it", async ({ page }) => {
@@ -466,11 +522,19 @@ test("saves a status edit through the Apps Script endpoint and confirms it", asy
   expect(state.postedStatus).toBe("Delivered");
 });
 
-test("shows the failure banner when the workbooks are unreachable", async ({ page }) => {
-  await page.route("https://docs.google.com/**", (route) =>
-    route.fulfill({ status: 500, headers: { "Access-Control-Allow-Origin": "*" }, body: "error" }),
+test("shows the failure banner when the Worker snapshot endpoint fails", async ({ page }) => {
+  // The frontend reads only the same-origin Worker snapshot endpoint (no
+  // direct-Sheets fallback), so a total outage surfaces as a failed
+  // /api/logistics/snapshot response. A body without an `error` field makes
+  // the app fall back to its "(status)" message.
+  await page.route("**/api/logistics/snapshot**", (route) =>
+    route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ ok: false }) }),
   );
+  // Keep all external traffic isolated: the Fulfillment card independently
+  // calls the Apps Script getSalesOverview endpoint, which must not escape to
+  // the live network (and would otherwise stall on its 25s timeout).
   await page.route("https://script.google.com/**", (route) => route.abort());
+  await page.route("https://docs.google.com/**", (route) => route.abort());
 
   await page.goto("/");
 
@@ -478,6 +542,72 @@ test("shows the failure banner when the workbooks are unreachable", async ({ pag
   const alert = page.locator(".alert");
   await expect(alert).toBeVisible();
   await expect(alert).toContainText("Schedule unavailable.");
-  await expect(alert).toContainText("Worker snapshot unavailable (404)");
+  await expect(alert).toContainText("Worker snapshot unavailable (500)");
   await expect(page.getByText("Workbook connection needs attention")).toBeVisible();
+});
+
+test("serves the last good D1 snapshot with a continuity marker during a source outage", async ({ page }) => {
+  // When Google Sheets / Apps Script refreshes fail but D1 still holds the
+  // last good snapshot, the Worker serves that snapshot with stale: true.
+  // D1 remains the authority — the schedule stays visible and the sync strip
+  // switches to the continuity marker rather than a failure banner.
+  await mockWorkbooks(page);
+  await page.unroute("**/api/logistics/snapshot**");
+  await page.route("**/api/logistics/snapshot**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(
+        workerSnapshot({
+          stale: true,
+          staleReason: "The durable snapshot is refreshing in the background",
+        }),
+      ),
+    }),
+  );
+
+  await page.goto("/");
+
+  // Continuity, not failure: the D1 schedule still renders, the sync strip
+  // shows the continuity marker, and the continuity banner (a status, not an
+  // error) explains the state — while the "Schedule unavailable" failure
+  // banner stays absent.
+  await expect(page.getByText("Last good snapshot · live sources reconnecting")).toBeVisible();
+  await expect(page.locator(".import-table")).toContainText("HJ99 - 2026");
+  await expect(page.locator(".alert.warning")).toContainText("Continuity mode.");
+  await expect(page.getByText("Schedule unavailable.")).toHaveCount(0);
+});
+
+test("degrades KPIs without reading Sheets when the Worker ships no KPI payload", async ({ page }) => {
+  // The Worker persists kpis: null when its KPI computation fails. The browser
+  // must degrade to empty KPIs — never fall back to reading Google Sheets
+  // directly — so the D1 boundary holds even on the KPI-failure path.
+  const directSheetReads: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("docs.google.com")) directSheetReads.push(request.url());
+  });
+
+  await mockWorkbooks(page);
+  await page.unroute("**/api/logistics/snapshot**");
+  await page.route("**/api/logistics/snapshot**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(workerSnapshot({ kpis: null })),
+    }),
+  );
+  // No KPI payload anywhere: the current-month projection is unavailable too,
+  // so the browser cannot backfill it from the monthly endpoint either.
+  await page.unroute("**/api/logistics/monthly-kpis**");
+  await page.route("**/api/logistics/monthly-kpis**", (route) =>
+    route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ ok: false }) }),
+  );
+
+  await page.goto("/");
+
+  // The rest of the D1 snapshot still renders, and the carrier KPI card
+  // degrades to its unavailable state instead of triggering a workbook read.
+  await expect(page.locator(".import-table")).toContainText("HJ99 - 2026");
+  await expect(page.locator(".carrier-ranking")).toContainText("Carrier data unavailable");
+  expect(directSheetReads, `unexpected direct Sheets reads: ${directSheetReads.join(", ")}`).toEqual([]);
 });
