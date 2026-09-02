@@ -72,6 +72,18 @@ describe("production hardening", () => {
     expect(script).toContain('snapshot.frontendSource !== "d1"');
   });
 
+  it("keeps live CMS KPI checks in an explicit verification command", () => {
+    const script = read("scripts/verify-live-cms-kpis.mjs");
+    const pkg = JSON.parse(read("package.json"));
+    expect(pkg.scripts["verify:live-cms-kpis"]).toBe("node scripts/verify-live-cms-kpis.mjs");
+    expect(script).toContain("PRODUCTION_BASE_URL");
+    expect(script).toContain("CMS_GATEWAY_BASE_URL");
+    expect(script).toContain('replace(/\\/$/, "")');
+    expect(script).toContain('cache: "no-store"');
+    expect(script).toContain("AbortController");
+    expect(script).toContain("invalid JSON");
+  });
+
   it("keeps Cloudflare as the only site deployment path", () => {
     expect(existsSync(".github/workflows/deploy-planner.yml")).toBe(false);
     expect(existsSync(".github/workflows/build-style-variants.yml")).toBe(false);

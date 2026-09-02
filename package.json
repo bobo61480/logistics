@@ -13,7 +13,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "next build && playwright test",
-    "verify:production": "node scripts/verify-production.mjs"
+    "verify:production": "node scripts/verify-production.mjs",
+    "verify:live-cms-kpis": "node scripts/verify-live-cms-kpis.mjs"
   },
   "dependencies": {
     "claude": "^0.1.1",
