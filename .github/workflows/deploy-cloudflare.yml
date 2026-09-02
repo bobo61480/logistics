@@ -164,6 +164,36 @@ jobs:
           curl -vkI --connect-timeout 10 --max-time 20 "https://${host}/" 2>&1 | sed -n '1,120p' || true
           echo "::endgroup::"
 
+      - name: Probe fulfillment source connectivity
+        shell: bash
+        run: |
+          set +e
+          worker_url="https://stylekorean.dpdns.org/api/logistics/fulfillment?op=getSalesOverview&probe=${GITHUB_SHA}"
+          gas_url="https://script.google.com/macros/s/AKfycbykK9DWjem9ORHxfR_mpdZl5DVh-en0D6JpCdIuel305QmfqxoNU_NqSnjkhFk401hI/exec?op=getSalesOverview&probe=${GITHUB_SHA}"
+          for label in worker gas; do
+            if [ "$label" = worker ]; then url="$worker_url"; else url="$gas_url"; fi
+            echo "::group::Fulfillment probe: ${label}"
+            status="$(curl -sSL --connect-timeout 10 --max-time 45 -H 'Accept: application/json' -H 'User-Agent: StyleKorean-Fulfillment-Probe/1.0' -D "/tmp/${label}.headers" -o "/tmp/${label}.body" -w '%{http_code}' "$url")" || status="curl-error"
+            echo "status=${status}"
+            sed -n '1,35p' "/tmp/${label}.headers" 2>/dev/null || true
+            node - "$label" <<'NODE'
+          const fs = require('fs');
+          const label = process.argv[2];
+          const path = `/tmp/${label}.body`;
+          try {
+            const text = fs.readFileSync(path, 'utf8');
+            const body = JSON.parse(text);
+            console.log(JSON.stringify({ validJson: true, ok: body.ok, jobs: Array.isArray(body.jobs) ? body.jobs.length : null, error: body.error || null, keys: Object.keys(body).slice(0, 12) }, null, 2));
+          } catch (error) {
+            let sample = '';
+            try { sample = fs.readFileSync(path, 'utf8').slice(0, 1200); } catch (_) {}
+            console.log(JSON.stringify({ validJson: false, error: String(error), sample }, null, 2));
+          }
+          NODE
+            echo "::endgroup::"
+          done
+          exit 0
+
       - name: Verify live custom domain, D1 frontend, and Worker APIs
         shell: bash
         env:
