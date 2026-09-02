@@ -8,7 +8,7 @@
  *   GET /api/imports         — raw imports rows (+ optional ?status=active&limit=N)
  *   GET /api/freight         — freight_moves (+ ?since=YYYYMMDD&type=trucking|transfer)
  *   GET /api/sales           — sales_entries (+ ?source=wms|nationals&since=YYYYMMDD)
- *   GET /api/fulfillment     — fulfillment_tk_jobs (+ ?status=…)
+ *   GET /api/fulfillment     — fulfillment_tk_jobs (+ legacy Fulfillment UI contract)
  *   GET /api/kpis            — computed KPIs from D1 (mirrors KpiSnapshot shape)
  */
 
@@ -51,7 +51,7 @@ async function handleSync(url: URL, env: Env): Promise<Response> {
 
 // ── /api/imports ─────────────────────────────────────────────────────────────
 async function handleImports(url: URL, env: Env): Promise<Response> {
-  const status = url.searchParams.get("status"); // "active" | any status string
+  const status = url.searchParams.get("status");
   const limit  = Math.min(Number(url.searchParams.get("limit") || 500), 2000);
 
   let query = "SELECT * FROM imports";
@@ -78,7 +78,7 @@ async function handleImports(url: URL, env: Env): Promise<Response> {
 // ── /api/freight ─────────────────────────────────────────────────────────────
 async function handleFreight(url: URL, env: Env): Promise<Response> {
   const since = Number(url.searchParams.get("since") || 0);
-  const type  = url.searchParams.get("type"); // "trucking" | "transfer" | null
+  const type  = url.searchParams.get("type");
   const limit = Math.min(Number(url.searchParams.get("limit") || 2000), 5000);
 
   const parts: string[] = [];
@@ -96,14 +96,14 @@ async function handleFreight(url: URL, env: Env): Promise<Response> {
 
 // ── /api/sales ────────────────────────────────────────────────────────────────
 async function handleSales(url: URL, env: Env): Promise<Response> {
-  const source = url.searchParams.get("source"); // "wms" | "nationals" | null
+  const source = url.searchParams.get("source");
   const since  = Number(url.searchParams.get("since") || 0);
   const limit  = Math.min(Number(url.searchParams.get("limit") || 5000), 20000);
 
   const parts: string[] = [];
   const bindings: unknown[] = [];
   if (source) { parts.push("source = ?");      bindings.push(source); }
-  if (since)  { parts.push("date_code >= ?");  bindings.push(since);  }
+  if (since)  { parts.push("date_code >= ?"); bindings.push(since);  }
 
   const where = parts.length ? " WHERE " + parts.join(" AND ") : "";
   const { results } = await env.LOGISTICS_DB.prepare(
@@ -114,31 +114,90 @@ async function handleSales(url: URL, env: Env): Promise<Response> {
 }
 
 // ── /api/fulfillment ──────────────────────────────────────────────────────────
-async function handleFulfillment(url: URL, env: Env): Promise<Response> {
-  const status = url.searchParams.get("status");
-  const limit  = Math.min(Number(url.searchParams.get("limit") || 200), 1000);
+type FulfillmentDbRow = {
+  id: string;
+  invoice: string;
+  customer: string;
+  ship_date: string;
+  amount_usd: number;
+  inspection: string;
+  insp_end: string;
+  moved_to_packing: number;
+  dims_count: number;
+  dim_included_in: string;
+  pick_start: string;
+  pick_complete: number;
+  status: string;
+  pick_anomaly: number;
+  synced_at: number;
+};
 
+function fulfillmentUiRow(row: FulfillmentDbRow) {
+  return {
+    id: row.id,
+    invoice: row.invoice,
+    customer: row.customer,
+    remarks: row.customer,
+    shipDate: row.ship_date,
+    amount: Number(row.amount_usd || 0),
+    inspection: row.inspection,
+    inspEnd: row.insp_end,
+    movedToPacking: Boolean(row.moved_to_packing),
+    dimsCount: Number(row.dims_count || 0),
+    dimsLinkedTo: row.dim_included_in || "",
+    dimIncludedIn: row.dim_included_in || "",
+    pickStart: row.pick_start,
+    pickComplete: Boolean(row.pick_complete),
+    pickAnomaly: Boolean(row.pick_anomaly),
+    status: row.status,
+    method: "TK",
+    syncedAt: row.synced_at,
+  };
+}
+
+async function handleFulfillment(url: URL, env: Env): Promise<Response> {
+  const op = url.searchParams.get("op") || "";
+
+  // Backward compatibility for app/FulfillmentTkOrders.tsx, which still uses
+  // the original Apps Script operation names while production data now comes
+  // from D1. Keeping this adapter in the Worker avoids browser-side access to
+  // Apps Script and makes the source resilient to upstream CORS/availability.
+  if (op === "getSalesInvoiceDetail") {
+    const invoice = (url.searchParams.get("invoice") || "").trim();
+    if (!invoice) return err("Missing invoice", 400);
+    const row = await env.LOGISTICS_DB.prepare(
+      "SELECT * FROM fulfillment_tk_jobs WHERE invoice = ? LIMIT 1"
+    ).bind(invoice).first<FulfillmentDbRow>();
+    if (!row) return err(`Order not found: ${invoice}`, 404);
+    return json({ ok: true, ...fulfillmentUiRow(row), dimensions: [], dims: [], items: [] });
+  }
+
+  const status = url.searchParams.get("status");
+  const limit  = Math.min(Number(url.searchParams.get("limit") || (op === "getSalesOverview" ? 1000 : 200)), 1000);
   const where  = status ? " WHERE status = ?" : "";
   const { results } = await env.LOGISTICS_DB.prepare(
     `SELECT * FROM fulfillment_tk_jobs${where} ORDER BY ship_date DESC LIMIT ?`
-  ).bind(...(status ? [status, limit] : [limit])).all();
+  ).bind(...(status ? [status, limit] : [limit])).all<FulfillmentDbRow>();
 
-  return json({ ok: true, count: results.length, items: results });
+  const jobs = results.map(fulfillmentUiRow);
+  if (op === "getSalesOverview") {
+    return json({ ok: true, count: jobs.length, jobs });
+  }
+  return json({ ok: true, count: results.length, items: results, jobs });
 }
 
 // ── /api/kpis ────────────────────────────────────────────────────────────────
 async function handleKpis(env: Env): Promise<Response> {
   const db = env.LOGISTICS_DB;
 
-  // Determine YTD/MTD boundaries using Pacific time.
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Los_Angeles",
     year: "numeric", month: "numeric", day: "numeric",
   }).formatToParts(new Date());
   const v = Object.fromEntries(parts.map((p) => [p.type, Number(p.value)]));
-  const today     = v.year * 10_000 + v.month * 100 + v.day;
-  const yearStart = v.year * 10_000 + 101;
-  const monthStart= v.year * 10_000 + v.month * 100 + 1;
+  const today      = v.year * 10_000 + v.month * 100 + v.day;
+  const yearStart  = v.year * 10_000 + 101;
+  const monthStart = v.year * 10_000 + v.month * 100 + 1;
 
   const [
     nationalsYtd, nationalsMtd,
@@ -155,8 +214,6 @@ async function handleKpis(env: Env): Promise<Response> {
 
   const freight = freightRows.results;
   const transfers = transferRows.results;
-
-  // Carrier aggregation (trucking only, top 3 by move count)
   const carriers = new Map<string, { name: string; earnings: number; moves: number }>();
   let ltl = 0; let ftl = 0;
   let shippingYtd = 0; let shippingMtd = 0;
@@ -174,7 +231,6 @@ async function handleKpis(env: Env): Promise<Response> {
         if (row.date_code >= monthStart) njTransferMtd += row.cost_usd;
       }
     } else {
-      // Trucking only for LTL/FTL split and carrier stats
       if (row.load_type === "FTL") ftl++; else ltl++;
       if (row.carrier) {
         const key = row.carrier.toUpperCase();
@@ -191,9 +247,6 @@ async function handleKpis(env: Env): Promise<Response> {
     .slice(0, 3)
     .map((c: {name:string;earnings:number;moves:number}) => ({ ...c, shipmentPercent: total ? Math.round((c.moves / total) * 1000) / 10 : 0 }));
 
-  // Lane totals (trucking only) — replaces the previous per-shipment averages.
-  // The frontend KpiSnapshot type expects totalLocal / totalCalifornia / totalOutOfState
-  // (both YTD and MTD) plus aggregate truckingMtd / truckingYtd.
   const totalBand = (band: string) =>
     freight
       .filter((r) => r.move_type !== "transfer" && r.distance_band === band && r.cost_usd > 0)
@@ -205,7 +258,6 @@ async function handleKpis(env: Env): Promise<Response> {
   const truckingYtd = freight.filter((r) => r.move_type !== "transfer").reduce((s, r) => s + r.cost_usd, 0);
   const truckingMtd = freight.filter((r) => r.move_type !== "transfer" && r.date_code >= monthStart).reduce((s, r) => s + r.cost_usd, 0);
 
-  // suppress unused-var warning for transfers (kept for future reconciliation endpoint)
   void transfers;
 
   return json({
@@ -242,7 +294,7 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
     if (path === "/imports")     return handleImports(url, env);
     if (path === "/freight")     return handleFreight(url, env);
     if (path === "/sales")       return handleSales(url, env);
-    if (path === "/fulfillment") return handleFulfillment(url, env);
+    if (path === "/fulfillment" || path === "/logistics/fulfillment") return handleFulfillment(url, env);
     if (path === "/kpis")        return handleKpis(env);
     return err("Unknown API route", 404);
   } catch (e) {
