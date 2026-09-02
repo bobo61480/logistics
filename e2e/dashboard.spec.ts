@@ -416,13 +416,12 @@ test("renders live schedules and KPI cards computed from the workbooks", async (
   // Shipment Notices card renders the snapshot's ingestion feed.
   await expect(page.getByRole("heading", { name: "Shipment Notices" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Needs review (1)" })).toBeVisible();
-  await expect(
-    page.getByLabel("Email ingestion and document").getByText("IN00778", { exact: true }),
-  ).toBeVisible();
-  await expect(page.getByText("No ETA or ship date found.")).toBeVisible();
+  const shipmentNotices = page.getByLabel("Email ingestion and document");
+  await expect(shipmentNotices.getByText("IN00778", { exact: true })).toBeVisible();
+  await expect(shipmentNotices.getByText("No ETA or ship date found.")).toBeVisible();
   // A silently-committed row surfaces its "Received: ..." summary prominently.
-  await expect(page.getByText("Received: IN00777 · MSKU1234567 · ETA 8/30")).toBeVisible();
-  await expect(page.getByRole("link", { name: "Source email" }).first()).toHaveAttribute(
+  await expect(shipmentNotices.getByText("Received: IN00777 · MSKU1234567 · ETA 8/30")).toBeVisible();
+  await expect(shipmentNotices.getByRole("link", { name: "Source email" }).first()).toHaveAttribute(
     "href",
     "https://mail.google.com/mail/u/0/#all/pending1",
   );
