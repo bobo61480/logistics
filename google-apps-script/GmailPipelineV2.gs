@@ -14,7 +14,7 @@
 
 /* eslint-disable no-unused-vars */
 
-var GMAIL_PIPELINE_V2_VERSION = "2026-08-31-v5-trigger-boundary-recovery";
+var GMAIL_PIPELINE_V2_VERSION = "2026-09-02-v6-wh-trucking-ambiguity-guard";
 var GMAIL_V2_LOOKBACK_DAYS = 4;
 var GMAIL_V2_MAX_THREADS = 12;
 var GMAIL_V2_RUNTIME_BUDGET_MS = 210000;
@@ -870,6 +870,9 @@ function upsertOutboundEmailV2_(record, allowInsert) {
     if (score) candidates.push({ row: r + 1, score: score });
   }
   candidates.sort(function (a, b) { return b.score - a.score; });
+  if (candidates.length > 1 && candidates[0].score === candidates[1].score) {
+    return { matched: false, action: "noop", blocked: "ambiguous-existing-identity" };
+  }
   if (candidates.length && (!candidates[1] || candidates[0].score > candidates[1].score)) {
     var rowNumber = candidates[0].row;
     var old = data[rowNumber - 1];
