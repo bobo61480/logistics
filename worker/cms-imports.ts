@@ -5,6 +5,11 @@ import { runCmsReadonlyQuery, type CmsGatewayEnv } from "./cms-client";
 const BIZ_TYPE = "SELF";
 const CUST_CD = "CU000731";
 const WHOUSE_CD = "WH000095";
+// USD (BASE_DB.dbo.TB_CODE gbn_cd='C005': 2 = USD). Part of the verified IMPORTS
+// scope — a stale/mistyped sheet invoice can resolve to a non-USD record for the
+// same SELF customer + warehouse, so the currency predicate keeps those out of
+// the (public) snapshot, matching the mapping runner's scope check.
+const BIZ_CURR_USD = 2;
 // Bound the read to a recent window so the snapshot stays small and fast; the
 // live IMPORTS grid only cares about in-flight/recent shipments.
 const WINDOW_DAYS = 180;
@@ -131,6 +136,7 @@ export async function fetchCmsImports(env: CmsGatewayEnv, now = new Date()) {
       FROM CSMS.dbo.TB_INVC i WITH (NOLOCK)
       LEFT JOIN CSMS.dbo.TB_PNFM p WITH (NOLOCK) ON p.invc_no = i.invc_no
       WHERE i.biz_type = '${BIZ_TYPE}' AND i.cust_cd = '${CUST_CD}' AND i.whouse_cd = '${WHOUSE_CD}'
+        AND i.biz_curr = ${BIZ_CURR_USD}
         AND i.invc_dt >= '${since}'
       ORDER BY i.invc_dt DESC`;
     const result = await runCmsReadonlyQuery(

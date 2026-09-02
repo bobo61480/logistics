@@ -160,6 +160,9 @@ describe("fetchCmsImports", () => {
     expect(sentSql).toContain("i.biz_type = 'SELF'");
     expect(sentSql).toContain("i.cust_cd = 'CU000731'");
     expect(sentSql).toContain("i.whouse_cd = 'WH000095'");
+    // USD only — a mistyped invoice must not pull a non-USD record for the same
+    // SELF customer/warehouse into the public snapshot.
+    expect(sentSql).toContain("i.biz_curr = 2");
     expect(sentSql).toContain("LEFT JOIN CSMS.dbo.TB_PNFM");
     // 180 days before 2026-09-02 is 2026-03-06.
     expect(sentSql).toContain("i.invc_dt >= '2026-03-06'");

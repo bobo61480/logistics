@@ -1452,6 +1452,22 @@ function cmsImportsByInvoice(cmsImports: CmsImportRow[]): Map<string, CmsImportR
   return map;
 }
 
+// Compact "received vs invoiced" quantity label for the CMS enrichment.
+// Received comes from TB_PNFM (masked by some access grades → absent);
+// invoiced from TB_INVC (present on any match). When the grade masks TB_PNFM,
+// received drops out but invoiced still shows, so the documented TB_INVC-only
+// degradation surfaces a quantity instead of hiding the enrichment entirely.
+export function cmsQtyLabel(
+  received: number | undefined,
+  invoiced: number | undefined,
+): string | null {
+  if (received !== undefined) {
+    return `Received ${received}${invoiced !== undefined ? `/${invoiced}` : ""}`;
+  }
+  if (invoiced !== undefined) return `Invoiced ${invoiced}`;
+  return null;
+}
+
 // Resolve each DISTINCT invoice an IMPORTS row carries to its CMS record (or a
 // miss). Deduping the normalized keys — not the resolved rows — means a
 // repeated cell value ("IN001, IN001" or mixed case) resolves the same CMS
@@ -1952,15 +1968,12 @@ function ImportSchedules({
                 <td>{item.pod || "—"}</td>
                 <td>
                   <time dateTime={dayKey(item.date)}>{item.eta || item.dateText || "—"}</time>
-                  {item.cmsActualArrival || item.cmsReceivedQty !== undefined ? (
+                  {item.cmsActualArrival || cmsQtyLabel(item.cmsReceivedQty, item.cmsInvoicedQty) ? (
                     <span className="cms-enrichment cms-enrichment-inline">
                       <span className="cms-enrichment-tag">CMS LIVE</span>
                       {item.cmsActualArrival ? <span>Arrived {item.cmsActualArrival}</span> : null}
-                      {item.cmsReceivedQty !== undefined ? (
-                        <span>
-                          Received {item.cmsReceivedQty}
-                          {item.cmsInvoicedQty !== undefined ? `/${item.cmsInvoicedQty}` : ""}
-                        </span>
+                      {cmsQtyLabel(item.cmsReceivedQty, item.cmsInvoicedQty) ? (
+                        <span>{cmsQtyLabel(item.cmsReceivedQty, item.cmsInvoicedQty)}</span>
                       ) : null}
                       {item.cmsPartial ? <span className="cms-enrichment-partial">(partial)</span> : null}
                     </span>
@@ -2498,15 +2511,12 @@ function ScheduleCard({
               : null}
           </dl>
         )}
-        {item.direction === "inbound" && (item.cmsActualArrival || item.cmsReceivedQty !== undefined) ? (
+        {item.direction === "inbound" && (item.cmsActualArrival || cmsQtyLabel(item.cmsReceivedQty, item.cmsInvoicedQty)) ? (
           <p className="cms-enrichment">
             <span className="cms-enrichment-tag">CMS LIVE</span>
             {item.cmsActualArrival ? <span>Arrived {item.cmsActualArrival}</span> : null}
-            {item.cmsReceivedQty !== undefined ? (
-              <span>
-                Received {item.cmsReceivedQty}
-                {item.cmsInvoicedQty !== undefined ? `/${item.cmsInvoicedQty}` : ""}
-              </span>
+            {cmsQtyLabel(item.cmsReceivedQty, item.cmsInvoicedQty) ? (
+              <span>{cmsQtyLabel(item.cmsReceivedQty, item.cmsInvoicedQty)}</span>
             ) : null}
             {item.cmsPartial ? <span className="cms-enrichment-partial">(partial)</span> : null}
           </p>

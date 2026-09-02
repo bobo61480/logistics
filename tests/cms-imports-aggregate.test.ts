@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aggregateCmsImports, resolveImportCmsLookups } from "../app/page";
+import { aggregateCmsImports, cmsQtyLabel, resolveImportCmsLookups } from "../app/page";
 import type { CmsImportRow } from "../worker/cms-imports";
 
 function row(partial: Partial<CmsImportRow>): CmsImportRow {
@@ -113,5 +113,29 @@ describe("resolveImportCmsLookups", () => {
     const lookups = resolveImportCmsLookups("IN001, IN999", byInvoice);
     expect(lookups).toEqual([in001, undefined]);
     expect(aggregateCmsImports(lookups)?.partial).toBe(true);
+  });
+});
+
+describe("cmsQtyLabel", () => {
+  it("shows received over invoiced when both are known", () => {
+    expect(cmsQtyLabel(100, 200)).toBe("Received 100/200");
+  });
+
+  it("shows received alone when invoiced is absent", () => {
+    expect(cmsQtyLabel(100, undefined)).toBe("Received 100");
+  });
+
+  it("shows a real zero received (not hidden as absent)", () => {
+    expect(cmsQtyLabel(0, 200)).toBe("Received 0/200");
+  });
+
+  it("falls back to invoiced-only when TB_PNFM received is masked away", () => {
+    // The documented TB_INVC-only degradation: received unavailable, invoiced
+    // from the invoice header still surfaces.
+    expect(cmsQtyLabel(undefined, 800)).toBe("Invoiced 800");
+  });
+
+  it("is null when neither quantity is available", () => {
+    expect(cmsQtyLabel(undefined, undefined)).toBeNull();
   });
 });
