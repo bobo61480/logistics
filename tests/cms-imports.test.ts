@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchCmsImports, mapCmsImportRows } from "../worker/cms-imports";
+import {
+  fetchCmsImports,
+  importsInvoiceSet,
+  mapCmsImportRows,
+  reduceCmsImportsToImports,
+  type CmsImportRow,
+} from "../worker/cms-imports";
 
 // Build an MCP-over-HTTP JSON-RPC response body the way the live CMS gateway
 // replies, so runCmsReadonlyQuery parses `rows` out of it.
@@ -43,7 +49,7 @@ describe("mapCmsImportRows", () => {
     });
   });
 
-  it("leaves actualArrival/receivedQty empty when TB_PNFM columns are masked to null", () => {
+  it("leaves actualArrival empty and receivedQty null when TB_PNFM columns are masked to null", () => {
     const [row] = mapCmsImportRows([
       {
         invc_no: "IN20260013",
@@ -55,21 +61,72 @@ describe("mapCmsImportRows", () => {
         iw_qtot: null,
       },
     ]);
-    // TB_INVC columns survive; PNFM enrichment degrades to empty/0.
+    // TB_INVC columns survive; masked PNFM columns degrade to empty/null (NOT 0,
+    // so a masked value is never confused with a real zero receipt).
     expect(row.etaDate).toBe("2026-08-02");
     expect(row.invoicedQty).toBe(800);
     expect(row.actualArrival).toBe("");
+    expect(row.receivedQty).toBeNull();
+  });
+
+  it("preserves a real zero received quantity distinctly from a masked null", () => {
+    const [row] = mapCmsImportRows([
+      { invc_no: "IN0", invc_qtot: 500, iw_qtot: 0, arrv_dt: "2026-08-10" },
+    ]);
     expect(row.receivedQty).toBe(0);
+    expect(row.invoicedQty).toBe(500);
   });
 
   it("drops rows with no invoice number", () => {
     expect(mapCmsImportRows([{ invc_no: "  " }, { eta_dt: "2026-01-01" }])).toEqual([]);
   });
 
-  it("coerces non-numeric quantities to 0", () => {
+  it("maps non-numeric or absent quantities to null (not 0)", () => {
     const [row] = mapCmsImportRows([{ invc_no: "IN1", invc_qtot: "n/a", iw_qtot: undefined }]);
-    expect(row.invoicedQty).toBe(0);
-    expect(row.receivedQty).toBe(0);
+    expect(row.invoicedQty).toBeNull();
+    expect(row.receivedQty).toBeNull();
+  });
+});
+
+describe("reduceCmsImportsToImports / importsInvoiceSet", () => {
+  const cmsRow = (invoiceNo: string): CmsImportRow => ({
+    invoiceNo,
+    etaDate: "",
+    actualArrival: "",
+    outboundDate: "",
+    carrier: "",
+    invoicedQty: null,
+    receivedQty: null,
+  });
+  // IMPORTS rows: col 0 shipment, col 2 invoice; first two rows are headers.
+  const importsRows: string[][] = [
+    ["IMPORTS"],
+    ["SHIPMENT"],
+    ["HJ99 - 2026", "", "IN00777", "", "", "", "", "MSKU1"],
+    ["MULTI - 2026", "", "IN00801, IN00802", "", "", "", "", "MSKU2"],
+    ["OSL10 - 2026", "", "N00451013", "", "", "", "", "MSKU3"],
+  ];
+
+  it("collects every IMPORTS-sheet invoice (uppercased, split, OSL10-corrected)", () => {
+    const set = importsInvoiceSet(importsRows);
+    expect(set.has("IN00777")).toBe(true);
+    expect(set.has("IN00801")).toBe(true);
+    expect(set.has("IN00802")).toBe(true);
+    // OSL10's typo'd N00451013 is corrected to IN00451013 to match CMS.
+    expect(set.has("IN00451013")).toBe(true);
+    expect(set.has("N00451013")).toBe(false);
+  });
+
+  it("keeps only CMS records whose invoice is on the IMPORTS sheet", () => {
+    const rows = [cmsRow("IN00777"), cmsRow("IN00801"), cmsRow("IN99999"), cmsRow("in00451013")];
+    const kept = reduceCmsImportsToImports(rows, importsRows).map((r) => r.invoiceNo);
+    // IN99999 (not on the sheet) is dropped; case-insensitive match keeps in00451013.
+    expect(kept).toEqual(["IN00777", "IN00801", "in00451013"]);
+  });
+
+  it("returns nothing when there are no IMPORTS rows to match against", () => {
+    expect(reduceCmsImportsToImports([cmsRow("IN00777")], null)).toEqual([]);
+    expect(reduceCmsImportsToImports([cmsRow("IN00777")], [])).toEqual([]);
   });
 });
 

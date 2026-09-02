@@ -16,8 +16,11 @@ export type CmsImportRow = {
   actualArrival: string;
   outboundDate: string;
   carrier: string;
-  invoicedQty: number;
-  receivedQty: number;
+  // null = the quantity was absent/masked by the caller's CMS access grade;
+  // a number (including 0) = a real value the CMS supplied. Kept distinct so a
+  // genuine "0 received" is not confused with a masked column downstream.
+  invoicedQty: number | null;
+  receivedQty: number | null;
 };
 
 function text(value: unknown) {
@@ -31,9 +34,14 @@ function dateOnly(value: unknown) {
   return trimmed ? trimmed.slice(0, 10) : "";
 }
 
-function count(value: unknown) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
+// null-preserving numeric parse: absent/blank/masked → null; a real numeric
+// (including 0) → the number. Never coerces a masked column into a false 0.
+function qty(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  const trimmed = String(value).trim();
+  if (trimmed === "") return null;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 // Pure row mapper — exported for unit testing without touching the network.
@@ -45,10 +53,54 @@ export function mapCmsImportRows(rawRows: Record<string, unknown>[]): CmsImportR
       actualArrival: dateOnly(row.arrv_dt),
       outboundDate: dateOnly(row.ow_dt),
       carrier: text(row.carrier),
-      invoicedQty: count(row.invc_qtot),
-      receivedQty: count(row.iw_qtot),
+      invoicedQty: qty(row.invc_qtot),
+      receivedQty: qty(row.iw_qtot),
     }))
     .filter((row) => row.invoiceNo);
+}
+
+// Mirror the browser's IMPORTS invoice extraction (app/page.tsx): invoice is
+// column 2, shipment column 0; the OSL10 shipment carries a known typo'd
+// invoice, and an invoice cell may list several values split on newlines/commas.
+const IMPORTS_SHIPMENT_COL = 0;
+const IMPORTS_INVOICE_COL = 2;
+
+function splitInvoiceValues(value: string): string[] {
+  return value.split(/\r?\n|,\s*/).map((part) => part.trim()).filter(Boolean);
+}
+
+function correctInvoice(shipmentNo: string, value: string): string {
+  if (/^OSL10(?:\s*-\s*2026)?$/i.test(shipmentNo.trim())) {
+    return value.replace(/\bN00451013\b/g, "IN00451013");
+  }
+  return value;
+}
+
+// The uppercased set of invoice numbers actually present on the IMPORTS sheet.
+export function importsInvoiceSet(importsRows: string[][] | null | undefined): Set<string> {
+  const set = new Set<string>();
+  if (!Array.isArray(importsRows)) return set;
+  for (const row of importsRows) {
+    if (!Array.isArray(row)) continue;
+    const shipmentNo = text(row[IMPORTS_SHIPMENT_COL]);
+    const invoiceCell = correctInvoice(shipmentNo, text(row[IMPORTS_INVOICE_COL]));
+    for (const invoice of splitInvoiceValues(invoiceCell)) set.add(invoice.toUpperCase());
+  }
+  return set;
+}
+
+// Server-side reduction so the public (unauthenticated) snapshot never
+// serializes the full CMS query: only records whose invoice appears on the
+// IMPORTS sheet are exposed; every other CMS invoice from the 180-day window is
+// dropped before it leaves the Worker. The exposed fields are already the
+// approved logistics subset (invoice, dates, carrier, qtys).
+export function reduceCmsImportsToImports(
+  cmsRows: CmsImportRow[],
+  importsRows: string[][] | null | undefined,
+): CmsImportRow[] {
+  const allowed = importsInvoiceSet(importsRows);
+  if (allowed.size === 0) return [];
+  return cmsRows.filter((row) => allowed.has(row.invoiceNo.trim().toUpperCase()));
 }
 
 function windowStart(now: Date) {
@@ -73,8 +125,8 @@ export async function fetchCmsImports(env: CmsGatewayEnv, now = new Date()) {
     const since = windowStart(now);
     // TB_PNFM (LEFT JOIN) carries the actual arrival + received qty; under a
     // masking access grade its columns come back null, which mapCmsImportRows
-    // renders as empty actualArrival/receivedQty (0) — the TB_INVC columns are
-    // unaffected, so the feature still shows ETA + invoiced qty.
+    // renders as empty actualArrival / null receivedQty — the TB_INVC columns
+    // are unaffected, so the feature still shows ETA + invoiced qty.
     const sql = `SELECT TOP ${ROW_LIMIT} i.invc_no, i.eta_dt, i.ow_dt, i.carrier, i.invc_qtot, p.arrv_dt, p.iw_qtot
       FROM CSMS.dbo.TB_INVC i WITH (NOLOCK)
       LEFT JOIN CSMS.dbo.TB_PNFM p WITH (NOLOCK) ON p.invc_no = i.invc_no

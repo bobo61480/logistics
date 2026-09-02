@@ -16,7 +16,7 @@ import { handleStatusCommand } from "./status-command";
 import { handlePendingReviewCommand } from "./pending-review-command";
 import { handleTrackingCommand } from "./tracking-command";
 import { fetchCmsInventory } from "./cms-inventory";
-import { fetchCmsImports } from "./cms-imports";
+import { fetchCmsImports, reduceCmsImportsToImports } from "./cms-imports";
 import { fetchCmsSalesKpis } from "./cms-sales-kpis";
 
 const WORKER_VERSION = "2026-09-02-worker-v11-cms-sales-fallback";
@@ -120,7 +120,14 @@ async function buildSnapshotPayload(env: Env): Promise<OperationalSnapshot> {
   const rawSources = raw.sources as Record<string, unknown>;
   rawSources.cmsInventory = cmsInventory.rows;
   rawSources.cmsInventoryConfigured = cmsInventory.configured;
-  rawSources.cmsImports = cmsImports.rows;
+  // Only expose CMS import records whose invoice is on the IMPORTS sheet — the
+  // snapshot is a public GET, so the full 180-day CMS query must never be
+  // serialized wholesale. The IMPORTS rows are the raw source (superset of the
+  // deduped rows), which keeps every legitimate match.
+  rawSources.cmsImports = reduceCmsImportsToImports(
+    cmsImports.rows,
+    Array.isArray(rawSources.imports) ? (rawSources.imports as string[][]) : null,
+  );
   rawSources.cmsImportsConfigured = cmsImports.configured;
   const snapshot = dedupeOperationalPayload(raw);
   const outboundMeta = snapshot.sources.outboundMeta as { rowCount?: number } | undefined;

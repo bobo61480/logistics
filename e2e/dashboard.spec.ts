@@ -681,3 +681,40 @@ test("does not present a prior-month D1 snapshot as the current month's MTD", as
   await expect(page.locator(".import-table")).toContainText("HJ99 - 2026");
   await expect(page.locator(".kpi-grid-unavailable")).toContainText("KPIs unavailable");
 });
+
+test("enriches a matching IMPORTS row with the live CMS arrival + received/invoiced qty", async ({ page }) => {
+  // The Worker snapshot carries the (already server-side-reduced) CMS import
+  // rows; the browser attaches them to the matching IMPORTS invoice and renders
+  // the additive "CMS LIVE" line. IN00777 is the invoice on the HJ99 fixture row.
+  await mockWorkbooks(page);
+  await page.unroute("**/api/logistics/snapshot**");
+  const snapshot = workerSnapshot();
+  // The inbound receiving board keys off Delivery Expected (IMPORTS col 16);
+  // give HJ99 one in-window so it renders as an inbound ScheduleCard.
+  (snapshot.sources.imports as string[][])[2][16] = daysFromToday(2);
+  (snapshot.sources as Record<string, unknown>).cmsImports = [
+    {
+      invoiceNo: "IN00777",
+      etaDate: "2026-08-28",
+      actualArrival: "2026-08-30",
+      outboundDate: "2026-08-10",
+      carrier: "MAERSK",
+      invoicedQty: 1200,
+      receivedQty: 1200,
+    },
+  ];
+  (snapshot.sources as Record<string, unknown>).cmsImportsConfigured = true;
+  await page.route("**/api/logistics/snapshot**", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(snapshot) }),
+  );
+
+  await page.goto("/");
+
+  // The import shipment loads (dedicated table) and its inbound board card
+  // carries the additive enrichment line.
+  await expect(page.locator(".import-table")).toContainText("HJ99 - 2026");
+  const enrichment = page.locator(".inbound-panel .cms-enrichment").first();
+  await expect(enrichment).toContainText("CMS LIVE");
+  await expect(enrichment).toContainText("Arrived 2026-08-30");
+  await expect(enrichment).toContainText("Received 1200/1200");
+});

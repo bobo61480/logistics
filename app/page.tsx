@@ -1184,8 +1184,9 @@ export type CmsImportRow = {
   actualArrival: string;
   outboundDate: string;
   carrier: string;
-  invoicedQty: number;
-  receivedQty: number;
+  // null = absent/masked by the CMS access grade; a number (incl 0) = supplied.
+  invoicedQty: number | null;
+  receivedQty: number | null;
 };
 
 type WorkerSnapshot = {
@@ -1448,6 +1449,29 @@ function cmsImportsByInvoice(cmsImports: CmsImportRow[]): Map<string, CmsImportR
   return map;
 }
 
+type CmsImportAggregate = {
+  actualArrival: string;
+  receivedQty: number | null;
+  invoicedQty: number | null;
+};
+
+// Combine every CMS record matching a (possibly multi-invoice) IMPORTS row into
+// one shipment-level view: the latest arrival date across the matched parts,
+// and received / invoiced quantities summed over them. A quantity stays null
+// (rendered as absent, never a false 0) only when every match had it masked.
+function aggregateCmsImports(matches: CmsImportRow[]): CmsImportAggregate | null {
+  if (matches.length === 0) return null;
+  let actualArrival = "";
+  let receivedQty: number | null = null;
+  let invoicedQty: number | null = null;
+  for (const match of matches) {
+    if (match.actualArrival && match.actualArrival > actualArrival) actualArrival = match.actualArrival;
+    if (match.receivedQty !== null) receivedQty = (receivedQty ?? 0) + match.receivedQty;
+    if (match.invoicedQty !== null) invoicedQty = (invoicedQty ?? 0) + match.invoicedQty;
+  }
+  return { actualArrival, receivedQty, invoicedQty };
+}
+
 function pendingImportItems(importsRows: string[][], cmsImports: CmsImportRow[] = []): ScheduleItem[] {
   const today = startOfToday();
   const cmsByInvoice = cmsImportsByInvoice(cmsImports);
@@ -1479,11 +1503,14 @@ function pendingImportItems(importsRows: string[][], cmsImports: CmsImportRow[] 
     const invoice = correctedInboundInvoice(record.shipmentNo, record.invoice);
     const folderUrl = INBOUND_DOCUMENT_LINKS[record.shipmentNo] ?? importsCellUrl(record.sourceRow, "B");
 
-    // Match live CMS data on any invoice number carried by this row (a row may
-    // list several); the first hit enriches it. No match → no extra fields.
-    const cms = splitValues(invoice)
-      .map((value) => cmsByInvoice.get(clean(value).toUpperCase()))
-      .find(Boolean);
+    // Match live CMS data on every invoice the row carries (a row may list
+    // several) and aggregate them into one shipment-level view. No match → no
+    // extra fields.
+    const cms = aggregateCmsImports(
+      splitValues(invoice)
+        .map((value) => cmsByInvoice.get(clean(value).toUpperCase()))
+        .filter((row): row is CmsImportRow => Boolean(row)),
+    );
 
     return [{
       id: `pending-import-${record.sourceRow}`,
@@ -1516,8 +1543,8 @@ function pendingImportItems(importsRows: string[][], cmsImports: CmsImportRow[] 
       eta,
       deliveryExpected: record.deliveryExpected,
       cmsActualArrival: cms?.actualArrival || undefined,
-      cmsReceivedQty: cms && cms.receivedQty > 0 ? cms.receivedQty : undefined,
-      cmsInvoicedQty: cms && cms.invoicedQty > 0 ? cms.invoicedQty : undefined,
+      cmsReceivedQty: cms && cms.receivedQty !== null ? cms.receivedQty : undefined,
+      cmsInvoicedQty: cms && cms.invoicedQty !== null ? cms.invoicedQty : undefined,
       isSmallParcel: false,
       // No dedicated carrier column exists in IMPORTS for Air/Ocean freight —
       // vessel is the closest available proxy (ocean vessel names are usually
@@ -2411,14 +2438,14 @@ function ScheduleCard({
               : null}
           </dl>
         )}
-        {item.direction === "inbound" && (item.cmsActualArrival || item.cmsReceivedQty) ? (
+        {item.direction === "inbound" && (item.cmsActualArrival || item.cmsReceivedQty !== undefined) ? (
           <p className="cms-enrichment">
             <span className="cms-enrichment-tag">CMS LIVE</span>
             {item.cmsActualArrival ? <span>Arrived {item.cmsActualArrival}</span> : null}
-            {item.cmsReceivedQty ? (
+            {item.cmsReceivedQty !== undefined ? (
               <span>
                 Received {item.cmsReceivedQty}
-                {item.cmsInvoicedQty ? `/${item.cmsInvoicedQty}` : ""}
+                {item.cmsInvoicedQty !== undefined ? `/${item.cmsInvoicedQty}` : ""}
               </span>
             ) : null}
           </p>
