@@ -36,6 +36,19 @@ describe("Google Sheets -> D1 primary frontend mirror", () => {
     expect(manifest).toMatch(/"title":"PENDING VERIFICATION"[\s\S]{0,320}"redactColumns": \[14\]/);
   });
 
+  it("uses service-account Sheets API reads for private workbooks before public GViz fallback", () => {
+    const sync = read("scripts/sync-google-sheets-d1.mjs");
+    const workflow = read(".github/workflows/sync-google-sheets-d1.yml");
+    expect(sync).toContain("GOOGLE_SERVICE_ACCOUNT_JSON");
+    expect(sync).toContain("GOOGLE_SERVICE_ACCOUNT_EMAIL");
+    expect(sync).toContain("GOOGLE_PRIVATE_KEY");
+    expect(sync).toContain("https://oauth2.googleapis.com/token");
+    expect(sync).toContain("https://sheets.googleapis.com/v4/spreadsheets/");
+    expect(workflow).toContain("GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}");
+    expect(workflow).toContain("GOOGLE_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_EMAIL }}");
+    expect(workflow).toContain("GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}");
+  });
+
   it("syncs workbook mirrors into D1 and serves only frontend-enabled tabs", () => {
     const sync = read("scripts/sync-google-sheets-d1.mjs");
     const workflow = read(".github/workflows/sync-google-sheets-d1.yml");
