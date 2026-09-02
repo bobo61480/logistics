@@ -28,6 +28,7 @@ type Helpers = {
     sourceByInvoice: Map<string, { key: string }>,
   ) => string[];
   wmsLocationStoreIndex_: (map: Record<string, number>) => number | undefined;
+  whExactDuplicateRowNumbersV5_: (data: string[][], headerIndex: number) => number[];
 };
 
 function loadHelpers(): Helpers {
@@ -35,7 +36,7 @@ function loadHelpers(): Helpers {
   const locationSafety = readFileSync("google-apps-script/zzzzzzzzzzz_WmsLocationSafetyV5.gs", "utf8");
   const context = vm.createContext({ Map, Set, console });
   vm.runInContext(
-    `${locationSafety}\n${source}\n;globalThis.__helpers = {wmsImportEligible_,wmsInvoiceSignatureFromKey_,chooseWmsTargetRow_,filterWmsInvoicesForGroup_,wmsLocationStoreIndex_};`,
+    `${locationSafety}\n${source}\n;globalThis.__helpers = {wmsImportEligible_,wmsInvoiceSignatureFromKey_,chooseWmsTargetRow_,filterWmsInvoicesForGroup_,wmsLocationStoreIndex_,whExactDuplicateRowNumbersV5_};`,
     context,
   );
   return context.__helpers as Helpers;
@@ -125,6 +126,38 @@ describe("WMS trucking importer v2 safeguards", () => {
     const match = helpers.chooseWmsTargetRow_("WOOAMI___2026-09-02", ["IN00471193"], routed);
     expect(match?.rowNumber).toBe(720);
     expect(match?.operationallyLocked).toBe(true);
+  });
+
+  it("removes byte-identical duplicate rows even when the ship date is blank", () => {
+    // Reproduces the production WH Trucking corruption: a block of identical
+    // rows carrying an invoice but no ship date. whDedupeKeyV5_ returns "" for
+    // a blank ship date, so the key-based pass never removed them — the exact
+    // fingerprint pass must.
+    const header = ["CUSTOMER", "INVOICE NO.", "ADDRESS", "SHIP DATE"];
+    const vine = ["VINE COSMETICS", "IN00471703", "7031 Little River Turnpike, 19D", ""];
+    const data = [
+      [], // leading blank spacer
+      header,
+      vine.slice(),
+      vine.slice(),
+      vine.slice(),
+      ["OTHER CO", "IN00500000", "123 Main St", "09/01/2026"],
+      vine.slice(),
+    ];
+    // header at index 1; rows 3,4,7 (1-based) are repeats of the first vine row (row 3).
+    expect(helpers.whExactDuplicateRowNumbersV5_(data, 1)).toEqual([4, 5, 7]);
+  });
+
+  it("keeps rows that share an invoice but differ in any real field, and never collapses blank spacer rows", () => {
+    const header = ["CUSTOMER", "INVOICE NO.", "PRO#", "SHIP DATE"];
+    const data = [
+      header,
+      ["NEXTRADE", "IN00463676", "23965334", "08/27/2026"],
+      ["NEXTRADE", "IN00463676", "23965391", "08/27/2026"], // same invoice/date, different PRO → NOT a duplicate
+      [],
+      [],
+    ];
+    expect(helpers.whExactDuplicateRowNumbersV5_(data, 0)).toEqual([]);
   });
 
   it("removes source-known invoices that belong to another exact ship-date group", () => {
