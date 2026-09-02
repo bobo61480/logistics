@@ -88,11 +88,13 @@ function nationalSalesRecords(rows: string[][], yearStart: number, todayCode: nu
   const statusCol = headerIndex(header, ["Status", "Overall PO Status"], 0);
   const amountCol = headerIndex(header, ["Amount", "Total Order Amount"], 4);
   const orderDateCol = headerIndex(header, ["Order Date"], 6);
-  // NOTE: The national outbound sheet contains only national rows — no dept
-  // column filter is needed. Earlier code filtered on Dept==="national" which
-  // matched no rows because that column holds brand/channel names (ULTA STY,
-  // ROSS, etc.), causing nationalsSalesMtd/Ytd to always compute as $0.
+  const deptCol = headerIndex(header, ["Dept", "Department"], 2);
+  // NOTE: Earlier code filtered the Channel column (brand/customer names like
+  // ULTA STY, ROSS) against the literal string "national", which matched no
+  // rows and always computed $0. The Dept/Department column is what actually
+  // carries "National" vs. non-national buckets like MBX and Iherb.
   return rows.slice(1).flatMap((row) => {
+    if ((row[deptCol] ?? "").trim().toLowerCase() !== "national") return [];
     if ((row[statusCol] ?? "").trim().toLowerCase() === "cancelled") return [];
     const date = dateCode(row[orderDateCol] ?? "");
     const value = amount(row[amountCol] ?? "", true);

@@ -4,8 +4,9 @@
 import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const ROOT = new URL("../out", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("../out", import.meta.url));
 const PORT = Number(process.env.PORT || 4173);
 
 const TYPES = {

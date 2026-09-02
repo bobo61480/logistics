@@ -338,7 +338,7 @@ async function loadMonthlyKpis(env: Env, selectedMonth?: string) {
         currency: "USD",
         fallback: !!snapshot.kpiError,
         gatewayError: snapshot.kpiError ?? undefined,
-        kpis: snapshot.kpis,
+        kpis: snapshot.kpis as KpiSnapshot,
         cms: null,
         month: monthKey,
         generatedAt: snapshot.generatedAt,
