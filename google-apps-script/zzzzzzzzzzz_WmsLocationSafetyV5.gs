@@ -151,6 +151,37 @@ function whFindHeaderIndexV5_(data) {
   return 1;
 }
 
+/**
+ * Row numbers (1-based) of byte-identical duplicate rows — every occurrence
+ * after the first of any row whose entire normalized content repeats. Keying
+ * on the full row means only true duplicates collapse, so no unique data is
+ * ever lost. This complements whDedupeKeyV5_, which skips rows with a blank
+ * ship date (returns "") and therefore can never remove a block of identical
+ * blank-date rows — the exact case that stranded 24 duplicate VINE COSMETICS
+ * rows in production. Trailing empty cells are trimmed so rows that differ only
+ * in padding width still match.
+ */
+function whExactDuplicateRowNumbersV5_(data, headerIndex) {
+  var seen = {};
+  var deletions = [];
+  for (var r = headerIndex + 1; r < data.length; r++) {
+    var row = data[r] || [];
+    var hasValue = false;
+    var parts = [];
+    for (var c = 0; c < row.length; c++) {
+      var normalized = whLocationNormV5_(row[c]);
+      if (normalized) hasValue = true;
+      parts.push(normalized);
+    }
+    if (!hasValue) continue; // never collapse blank spacer rows
+    while (parts.length && !parts[parts.length - 1]) parts.pop();
+    var fingerprint = parts.join("");
+    if (seen[fingerprint]) deletions.push(r + 1);
+    else seen[fingerprint] = true;
+  }
+  return deletions;
+}
+
 function dedupeWhTruckingLocationSafeV5_() {
   var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   var sheet = ss.getSheetByName("WH Trucking Request");
@@ -161,6 +192,12 @@ function dedupeWhTruckingLocationSafeV5_() {
   var keeperByKey = {};
   var deleteRows = {};
   var conflicts = 0;
+
+  // First remove byte-identical duplicate rows (blank-date blocks the key-based
+  // pass below can't see), then fall through to the location-aware subset pass.
+  whExactDuplicateRowNumbersV5_(data, headerIndex).forEach(function (rowNumber) {
+    deleteRows[rowNumber] = true;
+  });
 
   for (var r = headerIndex + 1; r < data.length; r++) {
     var row = data[r];
