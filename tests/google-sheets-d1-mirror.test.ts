@@ -30,16 +30,17 @@ describe("Google Sheets -> D1 primary frontend mirror", () => {
     expect(manifest).toContain("1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc");
     expect(manifest).toContain("14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I");
     expect(manifest).toContain("12Aty04yiLPPqz06AFDM8Y1Log2jEOqdXDqwiUV5yVX8");
-    expect(manifest).toContain('"title": "LOGIN"');
-    expect(manifest).toMatch(/"title": "LOGIN"[\s\S]{0,240}"mode": "metadata_only"/);
-    expect(manifest).toMatch(/"title": "System Backups"[\s\S]{0,240}"mode": "metadata_only"/);
-    expect(manifest).toMatch(/"title": "PENDING VERIFICATION"[\s\S]{0,320}"redactColumns": \[14\]/);
+    expect(manifest).toContain('"title":"LOGIN"');
+    expect(manifest).toMatch(/"title":"LOGIN"[\s\S]{0,240}"mode":"metadata_only"/);
+    expect(manifest).toMatch(/"title":"System Backups"[\s\S]{0,240}"mode":"metadata_only"/);
+    expect(manifest).toMatch(/"title":"PENDING VERIFICATION"[\s\S]{0,320}"redactColumns": \[14\]/);
   });
 
   it("syncs workbook mirrors into D1 and serves only frontend-enabled tabs", () => {
     const sync = read("scripts/sync-google-sheets-d1.mjs");
     const workflow = read(".github/workflows/sync-google-sheets-d1.yml");
-    const worker = read("worker/index.ts");
+    const wrapper = read("worker/cached-index.ts");
+    const sheetsApi = read("worker/sheets-api.ts");
 
     expect(sync).toContain("google_sheet_chunks");
     expect(sync).toContain("content_hash");
@@ -47,9 +48,9 @@ describe("Google Sheets -> D1 primary frontend mirror", () => {
     expect(sync).toContain("metadata_only");
     expect(workflow).toContain("*/15 * * * *");
     expect(workflow).toContain("sync-google-sheets-d1.mjs");
-    expect(worker).toContain('url.pathname === "/api/logistics/sheets"');
-    expect(worker).toContain("frontend_enabled = 1");
-    expect(worker).toContain("google_sheet_chunks");
+    expect(wrapper).toContain('url.pathname === "/api/logistics/sheets"');
+    expect(sheetsApi).toContain("frontend_enabled = 1");
+    expect(sheetsApi).toContain("google_sheet_chunks");
   });
 
   it("keeps browser reads on same-origin D1 APIs instead of Google GViz", () => {
