@@ -60,18 +60,40 @@ function headerIndex(header: string[], aliases: string[], fallback: number) {
   return index >= 0 ? index : fallback;
 }
 
+/** Maps IATA airline prefixes and common abbreviations to full carrier names. */
+function normalizeCarrierName(carrier: string): string {
+  const text = carrier.replace(/\s+/g, " ").trim();
+  if (!text) return text;
+  // IATA air cargo prefix mapping (prefix + hyphen/space + flight number)
+  if (/^YP[-\s]/i.test(text)) return "Air Premia";
+  if (/^OZ[-\s]/i.test(text)) return "Asiana Airlines";
+  if (/^KE[-\s]/i.test(text)) return "Korean Air";
+  if (/^KJ[-\s]/i.test(text)) return "Jin Air";
+  if (/^7C[-\s]/i.test(text)) return "Jeju Air";
+  if (/^LJ[-\s]/i.test(text)) return "Jin Air";
+  if (/^BX[-\s]/i.test(text)) return "Air Busan";
+  // Common trucking carrier normalizations
+  if (/^C\.?H\.?\s*ROBINSON/i.test(text)) return "C.H. Robinson";
+  if (/^XPO\b/i.test(text)) return "XPO Logistics";
+  if (/^ESTES\b/i.test(text)) return "Estes Express";
+  if (/^SAIA\b/i.test(text)) return "Saia Inc.";
+  if (/^FEDEX\b/i.test(text)) return "FedEx Freight";
+  if (/^UPS\s*FREIGHT/i.test(text)) return "UPS Freight";
+  return text;
+}
+
 function nationalSalesRecords(rows: string[][], yearStart: number, todayCode: number) {
   if (!rows.length) return [] as Array<{ date: number; value: number }>;
   const header = rows[0] ?? [];
   const statusCol = headerIndex(header, ["Status", "Overall PO Status"], 0);
-  const departmentCol = headerIndex(header, ["Dept", "Department"], 2);
   const amountCol = headerIndex(header, ["Amount", "Total Order Amount"], 4);
   const orderDateCol = headerIndex(header, ["Order Date"], 6);
-  const hasDepartmentHeader = header.some((value) => ["DEPT", "DEPARTMENT"].includes(normalizeHeader(value)));
-
+  // NOTE: The national outbound sheet contains only national rows — no dept
+  // column filter is needed. Earlier code filtered on Dept==="national" which
+  // matched no rows because that column holds brand/channel names (ULTA STY,
+  // ROSS, etc.), causing nationalsSalesMtd/Ytd to always compute as $0.
   return rows.slice(1).flatMap((row) => {
     if ((row[statusCol] ?? "").trim().toLowerCase() === "cancelled") return [];
-    if (hasDepartmentHeader && (row[departmentCol] ?? "").trim().toLowerCase() !== "national") return [];
     const date = dateCode(row[orderDateCol] ?? "");
     const value = amount(row[amountCol] ?? "", true);
     return date >= yearStart && date <= todayCode && value !== null && value > 0 ? [{ date, value }] : [];
@@ -166,12 +188,12 @@ export function computeKpisFromRows(input: Input): KpiSnapshot {
   const trucking = input.truckingRows.slice(2).flatMap((row) => {
     const date = freightDateCode(row[3] ?? "", today);
     if (!date) return [];
-    return [{ date, cost: freightAmount(row[21] ?? "") || freightAmount(row[17] ?? ""), carrier: (row[16] ?? "").trim().replace(/\s+/g, " "), destination: (row[2] ?? "").trim(), loadType: loadType([row[4], row[5]].filter(Boolean).join(" ")), isTransfer: false }];
+    return [{ date, cost: freightAmount(row[21] ?? "") || freightAmount(row[17] ?? ""), carrier: normalizeCarrierName((row[16] ?? "").trim()), destination: (row[2] ?? "").trim(), loadType: loadType([row[4], row[5]].filter(Boolean).join(" ")), isTransfer: false }];
   });
   const transfer = input.transferRows.slice(1).flatMap((row) => {
     const date = freightDateCode(row[5] ?? "", today);
     if (!date) return [];
-    return [{ date, cost: freightAmount(row[9] ?? "") || freightAmount(row[8] ?? ""), carrier: (row[6] ?? "").trim().replace(/\s+/g, " "), destination: (row[4] ?? "").trim(), loadType: loadType(row[1] ?? ""), isTransfer: true }];
+    return [{ date, cost: freightAmount(row[9] ?? "") || freightAmount(row[8] ?? ""), carrier: normalizeCarrierName((row[6] ?? "").trim()), destination: (row[4] ?? "").trim(), loadType: loadType(row[1] ?? ""), isTransfer: true }];
   });
   const freight = [...trucking, ...transfer].filter((r) => r.date >= yearStart && r.date <= today.code);
   const freightMtd = freight.filter((r) => r.date >= monthStart && r.date <= monthEnd);

@@ -16,10 +16,9 @@ import { handleStatusCommand } from "./status-command";
 import { handlePendingReviewCommand } from "./pending-review-command";
 import { handleTrackingCommand } from "./tracking-command";
 import { fetchCmsInventory } from "./cms-inventory";
-import { fetchCmsImports, reduceCmsImportsToImports } from "./cms-imports";
 import { fetchCmsSalesKpis } from "./cms-sales-kpis";
 
-const WORKER_VERSION = "2026-09-02-worker-v12-cms-imports";
+const WORKER_VERSION = "2026-09-02-worker-v12-sse-d1-fastpath";
 const SNAPSHOT_CACHE_URL = "https://stylekorean.internal/api/logistics/snapshot";
 const SNAPSHOT_CACHE_SECONDS = 60;
 const SNAPSHOT_REFRESH_SECONDS = 15 * 60;
@@ -104,40 +103,20 @@ function dedupeOperationalPayload(snapshot: Awaited<ReturnType<typeof fetchOpera
 
 async function buildSnapshotPayload(env: Env): Promise<OperationalSnapshot> {
   const generatedAt = new Date().toISOString();
-  const [raw, cms] = await Promise.all([
+  const [raw, cmsInventory, cmsSalesResult] = await Promise.all([
     fetchOperationalSources(env.APPS_SCRIPT_WRITE_URL),
-    // The Siliconii CMS gateway resets on concurrent MCP requests, so its reads
-    // run sequentially against the shared runner — still in parallel with the
-    // Google Sheets fetch above, which is a different service.
-    (async () => {
-      const inventory = await fetchCmsInventory(env);
-      const imports = await fetchCmsImports(env);
-      const sales = await fetchCmsSalesKpis(env)
-        .then((value) => ({ ok: true as const, value }))
-        .catch((error) => ({
-          ok: false as const,
-          error: error instanceof Error ? error.message : String(error),
-        }));
-      return { inventory, imports, sales };
-    })(),
+    fetchCmsInventory(env),
+    fetchCmsSalesKpis(env)
+      .then((value) => ({ ok: true as const, value }))
+      .catch((error) => ({
+        ok: false as const,
+        error: error instanceof Error ? error.message : String(error),
+      })),
   ]);
-  const cmsInventory = cms.inventory;
-  const cmsImports = cms.imports;
-  const cmsSalesResult = cms.sales;
   raw.sourceHealth.push(cmsInventory.health);
-  raw.sourceHealth.push(cmsImports.health);
   const rawSources = raw.sources as Record<string, unknown>;
   rawSources.cmsInventory = cmsInventory.rows;
   rawSources.cmsInventoryConfigured = cmsInventory.configured;
-  // Only expose CMS import records whose invoice is on the IMPORTS sheet — the
-  // snapshot is a public GET, so the full 180-day CMS query must never be
-  // serialized wholesale. The IMPORTS rows are the raw source (superset of the
-  // deduped rows), which keeps every legitimate match.
-  rawSources.cmsImports = reduceCmsImportsToImports(
-    cmsImports.rows,
-    Array.isArray(rawSources.imports) ? (rawSources.imports as string[][]) : null,
-  );
-  rawSources.cmsImportsConfigured = cmsImports.configured;
   const snapshot = dedupeOperationalPayload(raw);
   const outboundMeta = snapshot.sources.outboundMeta as { rowCount?: number } | undefined;
   const hasOutboundRows = Number(outboundMeta?.rowCount ?? 0) > 0;
@@ -347,6 +326,26 @@ async function loadMonthlyKpis(env: Env, selectedMonth?: string) {
   const now = new Date();
   const today = pacificToday();
   const { monthKey } = selectedMonthBounds(today, selectedMonth);
+
+  // Fast path: serve current-month KPIs directly from the D1 snapshot,
+  // avoiding a double round-trip to Google Sheets when data is already fresh.
+  const currentMonthKey = `${today.year}-${String(today.month).padStart(2, "0")}`;
+  if (monthKey === currentMonthKey && hasDatabase(env)) {
+    const snapshot = await readCurrentSnapshot(env.DB).catch(() => null);
+    if (snapshot?.kpis) {
+      return {
+        source: snapshot.kpiError ? ("wms-sheet-fallback" as const) : ("siliconii-cms-invoices" as const),
+        currency: "USD",
+        fallback: !!snapshot.kpiError,
+        gatewayError: snapshot.kpiError ?? undefined,
+        kpis: snapshot.kpis,
+        cms: null,
+        month: monthKey,
+        generatedAt: snapshot.generatedAt,
+      };
+    }
+  }
+
   const [raw, cmsSales] = await Promise.all([
     fetchOperationalSources(env.APPS_SCRIPT_WRITE_URL),
     fetchCmsSalesKpis(env, now, fetch, monthKey)
@@ -405,6 +404,44 @@ async function handleMonthlyKpis(request: Request, env: Env) {
   } catch (error) {
     return cmsSalesError(error);
   }
+}
+
+// ── /api/logistics/stream — Server-Sent Events snapshot delivery ─────────────
+// Delivers the current D1 snapshot as a single SSE event then closes the
+// stream. Clients (EventSource) reconnect automatically, providing a
+// near-real-time pull-via-push model without a persistent WebSocket.
+async function handleStream(env: Env): Promise<Response> {
+  const snapshot = hasDatabase(env) ? await readCurrentSnapshot(env.DB).catch(() => null) : null;
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const send = (event: string, data: unknown) => {
+        controller.enqueue(
+          encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+        );
+      };
+      if (snapshot) {
+        send("snapshot", {
+          ok: true,
+          generatedAt: snapshot.generatedAt,
+          kpis: snapshot.kpis,
+          kpiError: snapshot.kpiError ?? "",
+        });
+      } else {
+        send("error", { ok: false, message: "No snapshot available yet" });
+      }
+      send("heartbeat", { ts: Date.now() });
+      controller.close();
+    },
+  });
+  return new Response(body, {
+    status: 200,
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-Accel-Buffering": "no",
+    },
+  });
 }
 
 // Public fulfillment (sk-b2b-mobile WMS) Apps Script endpoint. Kept as a
@@ -488,6 +525,10 @@ export default {
           response = await handleSnapshot(env, context, false);
         }
       }
+    } else if (url.pathname === "/api/logistics/stream") {
+      response = request.method === "GET"
+        ? await handleStream(env)
+        : json({ ok: false, error: "Method not allowed" }, 405);
     } else if (url.pathname === "/api/logistics/cms-sales-kpis") {
       response = request.method === "GET" ? await handleCmsSalesKpis(request, env) : json({ ok: false, error: "Method not allowed" }, 405);
     } else if (url.pathname === "/api/logistics/monthly-kpis") {

@@ -191,15 +191,22 @@ async function handleKpis(env: Env): Promise<Response> {
     .slice(0, 3)
     .map((c: {name:string;earnings:number;moves:number}) => ({ ...c, shipmentPercent: total ? Math.round((c.moves / total) * 1000) / 10 : 0 }));
 
-  // Lane averages (trucking only)
-  const avgBand = (band: string) => {
-    const rows = freight.filter((r) => r.move_type !== "transfer" && r.distance_band === band && r.cost_usd > 0);
-    return rows.length ? rows.reduce((s, r) => s + r.cost_usd, 0) / rows.length : 0;
-  };
-  const avgBandMtd = (band: string) => {
-    const rows = freight.filter((r) => r.move_type !== "transfer" && r.distance_band === band && r.cost_usd > 0 && r.date_code >= monthStart);
-    return rows.length ? rows.reduce((s, r) => s + r.cost_usd, 0) / rows.length : 0;
-  };
+  // Lane totals (trucking only) — replaces the previous per-shipment averages.
+  // The frontend KpiSnapshot type expects totalLocal / totalCalifornia / totalOutOfState
+  // (both YTD and MTD) plus aggregate truckingMtd / truckingYtd.
+  const totalBand = (band: string) =>
+    freight
+      .filter((r) => r.move_type !== "transfer" && r.distance_band === band && r.cost_usd > 0)
+      .reduce((s, r) => s + r.cost_usd, 0);
+  const totalBandMtd = (band: string) =>
+    freight
+      .filter((r) => r.move_type !== "transfer" && r.distance_band === band && r.cost_usd > 0 && r.date_code >= monthStart)
+      .reduce((s, r) => s + r.cost_usd, 0);
+  const truckingYtd = freight.filter((r) => r.move_type !== "transfer").reduce((s, r) => s + r.cost_usd, 0);
+  const truckingMtd = freight.filter((r) => r.move_type !== "transfer" && r.date_code >= monthStart).reduce((s, r) => s + r.cost_usd, 0);
+
+  // suppress unused-var warning for transfers (kept for future reconciliation endpoint)
+  void transfers;
 
   return json({
     ok: true,
@@ -213,12 +220,14 @@ async function handleKpis(env: Env): Promise<Response> {
     topCarriers,
     ltlPercent: total ? Math.round((ltl / total) * 100) : 0,
     ftlPercent: total ? Math.round((ftl / total) * 100) : 0,
-    avgLocal:         avgBand("local"),
-    avgCalifornia:    avgBand("california"),
-    avgOutOfState:    avgBand("out-of-state"),
-    avgLocalMtd:      avgBandMtd("local"),
-    avgCaliforniaMtd: avgBandMtd("california"),
-    avgOutOfStateMtd: avgBandMtd("out-of-state"),
+    totalLocal:         totalBand("local"),
+    totalCalifornia:    totalBand("california"),
+    totalOutOfState:    totalBand("out-of-state"),
+    totalLocalMtd:      totalBandMtd("local"),
+    totalCaliforniaMtd: totalBandMtd("california"),
+    totalOutOfStateMtd: totalBandMtd("out-of-state"),
+    truckingMtd,
+    truckingYtd,
   });
 }
 
