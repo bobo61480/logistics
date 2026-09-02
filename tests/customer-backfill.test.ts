@@ -99,6 +99,7 @@ type LoggedCall = { tag: string; subject: string; detail: unknown };
 
 function loadBackfillHelpers(loggedCalls?: LoggedCall[]): BackfillHelpers {
   const codeSource = readFileSync("google-apps-script/Code.gs", "utf8");
+  const customerMatchingSource = readFileSync("google-apps-script/CustomerMatching.gs", "utf8");
   const backfillSource = readFileSync("google-apps-script/CustomerBackfill.gs", "utf8");
   // logPipeline_ lives in GmailPipeline.gs (not concatenated here) and
   // Logger is a real Apps Script global — stub both so
@@ -116,7 +117,7 @@ function loadBackfillHelpers(loggedCalls?: LoggedCall[]): BackfillHelpers {
   });
 
   vm.runInContext(
-    `${codeSource}\n${backfillSource}\n;globalThis.__backfill = {` +
+    `${codeSource}\n${customerMatchingSource}\n${backfillSource}\n;globalThis.__backfill = {` +
       "findB2bTruckingHeader_,buildB2bCustomerAggregates_,findCustomerEntryHeader_," +
       "mergeCustomerEntryAddresses_,findBackfillCustomerDbHeader_,buildBackfillCustomerRecords_," +
       "matchBackfillCustomerRecord_,classifyCustomerCandidate_,stripBackfillLocationSuffix_," +

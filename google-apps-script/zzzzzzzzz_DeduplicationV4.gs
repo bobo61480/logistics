@@ -215,27 +215,3 @@ function dedupeV4ExistingAudit_(entry, allowedStatuses) {
   return false;
 }
 
-function dedupeV4InstallAuditGuards_() {
-  if (typeof addPendingRow_ === "function" && !addPendingRow_._dedupeV4) {
-    var originalPending = addPendingRow_;
-    var wrappedPending = function (entry) {
-      if (dedupeV4ExistingAudit_(entry, ["NEEDS REVIEW", "NEEDS CORRECTION", "APPROVED", "COMMITTED"])) return { duplicate: true };
-      return originalPending(entry);
-    };
-    wrappedPending._dedupeV4 = true;
-    addPendingRow_ = wrappedPending;
-  }
-
-  if (typeof addCommittedAuditRow_ === "function" && !addCommittedAuditRow_._dedupeV4) {
-    var originalCommitted = addCommittedAuditRow_;
-    var wrappedCommitted = function (entry) {
-      if (dedupeV4ExistingAudit_(entry, ["COMMITTED"])) return { duplicate: true };
-      return originalCommitted(entry);
-    };
-    wrappedCommitted._dedupeV4 = true;
-    addCommittedAuditRow_ = wrappedCommitted;
-  }
-  return DEDUPLICATION_V4_VERSION;
-}
-
-var DEDUPLICATION_V4_INSTALLED = dedupeV4InstallAuditGuards_();

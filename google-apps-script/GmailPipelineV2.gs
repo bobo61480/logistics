@@ -14,7 +14,7 @@
 
 /* eslint-disable no-unused-vars */
 
-var GMAIL_PIPELINE_V2_VERSION = "2026-08-12-v4-status-retry-stabilization";
+var GMAIL_PIPELINE_V2_VERSION = "2026-08-31-v5-trigger-boundary-recovery";
 var GMAIL_V2_LOOKBACK_DAYS = 4;
 var GMAIL_V2_MAX_THREADS = 12;
 var GMAIL_V2_RUNTIME_BUDGET_MS = 210000;
@@ -25,9 +25,15 @@ var GMAIL_V2_MAX_TRANSIENT_ATTEMPTS = 4;
 
 function processLogisticsEmailsV2() {
   var lock = LockService.getScriptLock();
-  if (!lock.tryLock(5000)) return { skipped: "locked" };
+  if (!lock.tryLock(5000)) {
+    recordTriggerLockSkip_("processLogisticsEmailsV2");
+    return { skipped: "locked" };
+  }
   var runStarted = Date.now();
+  var stats;
+  var shouldRefreshD1 = false;
   try {
+    ensureCanonicalTriggersForVersion_();
     var labels = gmailV2Labels_();
     var queries = gmailV2Queries_();
     var threadsById = {};
@@ -37,9 +43,10 @@ function processLogisticsEmailsV2() {
       });
     });
 
-    var stats = {
+    stats = {
       threads: 0, messages: 0, inserted: 0, updated: 0, noop: 0,
-      pending: 0, errors: 0, deferredThreads: 0, retryDeferred: 0, budgetHit: false
+      pending: 0, errors: 0, deferredThreads: 0, retryDeferred: 0, budgetHit: false,
+      priorLockSkips: consumeTriggerLockSkips_("processLogisticsEmailsV2")
     };
     var threadIds = Object.keys(threadsById).slice(0, GMAIL_V2_MAX_THREADS);
     for (var ti = 0; ti < threadIds.length; ti++) {
@@ -96,18 +103,19 @@ function processLogisticsEmailsV2() {
 
     if (stats.inserted || stats.updated) {
       SpreadsheetApp.flush();
-      if (Date.now() - runStarted < GMAIL_V2_RUNTIME_BUDGET_MS - 45000) {
-        try { syncInventoryModule(); } catch (syncErr) { writeLog_("GMAIL V2 INVENTORY FOLLOWUP", "warn", String(syncErr)); }
-      } else {
-        writeLog_("GMAIL V2 INVENTORY FOLLOWUP", "deferred", "Hourly inventory sync will pick up Gmail source updates.");
-      }
+      shouldRefreshD1 = true;
+      // syncInventoryModule owns the same script lock as this Gmail run. A
+      // nested call can only time out or hide lock starvation, so the canonical
+      // hourly trigger owns inventory/KPI refresh while D1 is refreshed here.
+      writeLog_("GMAIL V2 INVENTORY FOLLOWUP", "deferred", "Hourly inventory sync will pick up Gmail source updates.");
     }
     stats.elapsedMs = Date.now() - runStarted;
     writeLog_("GMAIL V2 RUN", GMAIL_PIPELINE_V2_VERSION, JSON.stringify(stats));
-    return stats;
   } finally {
     lock.releaseLock();
   }
+  if (shouldRefreshD1) gmailSafetyV4RefreshD1_("processLogisticsEmailsV2");
+  return stats;
 }
 
 function gmailV2Queries_() {
@@ -460,7 +468,7 @@ function mergeRecordContextV2_(record, context, meta) {
   if (!out.note) out.note = context.note || "";
   out._sourceEmail = meta.permalink;
   out._emailSubject = meta.subject;
-  return out;
+  return gmailSafetyV4ApplyRecord_(out, meta || {});
 }
 
 function extractAttachmentRecordsV2_(attachment, name, context, meta) {
@@ -644,35 +652,11 @@ function xlsxTablesV2_(blob) {
 }
 
 function pdfTextV2_(blob) {
-  var id = convertBlobWithDriveRestV2_(blob, "application/vnd.google-apps.document");
-  try {
-    var url = "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(id) + "/export?mimeType=text%2Fplain";
-    var response = UrlFetchApp.fetch(url, { headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() }, muteHttpExceptions: true });
-    if (response.getResponseCode() >= 300) throw new Error("PDF text export failed HTTP " + response.getResponseCode());
-    return response.getContentText();
-  } finally {
-    try { DriveApp.getFileById(id).setTrashed(true); } catch (e) {}
-  }
+  return gmailSafetyV4PdfText_(blob);
 }
 
 function convertBlobWithDriveRestV2_(blob, targetMime) {
-  var boundary = "sklogistics_" + Date.now() + "_" + Math.floor(Math.random() * 1000000);
-  var metadata = JSON.stringify({ name: "TMP-email-import-" + Date.now(), mimeType: targetMime });
-  var prefix = "--" + boundary + "\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n" + metadata +
-    "\r\n--" + boundary + "\r\nContent-Type: " + (blob.getContentType() || "application/octet-stream") + "\r\n\r\n";
-  var suffix = "\r\n--" + boundary + "--\r\n";
-  var bytes = Utilities.newBlob(prefix).getBytes().concat(blob.getBytes()).concat(Utilities.newBlob(suffix).getBytes());
-  var response = UrlFetchApp.fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id", {
-    method: "post",
-    contentType: "multipart/related; boundary=" + boundary,
-    payload: bytes,
-    headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
-    muteHttpExceptions: true
-  });
-  if (response.getResponseCode() >= 300) throw new Error("Drive conversion failed HTTP " + response.getResponseCode() + ": " + response.getContentText().slice(0, 250));
-  var parsed = JSON.parse(response.getContentText());
-  if (!parsed.id) throw new Error("Drive conversion returned no file id.");
-  return parsed.id;
+  return gmailSafetyV4ConvertBlob_(blob, targetMime);
 }
 
 function pdfTextRecordV2_(text, context, sourceName) {
@@ -751,13 +735,27 @@ function childFolderV2_(parent, name) {
   return it.hasNext() ? it.next() : parent.createFolder(name);
 }
 
+function chooseInboundInsertRowV2_(data, schedulingIndex) {
+  if (schedulingIndex < 0) throw new Error("IMPORTS SCHEDULING marker is missing; cannot safely insert an import shipment.");
+  var lastOccupiedIndex = 1;
+  for (var i = 2; i < schedulingIndex; i++) {
+    var occupied = (data[i] || []).some(function (cell) { return String(cell || "").trim() !== ""; });
+    if (occupied) lastOccupiedIndex = i;
+  }
+  var markerRow = schedulingIndex + 1;
+  var candidateRow = lastOccupiedIndex + 2;
+  if (candidateRow < markerRow) return { row: candidateRow, insertBeforeMarker: false };
+  return { row: markerRow, insertBeforeMarker: true };
+}
+
 function upsertInboundEmailV2_(record, allowInsert) {
   var ss = SpreadsheetApp.openById(GMAIL_PIPELINE.masterId);
   var sheet = ss.getSheetByName("IMPORTS");
   if (!sheet) throw new Error("IMPORTS sheet not found.");
   var data = sheet.getDataRange().getDisplayValues();
   var schedulingIndex = data.findIndex(function (row) { return String(row[0] || "").trim().toUpperCase() === "SCHEDULING"; });
-  var end = schedulingIndex === -1 ? data.length : schedulingIndex;
+  if (schedulingIndex < 0) throw new Error("IMPORTS SCHEDULING marker is missing; ingestion stopped before the small-parcel section.");
+  var end = schedulingIndex;
   var candidates = [];
   for (var r = 2; r < end; r++) {
     var score = inboundMatchScoreV2_(data[r], record);
@@ -770,9 +768,9 @@ function upsertInboundEmailV2_(record, allowInsert) {
   }
   if (!allowInsert) return { matched: false, action: "noop" };
   if (!record.eta || !(record.shipmentNo || record.container || record.mbl || record.hbl)) return { matched: false, action: "noop" };
-  var markerRow = schedulingIndex === -1 ? sheet.getLastRow() + 1 : schedulingIndex + 1;
-  sheet.insertRowBefore(markerRow);
-  var targetRow = markerRow;
+  var insertPlan = chooseInboundInsertRowV2_(data, schedulingIndex);
+  if (insertPlan.insertBeforeMarker) sheet.insertRowBefore(insertPlan.row);
+  var targetRow = insertPlan.row;
   if (targetRow > 3) sheet.getRange(targetRow - 1, 1, 1, 28).copyTo(sheet.getRange(targetRow, 1, 1, 28), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
   var values = new Array(28).fill("");
   values[0] = record.shipmentNo || "EMAIL IMPORT";

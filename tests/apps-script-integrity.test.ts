@@ -41,13 +41,12 @@ describe("Apps Script production integrity", () => {
   });
 
   it("has exactly one production compatibility entry point for the legacy WMS scanner name", () => {
-    const code = read("google-apps-script/Code.gs");
-    const compatibility = read("google-apps-script/zz_WmsTruckingCompatibility.gs");
-    const combined = `${code}\n${compatibility}`;
+    const importer = read("google-apps-script/WmsTruckingSyncV2.gs");
+    const combined = importer;
     const matches = combined.match(/function\s+scanAndImportWmsTruckingOrders\s*\(/g) ?? [];
 
     expect(matches).toHaveLength(1);
-    expect(compatibility).toContain("return scanAndImportWmsTruckingOrdersV2();");
+    expect(importer).toContain("return scanAndImportWmsTruckingOrdersV2();");
   });
 
   it("central trigger provisioning cleans legacy WMS/Gmail handlers and provisions the current ones", () => {
@@ -65,14 +64,15 @@ describe("Apps Script production integrity", () => {
     expect(triggers).not.toContain('{ handler: "requestSiteRedeploy"');
   });
 
-  it("re-enables the hardened WMS trucking importer in dry-run mode with the customer-canonicalization fix", () => {
+  it("runs the hardened WMS trucking importer live only with destination/date safeguards", () => {
     const importer = read("google-apps-script/WmsTruckingSyncV2.gs");
     const code = read("google-apps-script/Code.gs");
 
     expect(importer).toContain("var WMS_TRUCKING_SYNC_ENABLED = true;");
-    expect(importer).toContain("var WMS_TRUCKING_DRY_RUN = true;");
-    expect(importer).toContain("function logWmsDryRun_(");
-    expect(importer).toContain("function wouldChangeMappedValue_(");
+    expect(importer).toContain("var WMS_TRUCKING_DRY_RUN = false;");
+    expect(importer).toContain("function wmsDestinationHint_(");
+    expect(importer).toContain("function shouldWmsOverwriteShipDate_(");
+    expect(importer).toContain("skippedOperational");
     // Word-boundary anchored — must not collapse "MEGA MARTINEZ..." into
     // "MEGA MART" the way the unanchored `indexOf(...) === 0` check used to
     // (see tests/wms-trucking-sync.test.ts for the behavioral regression test).

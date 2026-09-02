@@ -47,6 +47,11 @@ function doGet(e) {
   try {
     const action = String((e && e.parameter && e.parameter.action) || "").trim().toLowerCase();
     if (action !== "snapshot") return json_({ ok: false, error: "Unsupported action." });
+    try {
+      ensureCanonicalTriggersForVersion_();
+    } catch (triggerRepairError) {
+      Logger.log("Snapshot trigger-plan repair failed: " + String(triggerRepairError && triggerRepairError.message || triggerRepairError));
+    }
     const master = SpreadsheetApp.openById(SPREADSHEET_ID);
     const national = SpreadsheetApp.openById(NATIONAL_SPREADSHEET_ID);
     const wms = SpreadsheetApp.openById(WMS_SPREADSHEET_ID);
@@ -505,8 +510,8 @@ function referencesMatch_(left, right) {
   return a.includes(b) || b.includes(a);
 }
 
-// The legacy WMS importer was removed on 2026-08-12. The only callable legacy
-// handler name now lives in zz_WmsTruckingCompatibility.gs and delegates to V2.
+// The legacy WMS importer was removed on 2026-08-12. Its compatibility alias
+// lives beside the canonical implementation in WmsTruckingSyncV2.gs.
 
 function findWmsTruckingHeader_(rows) {
   for (let r = 0; r < Math.min(rows.length, 10); r++) {

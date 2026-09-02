@@ -367,9 +367,11 @@ test("renders live schedules and KPI cards computed from the workbooks", async (
   await expect(kpiCard("TRUCKLOAD MIX")).toContainText("33%");
   await expect(kpiCard("TRUCKLOAD MIX")).toContainText("67%");
 
-  // Lane averages (transfers excluded): local $1,200, out of state $3,400.
-  await expect(kpiCard("AVG TRUCKING COST")).toContainText("$1,200");
-  await expect(kpiCard("AVG TRUCKING COST")).toContainText("$3,400");
+  // Total trucking cost (transfers excluded): all trucking $4,600, with the
+  // California lane $1,200 and the out-of-state lane $3,400.
+  await expect(kpiCard("TOTAL TRUCKING COST")).toContainText("$4,600");
+  await expect(kpiCard("TOTAL TRUCKING COST")).toContainText("$1,200");
+  await expect(kpiCard("TOTAL TRUCKING COST")).toContainText("$3,400");
 
   // Shipment Notices card renders the snapshot's ingestion feed.
   await expect(page.getByRole("heading", { name: "Shipment Notices" })).toBeVisible();

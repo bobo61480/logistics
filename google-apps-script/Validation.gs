@@ -12,8 +12,8 @@
 var VALIDATION = {
   pendingSheetName: "PENDING VERIFICATION",
   pendingHeaders: ["Timestamp", "Kind", "Status", "Issues", "Customer", "Invoice / PI", "BL / PRO", "Container", "Ship Date / ETA", "Qty", "Carrier / Vessel", "Note", "Source Email", "Drive File", "Raw JSON"],
-  statusValues: ["NEEDS REVIEW", "APPROVED", "REJECTED", "COMMITTED"],
-  colors: { needsReview: "#FFF3CD", approved: "#D9EAD3", rejected: "#F4CCCC", committed: "#E8F0FE" },
+  statusValues: ["NEEDS REVIEW", "NEEDS CORRECTION", "APPROVED", "REJECTED", "COMMITTED"],
+  colors: { needsReview: "#FFF3CD", needsCorrection: "#FCE8B2", approved: "#D9EAD3", rejected: "#F4CCCC", committed: "#E8F0FE" },
   dateWindowPastDays: 45,     // reject dates further back than this
   dateWindowFutureDays: 400   // reject dates further out than this
 };
@@ -99,29 +99,37 @@ function ensurePendingSheet_() {
   return sheet;
 }
 
-/** Parks a questionable record for manual review (yellow row). */
-function addPendingRow_(entry) {
+function appendVerificationAuditRow_(entry, status, issues, note, background) {
+  var allowedStatuses = status === "COMMITTED" ? ["COMMITTED"] : ["NEEDS REVIEW", "NEEDS CORRECTION", "APPROVED", "COMMITTED"];
+  if (dedupeV4ExistingAudit_(entry, allowedStatuses)) return { duplicate: true };
   var sheet = ensurePendingSheet_();
   var r = entry.record || {};
+  var blOrPro = status === "COMMITTED" ? (r.pro || r.shipmentNo || r.mbl || r.hbl || "") : (r.pro || "");
   sheet.appendRow([
     new Date(),
     entry.kind || "",
-    "NEEDS REVIEW",
-    (entry.issues || []).join(" | "),
+    status,
+    issues || "",
     r.customer || "",
     r.invoice || "",
-    r.pro || "",
+    blOrPro,
     r.container || "",
     r.shipDate || r.eta || "",
     r.qty || "",
     r.carrier || r.vessel || "",
-    r.note || "",
+    note || r.note || "",
     (entry.meta && entry.meta.permalink) || r._sourceEmail || "",
     entry.driveUrl || r._driveFile || "",
     JSON.stringify(r).slice(0, 5000)
   ]);
   sheet.getRange(sheet.getLastRow(), 1, 1, VALIDATION.pendingHeaders.length)
-    .setBackground(VALIDATION.colors.needsReview);
+    .setBackground(background);
+  return { duplicate: false, row: sheet.getLastRow() };
+}
+
+/** Parks a questionable record for manual review (yellow row). */
+function addPendingRow_(entry) {
+  return appendVerificationAuditRow_(entry, "NEEDS REVIEW", (entry.issues || []).join(" | "), "", VALIDATION.colors.needsReview);
 }
 
 /**
@@ -134,33 +142,7 @@ function addPendingRow_(entry) {
  * changes are needed to surface it.
  */
 function addCommittedAuditRow_(entry) {
-  var sheet = ensurePendingSheet_();
-  var r = entry.record || {};
-  // Inbound records identify themselves via shipmentNo/mbl/hbl, not `pro`
-  // (an outbound/trucking concept) — without this fallback, an inbound
-  // update matched solely on one of those fields writes no BL/PRO value,
-  // and the worker (which derives shipmentId from Invoice / BL-PRO /
-  // Container only) shows the notice as "Unidentified shipment".
-  var blOrPro = r.pro || r.shipmentNo || r.mbl || r.hbl || "";
-  sheet.appendRow([
-    new Date(),
-    entry.kind || "",
-    "COMMITTED",
-    "",
-    r.customer || "",
-    r.invoice || "",
-    blOrPro,
-    r.container || "",
-    r.shipDate || r.eta || "",
-    r.qty || "",
-    r.carrier || r.vessel || "",
-    entry.note || "",
-    (entry.meta && entry.meta.permalink) || r._sourceEmail || "",
-    entry.driveUrl || r._driveFolder || "",
-    JSON.stringify(r).slice(0, 5000)
-  ]);
-  sheet.getRange(sheet.getLastRow(), 1, 1, VALIDATION.pendingHeaders.length)
-    .setBackground(VALIDATION.colors.committed);
+  return appendVerificationAuditRow_(entry, "COMMITTED", "", entry.note || "", VALIDATION.colors.committed);
 }
 
 /**
@@ -183,10 +165,21 @@ function commitApprovedPendingRow_(sheet, rowIndex1based, data, col) {
   record.note = data[col["Note"]] || record.note;
   var when = data[col["Ship Date / ETA"]];
   var kind = String(data[col["Kind"]] || "outbound").toLowerCase();
-  if (kind === "inbound") { record.eta = when || record.eta; upsertInboundEmailV2_(record, true); }
-  else { record.shipDate = when || record.shipDate; upsertOutboundEmailV2_(record, true); }
+  var result;
+  if (kind === "inbound") { record.eta = when || record.eta; result = upsertInboundEmailV2_(record, true); }
+  else { record.shipDate = when || record.shipDate; result = upsertOutboundEmailV2_(record, true); }
+  if (!result || result.matched !== true) {
+    sheet.getRange(rowIndex1based, col["Status"] + 1).setValue(GMAIL_SAFETY_V4_NEEDS_CORRECTION);
+    var issueCell = sheet.getRange(rowIndex1based, col["Issues"] + 1);
+    var priorIssue = String(issueCell.getDisplayValue() || "").trim();
+    var issue = "Approved record could not be uniquely matched or safely inserted. Correct identifiers/customer/date, then approve again.";
+    if (priorIssue.indexOf(issue) === -1) issueCell.setValue(priorIssue ? priorIssue + " | " + issue : issue);
+    sheet.getRange(rowIndex1based, 1, 1, VALIDATION.pendingHeaders.length).setBackground(VALIDATION.colors.needsCorrection);
+    return { committed: false, matched: false, action: "needs-correction" };
+  }
   sheet.getRange(rowIndex1based, col["Status"] + 1).setValue("COMMITTED");
   sheet.getRange(rowIndex1based, 1, 1, VALIDATION.pendingHeaders.length).setBackground(VALIDATION.colors.committed);
+  return { committed: true, matched: true, action: result.action, row: result.row, changes: result.changes || [] };
 }
 
 /**
@@ -197,28 +190,30 @@ function commitApprovedPendingRow_(sheet, rowIndex1based, data, col) {
 function processApprovedPending() {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(5000)) return;
+  var result = { committed: 0 };
   try {
     var sheet = ensurePendingSheet_();
     var data = sheet.getDataRange().getDisplayValues();
-    if (data.length < 2) return { committed: 0 };
-    var col = {};
-    VALIDATION.pendingHeaders.forEach(function (h, i) { col[h] = i; });
+    if (data.length >= 2) {
+      var col = {};
+      VALIDATION.pendingHeaders.forEach(function (h, i) { col[h] = i; });
 
-    var committed = 0;
-    for (var r = 1; r < data.length; r++) {
-      var status = String(data[r][col["Status"]] || "").trim().toUpperCase();
-      var rowRange = sheet.getRange(r + 1, 1, 1, VALIDATION.pendingHeaders.length);
-      if (status === "APPROVED") {
-        commitApprovedPendingRow_(sheet, r + 1, data[r], col);
-        committed++;
-      } else if (status === "REJECTED") {
-        rowRange.setBackground(VALIDATION.colors.rejected).setFontColor("#999999");
+      for (var r = 1; r < data.length; r++) {
+        var status = String(data[r][col["Status"]] || "").trim().toUpperCase();
+        var rowRange = sheet.getRange(r + 1, 1, 1, VALIDATION.pendingHeaders.length);
+        if (status === "APPROVED") {
+          var commitResult = commitApprovedPendingRow_(sheet, r + 1, data[r], col);
+          if (commitResult && commitResult.committed) result.committed++;
+        } else if (status === "REJECTED") {
+          rowRange.setBackground(VALIDATION.colors.rejected).setFontColor("#999999");
+        }
       }
     }
-    return { committed: committed };
   } finally {
     lock.releaseLock();
   }
+  if (result.committed) gmailSafetyV4RefreshD1_("processApprovedPending");
+  return result;
 }
 
 /**
@@ -252,6 +247,8 @@ function reviewPendingRow_(payload) {
 
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(15000)) throw new Error("Server busy, please retry.");
+  var result;
+  var shouldRefreshD1 = false;
   try {
     var sheet = ensurePendingSheet_();
     var data = sheet.getDataRange().getDisplayValues();
@@ -277,17 +274,28 @@ function reviewPendingRow_(payload) {
     var rowRange = sheet.getRange(rowIndex1based, 1, 1, VALIDATION.pendingHeaders.length);
     if (decision === "approve") {
       sheet.getRange(rowIndex1based, col["Status"] + 1).setValue("APPROVED");
-      commitApprovedPendingRow_(sheet, rowIndex1based, data[r0], col);
+      var commitResult = commitApprovedPendingRow_(sheet, rowIndex1based, data[r0], col);
       SpreadsheetApp.flush();
-      return { ok: true, action: "approved", row: rowIndex1based, status: "COMMITTED" };
+      shouldRefreshD1 = Boolean(commitResult && commitResult.committed);
+      var actualStatus = String(sheet.getRange(rowIndex1based, col["Status"] + 1).getDisplayValue() || "").trim();
+      result = {
+        ok: actualStatus === "COMMITTED",
+        action: "approved",
+        row: rowIndex1based,
+        status: actualStatus,
+        error: actualStatus === "COMMITTED" ? "" : "Approved review could not be committed safely; row moved to " + actualStatus + "."
+      };
+    } else {
+      sheet.getRange(rowIndex1based, col["Status"] + 1).setValue("REJECTED");
+      rowRange.setBackground(VALIDATION.colors.rejected).setFontColor("#999999");
+      SpreadsheetApp.flush();
+      result = { ok: true, action: "rejected", row: rowIndex1based, status: "REJECTED" };
     }
-    sheet.getRange(rowIndex1based, col["Status"] + 1).setValue("REJECTED");
-    rowRange.setBackground(VALIDATION.colors.rejected).setFontColor("#999999");
-    SpreadsheetApp.flush();
-    return { ok: true, action: "rejected", row: rowIndex1based, status: "REJECTED" };
   } finally {
     lock.releaseLock();
   }
+  if (shouldRefreshD1) gmailSafetyV4RefreshD1_("reviewPendingRow_");
+  return result;
 }
 
 /** Count of rows still needing review — consumed by the KPI dashboard. */

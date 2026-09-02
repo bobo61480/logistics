@@ -350,13 +350,15 @@ describe("computeLiveKpis", () => {
     expect(kpis.ltlPercent).toBe(20);
     expect(kpis.ftlPercent).toBe(80);
 
-    // Lane averages exclude transfers.
-    expect(kpis.avgLocal).toBe(1_200);
-    expect(kpis.avgCalifornia).toBe(800);
-    expect(kpis.avgOutOfState).toBe(3_400);
-    expect(kpis.avgLocalMtd).toBe(1_200);
-    expect(kpis.avgCaliforniaMtd).toBe(800);
-    expect(kpis.avgOutOfStateMtd).toBe(0); // the only out-of-state move was 7/15
+    // Trucking and lane totals exclude transfers.
+    expect(kpis.truckingMtd).toBe(2_000);
+    expect(kpis.truckingYtd).toBe(5_400);
+    expect(kpis.totalLocal).toBe(1_200);
+    expect(kpis.totalCalifornia).toBe(800);
+    expect(kpis.totalOutOfState).toBe(3_400);
+    expect(kpis.totalLocalMtd).toBe(1_200);
+    expect(kpis.totalCaliforniaMtd).toBe(800);
+    expect(kpis.totalOutOfStateMtd).toBe(0); // the only out-of-state move was 7/15
   });
 
   it("throws a readable error when a workbook read fails", async () => {
