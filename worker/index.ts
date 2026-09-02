@@ -17,11 +17,14 @@ import { handlePendingReviewCommand } from "./pending-review-command";
 import { handleTrackingCommand } from "./tracking-command";
 import { fetchCmsInventory } from "./cms-inventory";
 import { fetchCmsSalesKpis } from "./cms-sales-kpis";
+import {
+  cacheSnapshot,
+  readFreshCache,
+  SNAPSHOT_CACHE_SECONDS,
+  SNAPSHOT_REFRESH_SECONDS,
+} from "./snapshot-cache";
 
-const WORKER_VERSION = "2026-09-02-worker-v12-sse-d1-fastpath";
-const SNAPSHOT_CACHE_URL = "https://stylekorean.internal/api/logistics/snapshot";
-const SNAPSHOT_CACHE_SECONDS = 60;
-const SNAPSHOT_REFRESH_SECONDS = 15 * 60;
+const WORKER_VERSION = "2026-09-02-worker-v13-relational-sheet-store";
 
 type DatabaseEnv = Env & { DB: D1Database };
 
@@ -167,26 +170,6 @@ function snapshotResponse(payload: OperationalSnapshot & Record<string, unknown>
   return json(payload, 200, `public, max-age=0, s-maxage=${SNAPSHOT_CACHE_SECONDS}`);
 }
 
-function cacheSnapshot(context: ExecutionContext, response: Response) {
-  const cache = (caches as CacheStorage & { default: Cache }).default;
-  const cachedResponse = response.clone();
-  cachedResponse.headers.set("cache-control", `public, max-age=${SNAPSHOT_REFRESH_SECONDS}`);
-  cachedResponse.headers.set("x-stylekorean-cached-at", String(Date.now()));
-  context.waitUntil(cache.put(new Request(SNAPSHOT_CACHE_URL), cachedResponse));
-}
-
-async function readFreshCache() {
-  const cache = (caches as CacheStorage & { default: Cache }).default;
-  const cached = await cache.match(new Request(SNAPSHOT_CACHE_URL));
-  if (!cached) return null;
-  const cachedAt = Number(cached.headers.get("x-stylekorean-cached-at") || 0);
-  if (!cachedAt || Date.now() - cachedAt > SNAPSHOT_CACHE_SECONDS * 1000) return { cached, fresh: false };
-  const response = new Response(cached.body, cached);
-  response.headers.set("cache-control", "public, max-age=0, must-revalidate");
-  response.headers.set("x-stylekorean-cache", "HIT-D1");
-  return { cached: response, fresh: true };
-}
-
 async function handleSnapshot(env: Env, context: ExecutionContext, forceRefresh = false) {
   if (!hasDatabase(env)) return json({ ok: false, error: "D1 frontend database is not configured", frontendSource: "d1" }, 503);
 
@@ -248,11 +231,13 @@ async function handleSnapshot(env: Env, context: ExecutionContext, forceRefresh 
 async function handleHealth(env: Env) {
   let databaseState: "unbound" | "initializing" | "ready" | "unavailable" = "unbound";
   let databaseAgeSeconds: number | undefined;
+  let sheetStore: Awaited<ReturnType<typeof readDatabaseHealth>>["sheetStore"] | undefined;
   if (hasDatabase(env)) {
     try {
       const health = await readDatabaseHealth(env.DB);
       databaseState = health.ready ? "ready" : "initializing";
       databaseAgeSeconds = health.ready ? health.ageSeconds : undefined;
+      sheetStore = health.sheetStore;
     } catch (error) {
       databaseState = "unavailable";
       console.error(JSON.stringify({ event: "d1-health-summary-failed", error: String(error) }));
@@ -270,8 +255,10 @@ async function handleHealth(env: Env) {
     databaseReady: databaseState === "ready",
     databaseState,
     databaseAgeSeconds,
+    sheetStore,
     deduplication: "enabled-before-d1-publish",
     statusWriteMode: "strict Google Sheets + D1 dual write",
+    statusWriteScope: "single relational row per confirmed status change",
     statusWriteAuthentication: "none",
     statusWriteRateLimit: "30 requests per 60 seconds per client IP and Cloudflare location",
     checkedAt: new Date().toISOString(),

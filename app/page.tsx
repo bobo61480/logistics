@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { INBOUND_DOCUMENT_LINKS, INBOUND_PACKING_LIST_LINKS } from "./inbound-links";
 import { INBOUND_INVOICE_LINKS } from "./inbound-invoice-links";
 import { packingListPallets } from "./inbound-pallets";
-import { computeLiveKpis } from "../lib/sales-kpis";
 import FulfillmentTkOrders from "./FulfillmentTkOrders";
 import { GmailIngestionCard, type GmailIngestionEvent } from "./gmail-ingestion-card";
 import { DriveArchiveCard, driveLinkGlyph } from "./drive-archive-card";
@@ -214,54 +213,6 @@ function cell(row: any, index: number) {
   if (Array.isArray(row)) return clean(row[index]);
   const value = row?.c?.[index];
   return clean(value?.f ?? value?.v ?? "");
-}
-
-function parseCsv(text: string) {
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let value = "";
-  let quoted = false;
-
-  for (let index = 0; index < text.length; index += 1) {
-    const character = text[index];
-    if (quoted) {
-      if (character === '"' && text[index + 1] === '"') {
-        value += '"';
-        index += 1;
-      } else if (character === '"') {
-        quoted = false;
-      } else {
-        value += character;
-      }
-    } else if (character === '"') {
-      quoted = true;
-    } else if (character === ",") {
-      row.push(value);
-      value = "";
-    } else if (character === "\n") {
-      row.push(value.replace(/\r$/, ""));
-      rows.push(row);
-      row = [];
-      value = "";
-    } else {
-      value += character;
-    }
-  }
-
-  if (value || row.length) {
-    row.push(value.replace(/\r$/, ""));
-    rows.push(row);
-  }
-  return rows;
-}
-
-function parseGviz(text: string) {
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start < 0 || end < 0) throw new Error("The workbook returned an unreadable response.");
-  const payload = JSON.parse(text.slice(start, end + 1));
-  if (!payload.table) throw new Error("No schedule data was returned.");
-  return payload.table;
 }
 
 function parseDate(value: string) {
@@ -704,39 +655,6 @@ function classifyOutboundReference(value: string) {
   return { carrierReference: "", trackingNumber: text };
 }
 
-async function fetchTable(
-  spreadsheetId: string,
-  gid: number,
-  range: string,
-  headers: number,
-) {
-  const url = new URL(`https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq`);
-  url.searchParams.set("tqx", "out:json");
-  url.searchParams.set("gid", String(gid));
-  url.searchParams.set("range", range);
-  url.searchParams.set("headers", String(headers));
-  url.searchParams.set("_", String(Date.now()));
-  const response = await fetch(url, { cache: "no-store" });
-  if (!response.ok) throw new Error(`Workbook read failed (${response.status}).`);
-  return parseGviz(await response.text());
-}
-
-async function fetchOptionalSheet(sheetName: string, range: string) {
-  const url = new URL(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq`);
-  url.searchParams.set("tqx", "out:json");
-  url.searchParams.set("sheet", sheetName);
-  url.searchParams.set("range", range);
-  url.searchParams.set("headers", "1");
-  url.searchParams.set("_", String(Date.now()));
-  const response = await fetch(url, { cache: "no-store" });
-  if (!response.ok) return null;
-  try {
-    return parseGviz(await response.text());
-  } catch {
-    return null;
-  }
-}
-
 function inventoryHeader(value: unknown) {
   return clean(value)
     .toUpperCase()
@@ -1122,22 +1040,6 @@ function LowStockPanel({
   );
 }
 
-async function fetchCsvRows(spreadsheetId: string, gid: number) {
-  const url = new URL(`https://docs.google.com/spreadsheets/d/${spreadsheetId}/export`);
-  url.searchParams.set("format", "csv");
-  url.searchParams.set("gid", String(gid));
-  url.searchParams.set("_", String(Date.now()));
-  const response = await fetch(url, { cache: "no-store" });
-  if (!response.ok) throw new Error(`Workbook read failed (${response.status}).`);
-  return parseCsv(await response.text());
-}
-
-async function fetchLiveKpis() {
-  // During migration this remains a Sheets-derived fallback. Once the database
-  // is fully authoritative, the snapshot API can provide the same KPI payload.
-  return (await computeLiveKpis()) as unknown as KpiSnapshot;
-}
-
 function currentMtdMonth() {
   const today = startOfToday();
   return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
@@ -1233,10 +1135,6 @@ const OUTBOUND_SCHEDULE_META: OutboundSourceMeta = {
   fallback: false,
 };
 
-function populatedOutboundRows(rows: string[][], headerRow: number) {
-  return rows.slice(headerRow).some((row) => Boolean(cell(row, 0) && parseDate(cell(row, 3))));
-}
-
 export function enrichScheduleItemsFromEmail(items: ScheduleItem[], events: GmailIngestionEvent[] | null) {
   if (!events?.length) return items;
   const identifiers = new Map<string, GmailIngestionEvent>();
@@ -1285,51 +1183,6 @@ async function fetchWorkerSnapshot(): Promise<WorkerSnapshot> {
     throw new Error(`Worker snapshot is not backed by the D1 read model (storage: ${payload.storage ?? "unset"}).`);
   }
   return payload as WorkerSnapshot;
-}
-
-async function fetchSheetSnapshot() {
-  const [
-    imports,
-    outbound,
-    trucking,
-    nationalOutbound,
-    salesOutbound,
-    liveKpis,
-    inventoryDashboardTable,
-    skwInboundTable,
-    skwStockTable,
-  ] = await Promise.all([
-    fetchCsvRows(SHEET_ID, IMPORTS_GID),
-    fetchCsvRows(SHEET_ID, OUTBOUND_GID),
-    fetchCsvRows(SHEET_ID, TRUCKING_GID),
-    fetchTable(NATIONAL_SHEET_ID, NATIONAL_GID, "A1:U3500", 1),
-    fetchTable(SALES_SHEET_ID, SALES_GID, "A2:AF4200", 1),
-    fetchLiveKpis(),
-    fetchOptionalSheet("INVENTORY", "A1:O6500"),
-    fetchOptionalSheet("SKW_Inbound", "A1:R2500"),
-    fetchOptionalSheet("SKW_Stock", "A1:J2500"),
-  ]);
-  const useSchedule = populatedOutboundRows(outbound, OUTBOUND_SCHEDULE_META.headerRow);
-  const outboundMeta: OutboundSourceMeta = useSchedule
-    ? { ...OUTBOUND_SCHEDULE_META, rowCount: outbound.slice(OUTBOUND_SCHEDULE_META.headerRow).filter((row) => Boolean(cell(row, 0) && cell(row, 3))).length }
-    : {
-        sheetName: "WH Trucking Request",
-        headerRow: 2,
-        rowCount: trucking.slice(2).filter((row) => Boolean(cell(row, 0) && cell(row, 3))).length,
-        fallback: true,
-        reason: "Outbound Shipping Schedule has no shipment rows",
-      };
-  return {
-    imports,
-    outbound: useSchedule ? outbound : trucking,
-    outboundMeta,
-    nationalOutbound,
-    salesOutbound,
-    liveKpis,
-    inventoryDashboardTable,
-    skwInboundTable,
-    skwStockTable,
-  };
 }
 
 async function fetchOperationalSnapshot() {
