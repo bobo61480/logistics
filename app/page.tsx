@@ -484,13 +484,14 @@ function carrierFromTrackingNumber(value: string) {
   return "";
 }
 
-// The live-map tracking backend only integrates UPS/FedEx/USPS (carrier-tracking.ts) —
-// DHL and Amazon don't have a server-side lookup, so they're intentionally excluded here.
-function trackableCarrier(value?: string): "ups" | "fedex" | "usps" | null {
+// Only carriers with a server-side adapter belong in the live tracking queue.
+// Amazon remains excluded until the purchased-shipment carrierId is stored with trackingId.
+function trackableCarrier(value?: string): "ups" | "fedex" | "usps" | "dhl" | null {
   const normalized = clean(value).toLowerCase();
   if (normalized.includes("ups")) return "ups";
   if (normalized.includes("fedex")) return "fedex";
   if (normalized.includes("usps")) return "usps";
+  if (normalized.includes("dhl")) return "dhl";
   return null;
 }
 
@@ -1336,23 +1337,11 @@ async function fetchOperationalSnapshot() {
       },
     };
   } catch (workerError) {
-    // Keep a read-only direct-Sheets fallback so the schedule remains visible
-    // during a Worker routing incident. Status writes still require the Worker.
-    console.warn("Worker snapshot unavailable; falling back to Google Sheets.", workerError);
-    return {
-      ...(await fetchSheetSnapshot()),
-      // The direct-Sheets fallback carries no ingestion feed.
-      gmailIngestion: null,
-      cmsInventory: [],
-      cmsInventoryConfigured: false,
-      connection: {
-        mode: "sheets" as const,
-        storage: "sheets" as const,
-        version: undefined,
-        detail: workerError instanceof Error ? workerError.message : "Worker snapshot unavailable",
-        degradedSources: 0,
-      },
-    };
+    // D1 is the only frontend authority. Do not silently switch the browser to
+    // direct Google Sheets reads during a Worker/D1 incident, because that can
+    // show operators a different state from the database used by writes and APIs.
+    console.error("D1 operational snapshot unavailable.", workerError);
+    throw workerError;
   }
 }
 
