@@ -3196,7 +3196,7 @@ export default function Home() {
                   : connection?.degradedSources
                     ? `${connection.degradedSources} optional source${connection.degradedSources === 1 ? "" : "s"} unavailable`
                     : connection?.storage === "d1"
-                      ? "D1 snapshot · Sheets fallback ready"
+                      ? "D1 snapshot · Sheets source synchronized"
                       : "Worker snapshot · 3 live workbooks connected"}
           </span>
           <span className="mono">

@@ -1207,11 +1207,18 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
   cursor: pointer;
 }
 
-.parcel-summary .source-badge { font-size: 10px; }
+/* Non-title shipment text inside the Small Parcels cards was a mix of 8-10px
+   across badges, tracking, invoice, footer, and the status control, while
+   .parcel-tracking alone sat at 11px -- normalized here to one consistent,
+   slightly larger size so every row reads at the same weight. Card titles
+   (.parcel-heading h2) and the summary count (.parcel-total) are untouched. */
+.parcel-badges .department-badge,
+.parcel-badges .source-badge,
+.parcel-summary .source-badge { font-size: 11px; }
 .parcel-invoice {
   overflow: hidden;
   color: var(--muted);
-  font: 600 10px "IBM Plex Mono", monospace;
+  font: 600 11px "IBM Plex Mono", monospace;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1243,7 +1250,7 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
   display: block;
   overflow: hidden;
   color: var(--muted);
-  font: 600 10px "IBM Plex Mono", monospace;
+  font: 600 11px "IBM Plex Mono", monospace;
   letter-spacing: .01em;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1253,16 +1260,16 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
   min-height: 31px;
   margin: 7px 0 11px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.5;
 }
 
 .parcel-footer {
   color: var(--ink-soft);
-  font: 600 10px "IBM Plex Mono", monospace;
+  font: 600 11px "IBM Plex Mono", monospace;
 }
 
-.parcel-footer b { margin-right: 3px; font-size: 10px; }
+.parcel-footer b { margin-right: 3px; font-size: 11px; }
 
 .parcel-footer a {
   min-height: 28px;
@@ -1275,6 +1282,8 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
 }
 
 .parcel-status-field { margin-top: 8px; }
+.parcel-status-field span { font-size: 11px; }
+.parcel-status-field select { font-size: 11px; }
 
 .parcel-empty {
   grid-column: 1 / -1;

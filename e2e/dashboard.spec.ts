@@ -237,6 +237,42 @@ const workerSnapshot = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+const monthlyKpis = () => ({
+  ok: true,
+  month: `${laToday().getFullYear()}-${String(laToday().getMonth() + 1).padStart(2, "0")}`,
+  currency: "USD",
+  source: "wms-sheet-fallback",
+  fallback: true,
+  gatewayError: "CMS_SALES_GATEWAY_FAILED",
+  kpis: {
+    nationalsSalesMtd: 1500,
+    nationalsSalesYtd: 1500,
+    wmsSalesMtd: 2000,
+    wmsSalesYtd: 2000,
+    shippingMtd: 9600,
+    shippingYtd: 9600,
+    transfersMtd: 5000,
+    transfersYtd: 5000,
+    njTransferMtd: 5000,
+    njTransferYtd: 5000,
+    topCarriers: [
+      { name: "TRANSFER CO", earnings: 5000, moves: 1, shipmentPercent: 33.3 },
+      { name: "XYZ FREIGHT", earnings: 3400, moves: 1, shipmentPercent: 33.3 },
+      { name: "ABC TRUCKING", earnings: 1200, moves: 1, shipmentPercent: 33.3 },
+    ],
+    ltlPercent: 33,
+    ftlPercent: 67,
+    truckingMtd: 4600,
+    truckingYtd: 4600,
+    totalLocal: 1200,
+    totalCalifornia: 1200,
+    totalOutOfState: 3400,
+    totalLocalMtd: 1200,
+    totalCaliforniaMtd: 1200,
+    totalOutOfStateMtd: 3400,
+  },
+});
+
 type MockState = {
   /** Status most recently POSTed to the status write endpoint. */
   postedStatus: string;
@@ -267,6 +303,10 @@ async function mockWorkbooks(page: Page): Promise<MockState> {
 
   await page.route("**/api/logistics/snapshot**", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(workerSnapshot()) }),
+  );
+
+  await page.route("**/api/logistics/monthly-kpis**", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(monthlyKpis()) }),
   );
 
   await page.route("**/api/logistics/status**", async (route) => {
@@ -370,7 +410,7 @@ test("renders live schedules and KPI cards from the D1 snapshot", async ({ page 
   await page.goto("/");
 
   await expect(page.getByRole("heading", { name: /StyleKorean\s*Logistics Hub/ })).toBeVisible();
-  await expect(page.getByText("D1 snapshot · Sheets fallback ready")).toBeVisible();
+  await expect(page.getByText("D1 snapshot · Sheets source synchronized")).toBeVisible();
 
   // Import Schedules table row from the IMPORTS fixture.
   const importTable = page.locator(".import-table");
@@ -426,13 +466,13 @@ test("renders live schedules and KPI cards from the D1 snapshot", async ({ page 
   // ingestion events also surface in the event tracker and as derived import
   // rows, so scope these assertions to the Shipment Notices card itself.
   await expect(page.getByRole("heading", { name: "Shipment Notices" })).toBeVisible();
-  const notices = page.locator("section", { has: page.getByRole("heading", { name: "Shipment Notices" }) });
-  await expect(notices.getByRole("button", { name: "Needs review (1)" })).toBeVisible();
-  await expect(notices.getByText("IN00778")).toBeVisible();
-  await expect(notices.getByText("No ETA or ship date found.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Needs review (1)" })).toBeVisible();
+  const shipmentNotices = page.getByLabel("Email ingestion and document");
+  await expect(shipmentNotices.getByText("IN00778", { exact: true })).toBeVisible();
+  await expect(shipmentNotices.getByText("No ETA or ship date found.")).toBeVisible();
   // A silently-committed row surfaces its "Received: ..." summary prominently.
-  await expect(notices.getByText("Received: IN00777 · MSKU1234567 · ETA 8/30")).toBeVisible();
-  await expect(notices.getByRole("link", { name: "Source email" }).first()).toHaveAttribute(
+  await expect(shipmentNotices.getByText("Received: IN00777 · MSKU1234567 · ETA 8/30")).toBeVisible();
+  await expect(shipmentNotices.getByRole("link", { name: "Source email" }).first()).toHaveAttribute(
     "href",
     "https://mail.google.com/mail/u/0/#all/pending1",
   );
@@ -502,7 +542,7 @@ test("shows the failure banner when the Worker snapshot endpoint fails", async (
   const alert = page.locator(".alert");
   await expect(alert).toBeVisible();
   await expect(alert).toContainText("Schedule unavailable.");
-  await expect(alert).toContainText("(500)");
+  await expect(alert).toContainText("Worker snapshot unavailable (500)");
   await expect(page.getByText("Workbook connection needs attention")).toBeVisible();
 });
 
@@ -555,6 +595,12 @@ test("degrades KPIs without reading Sheets when the Worker ships no KPI payload"
       contentType: "application/json",
       body: JSON.stringify(workerSnapshot({ kpis: null })),
     }),
+  );
+  // No KPI payload anywhere: the current-month projection is unavailable too,
+  // so the browser cannot backfill it from the monthly endpoint either.
+  await page.unroute("**/api/logistics/monthly-kpis**");
+  await page.route("**/api/logistics/monthly-kpis**", (route) =>
+    route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ ok: false }) }),
   );
 
   await page.goto("/");

@@ -159,7 +159,32 @@ function xpoCanonicalStatusV2_(rawStatus, body) {
 
 function xpoDisplayProV2_(value) {
   var digits = String(value || "").replace(/\D/g, "");
-  return digits || String(value || "").trim();
+  if (!digits) return String(value || "").trim();
+
+  // XPO's own "Shipment : XXX-YYYYYY" body field already matches the source
+  // sheets' PRO# format directly (see parseXpoMessageV2_'s shipmentPro regex)
+  // and is preferred over this function. This function only runs as a
+  // fallback when that field is missing and we're left with the continuous
+  // digit string from the email subject ("Pro NNNNNNNNNN") or the "Pro
+  // Number : NNNNNNNNNN" body field instead.
+  //
+  // That continuous string is NOT the same digits as the sheet's "XXX-YYYYYY"
+  // PRO# with the dash removed -- XPO's format embeds one extra "0" after the
+  // first 3 digits (e.g. body "Shipment : 755-361935" vs. subject
+  // "Pro 07550361935" for the identical shipment). Left unconverted, this
+  // fallback never matches any source row (xpoKeyV2_ strips non-alphanumerics
+  // from both sides before comparing, so the extra digit alone breaks the
+  // match) and the notice piles up in PENDING VERIFICATION as
+  // "No source row matched XPO PO ... / PRO ...". Confirmed against 573
+  // historical XPO "Delivered" notices: 573/574 fit this exact pattern.
+  var normalized = digits;
+  if (normalized.length === 11 && normalized.charAt(0) === "0") {
+    normalized = normalized.slice(1); // drop XPO's leading zero -> 10 digits
+  }
+  if (normalized.length === 10 && normalized.charAt(3) === "0") {
+    return normalized.slice(0, 3) + "-" + normalized.slice(4); // XXX0YYYYYY -> XXX-YYYYYY
+  }
+  return digits;
 }
 
 function xpoKeyV2_(value) {
