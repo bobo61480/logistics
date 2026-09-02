@@ -598,7 +598,11 @@ async function fetchFulfillmentGet(url: string) {
     const res = await fetch(current, {
       cache: "no-store",
       redirect: "manual",
-      signal: AbortSignal.timeout(8_000),
+      // Google Apps Script commonly spends ~20–22 seconds executing the live
+      // overview after its redirect. Stay below the browser's 25s ceiling so
+      // authoritative fulfillment data wins when healthy, while D1 still
+      // returns before the client gives up if Google stalls beyond that.
+      signal: AbortSignal.timeout(23_000),
     });
     if (res.status < 300 || res.status >= 400) return res;
     const location = res.headers.get("location");
