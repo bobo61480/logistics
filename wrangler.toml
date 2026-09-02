@@ -1,5 +1,5 @@
 name = "stylekorean"
-main = "worker/index.ts"
+main = "worker/cached-index.ts"
 compatibility_date = "2026-08-12"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = false
