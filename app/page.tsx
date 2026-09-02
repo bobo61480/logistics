@@ -83,6 +83,15 @@ export type ScheduleItem = {
   pod?: string;
   eta?: string;
   deliveryExpected?: string;
+  // Live CMS enrichment (IMPORTS only): actual arrival + received-vs-invoiced
+  // qty. Present only when the CMS has a matching invoice; each field may be
+  // empty when the CMS access grade masks it. Purely additive to the row.
+  cmsActualArrival?: string;
+  cmsReceivedQty?: number;
+  cmsInvoicedQty?: number;
+  // true when the aggregate covers only part of a multi-invoice row (a missing
+  // CMS match, or an arrival/quantity known for only some invoices).
+  cmsPartial?: boolean;
   isSmallParcel?: boolean;
   shippingMethod?: string;
   sourceType?: string;
@@ -1169,6 +1178,20 @@ async function fetchMonthlyKpis(month: string): Promise<KpiSnapshot> {
   return payload.kpis;
 }
 
+// Live CMS enrichment for the IMPORTS view, keyed by invoice number. Mirrors
+// worker/cms-imports.ts CmsImportRow; actualArrival/receivedQty come back empty
+// when the caller's CMS access grade masks the TB_PNFM columns.
+export type CmsImportRow = {
+  invoiceNo: string;
+  etaDate: string;
+  actualArrival: string;
+  outboundDate: string;
+  carrier: string;
+  // null = absent/masked by the CMS access grade; a number (incl 0) = supplied.
+  invoicedQty: number | null;
+  receivedQty: number | null;
+};
+
 type WorkerSnapshot = {
   ok: true;
   generatedAt?: string;
@@ -1189,6 +1212,8 @@ type WorkerSnapshot = {
     gmailIngestion?: GmailIngestionEvent[] | null;
     cmsInventory?: CmsInventoryItem[];
     cmsInventoryConfigured?: boolean;
+    cmsImports?: CmsImportRow[];
+    cmsImportsConfigured?: boolean;
   };
   kpis?: KpiSnapshot | null;
 };
@@ -1335,6 +1360,8 @@ async function fetchOperationalSnapshot() {
       gmailIngestion: sources.gmailIngestion ?? null,
       cmsInventory: sources.cmsInventory ?? [],
       cmsInventoryConfigured: sources.cmsInventoryConfigured ?? false,
+      cmsImports: sources.cmsImports ?? [],
+      cmsImportsConfigured: sources.cmsImportsConfigured ?? false,
       connection: {
         mode: snapshot.stale ? "stale" as const : "worker" as const,
         storage: snapshot.storage,
@@ -1416,8 +1443,100 @@ function importSourceRecords(rows: string[][]): ImportSourceRecord[] {
   });
 }
 
-function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
+function cmsImportsByInvoice(cmsImports: CmsImportRow[]): Map<string, CmsImportRow> {
+  const map = new Map<string, CmsImportRow>();
+  for (const row of cmsImports) {
+    const key = clean(row.invoiceNo).toUpperCase();
+    if (key && !map.has(key)) map.set(key, row);
+  }
+  return map;
+}
+
+// Compact "received vs invoiced" quantity label for the CMS enrichment.
+// Received comes from TB_PNFM (masked by some access grades → absent);
+// invoiced from TB_INVC (present on any match). When the grade masks TB_PNFM,
+// received drops out but invoiced still shows, so the documented TB_INVC-only
+// degradation surfaces a quantity instead of hiding the enrichment entirely.
+export function cmsQtyLabel(
+  received: number | undefined,
+  invoiced: number | undefined,
+): string | null {
+  if (received !== undefined) {
+    return `Received ${received}${invoiced !== undefined ? `/${invoiced}` : ""}`;
+  }
+  if (invoiced !== undefined) return `Invoiced ${invoiced}`;
+  return null;
+}
+
+// Resolve each DISTINCT invoice an IMPORTS row carries to its CMS record (or a
+// miss). Deduping the normalized keys — not the resolved rows — means a
+// repeated cell value ("IN001, IN001" or mixed case) resolves the same CMS
+// record only once (no double-counting in aggregateCmsImports), while a
+// distinct invoice with no CMS row still contributes its own miss slot so a
+// partial shipment total is still flagged.
+export function resolveImportCmsLookups(
+  invoiceCell: string,
+  cmsByInvoice: Map<string, CmsImportRow>,
+): (CmsImportRow | undefined)[] {
+  const keys = Array.from(
+    new Set(splitValues(invoiceCell).map((value) => clean(value).toUpperCase())),
+  );
+  return keys.map((key) => cmsByInvoice.get(key));
+}
+
+type CmsImportAggregate = {
+  actualArrival: string;
+  receivedQty: number | null;
+  invoicedQty: number | null;
+  // true when the shipment-level view covers only part of the row's invoices:
+  // an invoice with no CMS row, a quantity known for only some invoices, or an
+  // arrival date present for some invoices but not others. Signals that the
+  // displayed arrival/quantity must not be read as the complete shipment figure.
+  partial: boolean;
+};
+
+// Combine every CMS record matching a (possibly multi-invoice) IMPORTS row into
+// one shipment-level view: the latest arrival date across the matched parts,
+// and received / invoiced quantities summed over them. A quantity stays null
+// (rendered as absent, never a false 0) only when every match had it masked;
+// when some matches supply a value (a quantity, or an arrival date) and others
+// don't, the aggregate is flagged partial so it is not read as complete.
+export function aggregateCmsImports(lookups: (CmsImportRow | undefined)[]): CmsImportAggregate | null {
+  const matches = lookups.filter((row): row is CmsImportRow => Boolean(row));
+  if (matches.length === 0) return null;
+  let actualArrival = "";
+  let receivedQty: number | null = null;
+  let invoicedQty: number | null = null;
+  let receivedUnknown = false;
+  let invoicedUnknown = false;
+  let arrivalUnknown = false;
+  for (const match of matches) {
+    if (match.actualArrival) {
+      if (match.actualArrival > actualArrival) actualArrival = match.actualArrival;
+    } else {
+      arrivalUnknown = true;
+    }
+    if (match.receivedQty !== null) receivedQty = (receivedQty ?? 0) + match.receivedQty;
+    else receivedUnknown = true;
+    if (match.invoicedQty !== null) invoicedQty = (invoicedQty ?? 0) + match.invoicedQty;
+    else invoicedUnknown = true;
+  }
+  // Partial when an invoice the row lists has no CMS row at all (e.g. it fell
+  // outside the query window, so its slot in `lookups` is undefined), when a
+  // matched invoice supplied only some of its quantities, or when an arrival
+  // date is known for some matched invoices but not others — in each case the
+  // displayed figure covers only part of the shipment.
+  const someInvoiceUnmatched = matches.length < lookups.length;
+  const partial = someInvoiceUnmatched
+    || (receivedQty !== null && receivedUnknown)
+    || (invoicedQty !== null && invoicedUnknown)
+    || (actualArrival !== "" && arrivalUnknown);
+  return { actualArrival, receivedQty, invoicedQty, partial };
+}
+
+function pendingImportItems(importsRows: string[][], cmsImports: CmsImportRow[] = []): ScheduleItem[] {
   const today = startOfToday();
+  const cmsByInvoice = cmsImportsByInvoice(cmsImports);
 
   return importSourceRecords(importsRows).flatMap((record) => {
     const status = normalizeStatus(record.status);
@@ -1445,6 +1564,13 @@ function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
     const trackingNumber = record.container;
     const invoice = correctedInboundInvoice(record.shipmentNo, record.invoice);
     const folderUrl = INBOUND_DOCUMENT_LINKS[record.shipmentNo] ?? importsCellUrl(record.sourceRow, "B");
+
+    // Match live CMS data on every DISTINCT invoice the row carries (a row may
+    // list several) and aggregate them into one shipment-level view. No match →
+    // no extra fields. Passing the raw lookups (misses included) lets
+    // aggregateCmsImports flag a partial total when the row lists an invoice the
+    // CMS query didn't return; deduping happens inside resolveImportCmsLookups.
+    const cms = aggregateCmsImports(resolveImportCmsLookups(invoice, cmsByInvoice));
 
     return [{
       id: `pending-import-${record.sourceRow}`,
@@ -1476,6 +1602,10 @@ function pendingImportItems(importsRows: string[][]): ScheduleItem[] {
       pod: /^OSL/i.test(record.shipmentNo) ? "LGB" : "LAX",
       eta,
       deliveryExpected: record.deliveryExpected,
+      cmsActualArrival: cms?.actualArrival || undefined,
+      cmsReceivedQty: cms && cms.receivedQty !== null ? cms.receivedQty : undefined,
+      cmsInvoicedQty: cms && cms.invoicedQty !== null ? cms.invoicedQty : undefined,
+      cmsPartial: cms && cms.partial ? true : undefined,
       isSmallParcel: false,
       // No dedicated carrier column exists in IMPORTS for Air/Ocean freight —
       // vessel is the closest available proxy (ocean vessel names are usually
@@ -1836,7 +1966,19 @@ function ImportSchedules({
                 <td>{linkValue(item.container ?? "", item.containerUrl)}</td>
                 <td>{item.vessel || "—"}</td>
                 <td>{item.pod || "—"}</td>
-                <td><time dateTime={dayKey(item.date)}>{item.eta || item.dateText || "—"}</time></td>
+                <td>
+                  <time dateTime={dayKey(item.date)}>{item.eta || item.dateText || "—"}</time>
+                  {item.cmsActualArrival || cmsQtyLabel(item.cmsReceivedQty, item.cmsInvoicedQty) ? (
+                    <span className="cms-enrichment cms-enrichment-inline">
+                      <span className="cms-enrichment-tag">CMS LIVE</span>
+                      {item.cmsActualArrival ? <span>Arrived {item.cmsActualArrival}</span> : null}
+                      {cmsQtyLabel(item.cmsReceivedQty, item.cmsInvoicedQty) ? (
+                        <span>{cmsQtyLabel(item.cmsReceivedQty, item.cmsInvoicedQty)}</span>
+                      ) : null}
+                      {item.cmsPartial ? <span className="cms-enrichment-partial">(partial)</span> : null}
+                    </span>
+                  ) : null}
+                </td>
                 <td>
                   {item.editable ? (
                     <select
@@ -2369,6 +2511,16 @@ function ScheduleCard({
               : null}
           </dl>
         )}
+        {item.direction === "inbound" && (item.cmsActualArrival || cmsQtyLabel(item.cmsReceivedQty, item.cmsInvoicedQty)) ? (
+          <p className="cms-enrichment">
+            <span className="cms-enrichment-tag">CMS LIVE</span>
+            {item.cmsActualArrival ? <span>Arrived {item.cmsActualArrival}</span> : null}
+            {cmsQtyLabel(item.cmsReceivedQty, item.cmsInvoicedQty) ? (
+              <span>{cmsQtyLabel(item.cmsReceivedQty, item.cmsInvoicedQty)}</span>
+            ) : null}
+            {item.cmsPartial ? <span className="cms-enrichment-partial">(partial)</span> : null}
+          </p>
+        ) : null}
         {secondary ? <p className="secondary">{secondary}</p> : null}
         <div className="card-actions">
           {item.editable ? (
@@ -2851,12 +3003,13 @@ export default function Home() {
         gmailIngestion: nextGmailIngestion,
         cmsInventory: nextCmsInventory,
         cmsInventoryConfigured: nextCmsInventoryConfigured,
+        cmsImports: nextCmsImports,
         connection: nextConnection,
       } = await fetchOperationalSnapshot();
       // Each source row remains its own operational move except same-customer,
       // same-date trucking rows, which consolidateTruckingItems merges into one card.
       setItems(enrichScheduleItemsFromEmail(consolidateTruckingItems([
-        ...pendingImportItems(imports),
+        ...pendingImportItems(imports, nextCmsImports),
         ...inboundParcelItems(imports),
         ...outboundItems(outbound, outboundMeta),
         ...nationalOutboundItems(nationalOutbound),

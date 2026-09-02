@@ -16,9 +16,10 @@ import { handleStatusCommand } from "./status-command";
 import { handlePendingReviewCommand } from "./pending-review-command";
 import { handleTrackingCommand } from "./tracking-command";
 import { fetchCmsInventory } from "./cms-inventory";
+import { fetchCmsImports, reduceCmsImportsToImports } from "./cms-imports";
 import { fetchCmsSalesKpis } from "./cms-sales-kpis";
 
-const WORKER_VERSION = "2026-09-02-worker-v11-cms-sales-fallback";
+const WORKER_VERSION = "2026-09-02-worker-v12-cms-imports";
 const SNAPSHOT_CACHE_URL = "https://stylekorean.internal/api/logistics/snapshot";
 const SNAPSHOT_CACHE_SECONDS = 60;
 const SNAPSHOT_REFRESH_SECONDS = 15 * 60;
@@ -103,20 +104,40 @@ function dedupeOperationalPayload(snapshot: Awaited<ReturnType<typeof fetchOpera
 
 async function buildSnapshotPayload(env: Env): Promise<OperationalSnapshot> {
   const generatedAt = new Date().toISOString();
-  const [raw, cmsInventory, cmsSalesResult] = await Promise.all([
+  const [raw, cms] = await Promise.all([
     fetchOperationalSources(env.APPS_SCRIPT_WRITE_URL),
-    fetchCmsInventory(env),
-    fetchCmsSalesKpis(env)
-      .then((value) => ({ ok: true as const, value }))
-      .catch((error) => ({
-        ok: false as const,
-        error: error instanceof Error ? error.message : String(error),
-      })),
+    // The Siliconii CMS gateway resets on concurrent MCP requests, so its reads
+    // run sequentially against the shared runner — still in parallel with the
+    // Google Sheets fetch above, which is a different service.
+    (async () => {
+      const inventory = await fetchCmsInventory(env);
+      const imports = await fetchCmsImports(env);
+      const sales = await fetchCmsSalesKpis(env)
+        .then((value) => ({ ok: true as const, value }))
+        .catch((error) => ({
+          ok: false as const,
+          error: error instanceof Error ? error.message : String(error),
+        }));
+      return { inventory, imports, sales };
+    })(),
   ]);
+  const cmsInventory = cms.inventory;
+  const cmsImports = cms.imports;
+  const cmsSalesResult = cms.sales;
   raw.sourceHealth.push(cmsInventory.health);
+  raw.sourceHealth.push(cmsImports.health);
   const rawSources = raw.sources as Record<string, unknown>;
   rawSources.cmsInventory = cmsInventory.rows;
   rawSources.cmsInventoryConfigured = cmsInventory.configured;
+  // Only expose CMS import records whose invoice is on the IMPORTS sheet — the
+  // snapshot is a public GET, so the full 180-day CMS query must never be
+  // serialized wholesale. The IMPORTS rows are the raw source (superset of the
+  // deduped rows), which keeps every legitimate match.
+  rawSources.cmsImports = reduceCmsImportsToImports(
+    cmsImports.rows,
+    Array.isArray(rawSources.imports) ? (rawSources.imports as string[][]) : null,
+  );
+  rawSources.cmsImportsConfigured = cmsImports.configured;
   const snapshot = dedupeOperationalPayload(raw);
   const outboundMeta = snapshot.sources.outboundMeta as { rowCount?: number } | undefined;
   const hasOutboundRows = Number(outboundMeta?.rowCount ?? 0) > 0;

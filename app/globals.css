@@ -1035,6 +1035,46 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
   white-space: nowrap;
 }
 
+/* Additive live-CMS arrival / received-qty line on inbound import cards. */
+.cms-enrichment {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 6px 0 0;
+  color: var(--accent-transfers);
+  font-size: 10px;
+  line-height: 1.35;
+  font-weight: 600;
+}
+
+.cms-enrichment-tag {
+  padding: 1px 5px;
+  border: 1px solid var(--accent-transfers);
+  border-radius: 4px;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: .04em;
+}
+
+/* Compact variant shown under the ETA in the always-present Import Schedules
+   table, so the CMS arrival/receipt surfaces even when the row has no
+   Delivery Expected date to place it on the receiving board. */
+.cms-enrichment-inline {
+  margin-top: 3px;
+  gap: 2px 6px;
+  font-size: 9px;
+}
+
+/* Qualifies the whole CMS aggregate as covering only part of a multi-invoice
+   shipment (missing match, or arrival/quantity known for only some invoices),
+   so neither the arrival nor the received/invoiced figure is read as final. */
+.cms-enrichment-partial {
+  font-style: italic;
+  font-weight: 700;
+  opacity: .85;
+}
+
 .data-grid {
   display: grid;
   gap: 0;
