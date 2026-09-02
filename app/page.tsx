@@ -1465,7 +1465,8 @@ type CmsImportAggregate = {
 // (rendered as absent, never a false 0) only when every match had it masked;
 // when some matches supply it and others don't, the total is flagged partial
 // so it is not read as a complete shipment figure.
-export function aggregateCmsImports(matches: CmsImportRow[]): CmsImportAggregate | null {
+export function aggregateCmsImports(lookups: (CmsImportRow | undefined)[]): CmsImportAggregate | null {
+  const matches = lookups.filter((row): row is CmsImportRow => Boolean(row));
   if (matches.length === 0) return null;
   let actualArrival = "";
   let receivedQty: number | null = null;
@@ -1479,7 +1480,14 @@ export function aggregateCmsImports(matches: CmsImportRow[]): CmsImportAggregate
     if (match.invoicedQty !== null) invoicedQty = (invoicedQty ?? 0) + match.invoicedQty;
     else invoicedUnknown = true;
   }
-  const partial = (receivedQty !== null && receivedUnknown) || (invoicedQty !== null && invoicedUnknown);
+  // Partial when an invoice the row lists has no CMS row at all (e.g. it fell
+  // outside the query window, so its slot in `lookups` is undefined), or when a
+  // matched invoice supplied only some of its quantities — either way the
+  // summed total covers only part of the shipment.
+  const someInvoiceUnmatched = matches.length < lookups.length;
+  const partial = someInvoiceUnmatched
+    || (receivedQty !== null && receivedUnknown)
+    || (invoicedQty !== null && invoicedUnknown);
   return { actualArrival, receivedQty, invoicedQty, partial };
 }
 
@@ -1517,10 +1525,10 @@ function pendingImportItems(importsRows: string[][], cmsImports: CmsImportRow[] 
     // Match live CMS data on every invoice the row carries (a row may list
     // several) and aggregate them into one shipment-level view. No match → no
     // extra fields.
+    // Pass the raw lookups (including misses) so aggregateCmsImports can flag a
+    // partial total when the row lists an invoice the CMS query didn't return.
     const cms = aggregateCmsImports(
-      splitValues(invoice)
-        .map((value) => cmsByInvoice.get(clean(value).toUpperCase()))
-        .filter((row): row is CmsImportRow => Boolean(row)),
+      splitValues(invoice).map((value) => cmsByInvoice.get(clean(value).toUpperCase())),
     );
 
     return [{

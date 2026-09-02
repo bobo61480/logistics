@@ -49,4 +49,21 @@ describe("aggregateCmsImports", () => {
     expect(agg?.invoicedQty).toBe(200);
     expect(agg?.partial).toBe(true);
   });
+
+  it("flags partial when an invoice on the row has no CMS row at all", () => {
+    // Two invoices listed, one has no CMS match (undefined slot) → the summed
+    // total covers only part of the shipment.
+    const agg = aggregateCmsImports([row({ invoicedQty: 200, receivedQty: 100 }), undefined]);
+    expect(agg?.receivedQty).toBe(100);
+    expect(agg?.invoicedQty).toBe(200);
+    expect(agg?.partial).toBe(true);
+  });
+
+  it("is not partial when every listed invoice matched with complete quantities", () => {
+    const agg = aggregateCmsImports([
+      row({ invoicedQty: 200, receivedQty: 200 }),
+      row({ invoicedQty: 300, receivedQty: 300 }),
+    ]);
+    expect(agg?.partial).toBe(false);
+  });
 });
