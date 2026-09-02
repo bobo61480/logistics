@@ -1057,6 +1057,15 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
   letter-spacing: .04em;
 }
 
+/* Compact variant shown under the ETA in the always-present Import Schedules
+   table, so the CMS arrival/receipt surfaces even when the row has no
+   Delivery Expected date to place it on the receiving board. */
+.cms-enrichment-inline {
+  margin-top: 3px;
+  gap: 2px 6px;
+  font-size: 9px;
+}
+
 .data-grid {
   display: grid;
   gap: 0;

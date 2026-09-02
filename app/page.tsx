@@ -89,6 +89,7 @@ export type ScheduleItem = {
   cmsActualArrival?: string;
   cmsReceivedQty?: number;
   cmsInvoicedQty?: number;
+  cmsQtyPartial?: boolean;
   isSmallParcel?: boolean;
   shippingMethod?: string;
   sourceType?: string;
@@ -1453,23 +1454,33 @@ type CmsImportAggregate = {
   actualArrival: string;
   receivedQty: number | null;
   invoicedQty: number | null;
+  // true when the row lists several invoices but a CMS quantity was known for
+  // only some of them, so the summed total covers only part of the shipment.
+  partial: boolean;
 };
 
 // Combine every CMS record matching a (possibly multi-invoice) IMPORTS row into
 // one shipment-level view: the latest arrival date across the matched parts,
 // and received / invoiced quantities summed over them. A quantity stays null
-// (rendered as absent, never a false 0) only when every match had it masked.
-function aggregateCmsImports(matches: CmsImportRow[]): CmsImportAggregate | null {
+// (rendered as absent, never a false 0) only when every match had it masked;
+// when some matches supply it and others don't, the total is flagged partial
+// so it is not read as a complete shipment figure.
+export function aggregateCmsImports(matches: CmsImportRow[]): CmsImportAggregate | null {
   if (matches.length === 0) return null;
   let actualArrival = "";
   let receivedQty: number | null = null;
   let invoicedQty: number | null = null;
+  let receivedUnknown = false;
+  let invoicedUnknown = false;
   for (const match of matches) {
     if (match.actualArrival && match.actualArrival > actualArrival) actualArrival = match.actualArrival;
     if (match.receivedQty !== null) receivedQty = (receivedQty ?? 0) + match.receivedQty;
+    else receivedUnknown = true;
     if (match.invoicedQty !== null) invoicedQty = (invoicedQty ?? 0) + match.invoicedQty;
+    else invoicedUnknown = true;
   }
-  return { actualArrival, receivedQty, invoicedQty };
+  const partial = (receivedQty !== null && receivedUnknown) || (invoicedQty !== null && invoicedUnknown);
+  return { actualArrival, receivedQty, invoicedQty, partial };
 }
 
 function pendingImportItems(importsRows: string[][], cmsImports: CmsImportRow[] = []): ScheduleItem[] {
@@ -1545,6 +1556,7 @@ function pendingImportItems(importsRows: string[][], cmsImports: CmsImportRow[] 
       cmsActualArrival: cms?.actualArrival || undefined,
       cmsReceivedQty: cms && cms.receivedQty !== null ? cms.receivedQty : undefined,
       cmsInvoicedQty: cms && cms.invoicedQty !== null ? cms.invoicedQty : undefined,
+      cmsQtyPartial: cms && cms.partial ? true : undefined,
       isSmallParcel: false,
       // No dedicated carrier column exists in IMPORTS for Air/Ocean freight —
       // vessel is the closest available proxy (ocean vessel names are usually
@@ -1905,7 +1917,22 @@ function ImportSchedules({
                 <td>{linkValue(item.container ?? "", item.containerUrl)}</td>
                 <td>{item.vessel || "—"}</td>
                 <td>{item.pod || "—"}</td>
-                <td><time dateTime={dayKey(item.date)}>{item.eta || item.dateText || "—"}</time></td>
+                <td>
+                  <time dateTime={dayKey(item.date)}>{item.eta || item.dateText || "—"}</time>
+                  {item.cmsActualArrival || item.cmsReceivedQty !== undefined ? (
+                    <span className="cms-enrichment cms-enrichment-inline">
+                      <span className="cms-enrichment-tag">CMS LIVE</span>
+                      {item.cmsActualArrival ? <span>Arrived {item.cmsActualArrival}</span> : null}
+                      {item.cmsReceivedQty !== undefined ? (
+                        <span>
+                          Received {item.cmsReceivedQty}
+                          {item.cmsInvoicedQty !== undefined ? `/${item.cmsInvoicedQty}` : ""}
+                          {item.cmsQtyPartial ? " (partial)" : ""}
+                        </span>
+                      ) : null}
+                    </span>
+                  ) : null}
+                </td>
                 <td>
                   {item.editable ? (
                     <select
@@ -2446,6 +2473,7 @@ function ScheduleCard({
               <span>
                 Received {item.cmsReceivedQty}
                 {item.cmsInvoicedQty !== undefined ? `/${item.cmsInvoicedQty}` : ""}
+                {item.cmsQtyPartial ? " (partial)" : ""}
               </span>
             ) : null}
           </p>

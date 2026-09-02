@@ -689,9 +689,8 @@ test("enriches a matching IMPORTS row with the live CMS arrival + received/invoi
   await mockWorkbooks(page);
   await page.unroute("**/api/logistics/snapshot**");
   const snapshot = workerSnapshot();
-  // The inbound receiving board keys off Delivery Expected (IMPORTS col 16);
-  // give HJ99 one in-window so it renders as an inbound ScheduleCard.
-  (snapshot.sources.imports as string[][])[2][16] = daysFromToday(2);
+  // No Delivery Expected date on the row (the common case) — the enrichment
+  // must still surface in the always-present Import Schedules table.
   (snapshot.sources as Record<string, unknown>).cmsImports = [
     {
       invoiceNo: "IN00777",
@@ -710,10 +709,10 @@ test("enriches a matching IMPORTS row with the live CMS arrival + received/invoi
 
   await page.goto("/");
 
-  // The import shipment loads (dedicated table) and its inbound board card
-  // carries the additive enrichment line.
-  await expect(page.locator(".import-table")).toContainText("HJ99 - 2026");
-  const enrichment = page.locator(".inbound-panel .cms-enrichment").first();
+  // The enrichment renders inline in the Import Schedules table row for HJ99.
+  const importTable = page.locator(".import-table");
+  await expect(importTable).toContainText("HJ99 - 2026");
+  const enrichment = importTable.locator(".cms-enrichment").first();
   await expect(enrichment).toContainText("CMS LIVE");
   await expect(enrichment).toContainText("Arrived 2026-08-30");
   await expect(enrichment).toContainText("Received 1200/1200");

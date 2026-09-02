@@ -104,17 +104,26 @@ function dedupeOperationalPayload(snapshot: Awaited<ReturnType<typeof fetchOpera
 
 async function buildSnapshotPayload(env: Env): Promise<OperationalSnapshot> {
   const generatedAt = new Date().toISOString();
-  const [raw, cmsInventory, cmsImports, cmsSalesResult] = await Promise.all([
+  const [raw, cms] = await Promise.all([
     fetchOperationalSources(env.APPS_SCRIPT_WRITE_URL),
-    fetchCmsInventory(env),
-    fetchCmsImports(env),
-    fetchCmsSalesKpis(env)
-      .then((value) => ({ ok: true as const, value }))
-      .catch((error) => ({
-        ok: false as const,
-        error: error instanceof Error ? error.message : String(error),
-      })),
+    // The Siliconii CMS gateway resets on concurrent MCP requests, so its reads
+    // run sequentially against the shared runner — still in parallel with the
+    // Google Sheets fetch above, which is a different service.
+    (async () => {
+      const inventory = await fetchCmsInventory(env);
+      const imports = await fetchCmsImports(env);
+      const sales = await fetchCmsSalesKpis(env)
+        .then((value) => ({ ok: true as const, value }))
+        .catch((error) => ({
+          ok: false as const,
+          error: error instanceof Error ? error.message : String(error),
+        }));
+      return { inventory, imports, sales };
+    })(),
   ]);
+  const cmsInventory = cms.inventory;
+  const cmsImports = cms.imports;
+  const cmsSalesResult = cms.sales;
   raw.sourceHealth.push(cmsInventory.health);
   raw.sourceHealth.push(cmsImports.health);
   const rawSources = raw.sources as Record<string, unknown>;
