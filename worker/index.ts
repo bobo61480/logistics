@@ -1,4 +1,9 @@
-import { computeKpisFromRows } from "../lib/kpis/compute";
+import {
+  computeKpisFromRows,
+  pacificToday,
+  selectedMonthBounds,
+  type KpiSnapshot,
+} from "../lib/kpis/compute";
 import { dedupeShipmentRows } from "../lib/domain/dedupe";
 import {
   persistSnapshot,
@@ -13,7 +18,7 @@ import { handleTrackingCommand } from "./tracking-command";
 import { fetchCmsInventory } from "./cms-inventory";
 import { fetchCmsSalesKpis } from "./cms-sales-kpis";
 
-const WORKER_VERSION = "2026-08-30-worker-v10-d1-inventory-reconciliation";
+const WORKER_VERSION = "2026-09-02-worker-v11-cms-sales-fallback";
 const SNAPSHOT_CACHE_URL = "https://stylekorean.internal/api/logistics/snapshot";
 const SNAPSHOT_CACHE_SECONDS = 60;
 const SNAPSHOT_REFRESH_SECONDS = 15 * 60;
@@ -288,11 +293,76 @@ function cmsSalesError(error: unknown) {
   return json({ ok: false, error: code }, code === "KPI_MONTH_INVALID" ? 400 : 502);
 }
 
+type CmsSalesResult =
+  | { ok: true; value: Awaited<ReturnType<typeof fetchCmsSalesKpis>> }
+  | { ok: false; error: string };
+
+export function resolveSalesKpiSource(sheetKpis: KpiSnapshot, cmsSales: CmsSalesResult) {
+  if (cmsSales.ok) {
+    return {
+      source: cmsSales.value.source,
+      currency: cmsSales.value.currency,
+      fallback: false,
+      gatewayError: undefined,
+      kpis: {
+        ...sheetKpis,
+        wmsSalesMtd: cmsSales.value.wmsSalesMtd,
+        wmsSalesYtd: cmsSales.value.wmsSalesYtd,
+      },
+      cms: cmsSales.value,
+    };
+  }
+  return {
+    source: "wms-sheet-fallback" as const,
+    currency: "USD",
+    fallback: true,
+    gatewayError: cmsSales.error,
+    kpis: sheetKpis,
+    cms: null,
+  };
+}
+
+async function loadMonthlyKpis(env: Env, selectedMonth?: string) {
+  const now = new Date();
+  const today = pacificToday();
+  const { monthKey } = selectedMonthBounds(today, selectedMonth);
+  const [raw, cmsSales] = await Promise.all([
+    fetchOperationalSources(env.APPS_SCRIPT_WRITE_URL),
+    fetchCmsSalesKpis(env, now, fetch, monthKey)
+      .then((value): CmsSalesResult => ({ ok: true, value }))
+      .catch((error): CmsSalesResult => ({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      })),
+  ]);
+  const snapshot = dedupeOperationalPayload(raw);
+  const sheetKpis = computeKpisFromRows({
+    ...snapshot.kpiRows,
+    today,
+    selectedMonth: monthKey,
+  });
+  const resolved = resolveSalesKpiSource(sheetKpis, cmsSales);
+  return { ...resolved, month: resolved.cms?.selectedMonth ?? monthKey, generatedAt: now.toISOString() };
+}
+
 async function handleCmsSalesKpis(request: Request, env: Env) {
   try {
     const month = new URL(request.url).searchParams.get("month")?.trim() || undefined;
-    const result = await fetchCmsSalesKpis(env, new Date(), fetch, month);
-    return json({ ok: true, ...result });
+    const result = await loadMonthlyKpis(env, month);
+    return json({
+      ok: true,
+      source: result.source,
+      selectedMonth: result.month,
+      currency: result.currency,
+      wmsSalesMtd: result.kpis.wmsSalesMtd,
+      wmsSalesYtd: result.kpis.wmsSalesYtd,
+      invoiceCountMtd: result.cms?.invoiceCountMtd ?? null,
+      invoiceCountYtd: result.cms?.invoiceCountYtd ?? null,
+      months: result.cms?.months ?? [],
+      generatedAt: result.generatedAt,
+      fallback: result.fallback,
+      gatewayError: result.gatewayError,
+    });
   } catch (error) {
     return cmsSalesError(error);
   }
@@ -301,25 +371,15 @@ async function handleCmsSalesKpis(request: Request, env: Env) {
 async function handleMonthlyKpis(request: Request, env: Env) {
   try {
     const month = new URL(request.url).searchParams.get("month")?.trim() || undefined;
-    const [raw, cmsSales] = await Promise.all([
-      fetchOperationalSources(env.APPS_SCRIPT_WRITE_URL),
-      fetchCmsSalesKpis(env, new Date(), fetch, month),
-    ]);
-    const snapshot = dedupeOperationalPayload(raw);
-    const kpis = computeKpisFromRows({
-      ...snapshot.kpiRows,
-      selectedMonth: cmsSales.selectedMonth,
-    });
+    const result = await loadMonthlyKpis(env, month);
     return json({
       ok: true,
-      month: cmsSales.selectedMonth,
-      currency: cmsSales.currency,
-      source: cmsSales.source,
-      kpis: {
-        ...kpis,
-        wmsSalesMtd: cmsSales.wmsSalesMtd,
-        wmsSalesYtd: cmsSales.wmsSalesYtd,
-      },
+      month: result.month,
+      currency: result.currency,
+      source: result.source,
+      fallback: result.fallback,
+      gatewayError: result.gatewayError,
+      kpis: result.kpis,
     });
   } catch (error) {
     return cmsSalesError(error);
