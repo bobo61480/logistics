@@ -3179,15 +3179,13 @@ export default function Home() {
               ? "Workbook connection needs attention"
               : loading
                 ? "Syncing live records…"
-                : connection?.mode === "sheets"
-                  ? "Direct Sheets fallback · Worker reconnecting"
-                  : connection?.mode === "stale"
-                    ? "Last good snapshot · live sources reconnecting"
-                    : connection?.degradedSources
-                      ? `${connection.degradedSources} optional source${connection.degradedSources === 1 ? "" : "s"} unavailable`
-                      : connection?.storage === "d1"
-                        ? "D1 snapshot · Sheets fallback ready"
-                        : "Worker snapshot · 3 live workbooks connected"}
+                : connection?.mode === "stale"
+                  ? "Last good snapshot · live sources reconnecting"
+                  : connection?.degradedSources
+                    ? `${connection.degradedSources} optional source${connection.degradedSources === 1 ? "" : "s"} unavailable`
+                    : connection?.storage === "d1"
+                      ? "D1 snapshot · Sheets source synchronized"
+                      : "Worker snapshot · 3 live workbooks connected"}
           </span>
           <span className="mono">
             AUTO SYNC 30 MIN · LAST SYNC {updatedAt ? updatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: "America/Los_Angeles" }) : "—"}
