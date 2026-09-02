@@ -89,7 +89,9 @@ export type ScheduleItem = {
   cmsActualArrival?: string;
   cmsReceivedQty?: number;
   cmsInvoicedQty?: number;
-  cmsQtyPartial?: boolean;
+  // true when the aggregate covers only part of a multi-invoice row (a missing
+  // CMS match, or an arrival/quantity known for only some invoices).
+  cmsPartial?: boolean;
   isSmallParcel?: boolean;
   shippingMethod?: string;
   sourceType?: string;
@@ -1470,8 +1472,10 @@ type CmsImportAggregate = {
   actualArrival: string;
   receivedQty: number | null;
   invoicedQty: number | null;
-  // true when the row lists several invoices but a CMS quantity was known for
-  // only some of them, so the summed total covers only part of the shipment.
+  // true when the shipment-level view covers only part of the row's invoices:
+  // an invoice with no CMS row, a quantity known for only some invoices, or an
+  // arrival date present for some invoices but not others. Signals that the
+  // displayed arrival/quantity must not be read as the complete shipment figure.
   partial: boolean;
 };
 
@@ -1479,8 +1483,8 @@ type CmsImportAggregate = {
 // one shipment-level view: the latest arrival date across the matched parts,
 // and received / invoiced quantities summed over them. A quantity stays null
 // (rendered as absent, never a false 0) only when every match had it masked;
-// when some matches supply it and others don't, the total is flagged partial
-// so it is not read as a complete shipment figure.
+// when some matches supply a value (a quantity, or an arrival date) and others
+// don't, the aggregate is flagged partial so it is not read as complete.
 export function aggregateCmsImports(lookups: (CmsImportRow | undefined)[]): CmsImportAggregate | null {
   const matches = lookups.filter((row): row is CmsImportRow => Boolean(row));
   if (matches.length === 0) return null;
@@ -1489,21 +1493,28 @@ export function aggregateCmsImports(lookups: (CmsImportRow | undefined)[]): CmsI
   let invoicedQty: number | null = null;
   let receivedUnknown = false;
   let invoicedUnknown = false;
+  let arrivalUnknown = false;
   for (const match of matches) {
-    if (match.actualArrival && match.actualArrival > actualArrival) actualArrival = match.actualArrival;
+    if (match.actualArrival) {
+      if (match.actualArrival > actualArrival) actualArrival = match.actualArrival;
+    } else {
+      arrivalUnknown = true;
+    }
     if (match.receivedQty !== null) receivedQty = (receivedQty ?? 0) + match.receivedQty;
     else receivedUnknown = true;
     if (match.invoicedQty !== null) invoicedQty = (invoicedQty ?? 0) + match.invoicedQty;
     else invoicedUnknown = true;
   }
   // Partial when an invoice the row lists has no CMS row at all (e.g. it fell
-  // outside the query window, so its slot in `lookups` is undefined), or when a
-  // matched invoice supplied only some of its quantities — either way the
-  // summed total covers only part of the shipment.
+  // outside the query window, so its slot in `lookups` is undefined), when a
+  // matched invoice supplied only some of its quantities, or when an arrival
+  // date is known for some matched invoices but not others — in each case the
+  // displayed figure covers only part of the shipment.
   const someInvoiceUnmatched = matches.length < lookups.length;
   const partial = someInvoiceUnmatched
     || (receivedQty !== null && receivedUnknown)
-    || (invoicedQty !== null && invoicedUnknown);
+    || (invoicedQty !== null && invoicedUnknown)
+    || (actualArrival !== "" && arrivalUnknown);
   return { actualArrival, receivedQty, invoicedQty, partial };
 }
 
@@ -1578,7 +1589,7 @@ function pendingImportItems(importsRows: string[][], cmsImports: CmsImportRow[] 
       cmsActualArrival: cms?.actualArrival || undefined,
       cmsReceivedQty: cms && cms.receivedQty !== null ? cms.receivedQty : undefined,
       cmsInvoicedQty: cms && cms.invoicedQty !== null ? cms.invoicedQty : undefined,
-      cmsQtyPartial: cms && cms.partial ? true : undefined,
+      cmsPartial: cms && cms.partial ? true : undefined,
       isSmallParcel: false,
       // No dedicated carrier column exists in IMPORTS for Air/Ocean freight —
       // vessel is the closest available proxy (ocean vessel names are usually
@@ -1949,9 +1960,9 @@ function ImportSchedules({
                         <span>
                           Received {item.cmsReceivedQty}
                           {item.cmsInvoicedQty !== undefined ? `/${item.cmsInvoicedQty}` : ""}
-                          {item.cmsQtyPartial ? " (partial)" : ""}
                         </span>
                       ) : null}
+                      {item.cmsPartial ? <span className="cms-enrichment-partial">(partial)</span> : null}
                     </span>
                   ) : null}
                 </td>
@@ -2495,9 +2506,9 @@ function ScheduleCard({
               <span>
                 Received {item.cmsReceivedQty}
                 {item.cmsInvoicedQty !== undefined ? `/${item.cmsInvoicedQty}` : ""}
-                {item.cmsQtyPartial ? " (partial)" : ""}
               </span>
             ) : null}
+            {item.cmsPartial ? <span className="cms-enrichment-partial">(partial)</span> : null}
           </p>
         ) : null}
         {secondary ? <p className="secondary">{secondary}</p> : null}

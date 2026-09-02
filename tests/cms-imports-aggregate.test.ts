@@ -61,9 +61,32 @@ describe("aggregateCmsImports", () => {
 
   it("is not partial when every listed invoice matched with complete quantities", () => {
     const agg = aggregateCmsImports([
-      row({ invoicedQty: 200, receivedQty: 200 }),
-      row({ invoicedQty: 300, receivedQty: 300 }),
+      row({ actualArrival: "2026-08-30", invoicedQty: 200, receivedQty: 200 }),
+      row({ actualArrival: "2026-09-01", invoicedQty: 300, receivedQty: 300 }),
     ]);
+    expect(agg?.partial).toBe(false);
+  });
+
+  it("flags partial when an arrival date is known for only some matched invoices", () => {
+    // Both invoices matched with complete quantities, but one has no arrival
+    // date — the aggregate must not present the known date as the whole
+    // shipment's arrival.
+    const agg = aggregateCmsImports([
+      row({ actualArrival: "2026-08-30", invoicedQty: 200, receivedQty: 200 }),
+      row({ actualArrival: "", invoicedQty: 300, receivedQty: 300 }),
+    ]);
+    expect(agg?.actualArrival).toBe("2026-08-30");
+    expect(agg?.partial).toBe(true);
+  });
+
+  it("is not partial when no arrival date is known at all", () => {
+    // Nothing to qualify — an absent arrival is simply not rendered, so a
+    // uniformly-missing arrival is not a partial state on its own.
+    const agg = aggregateCmsImports([
+      row({ actualArrival: "", invoicedQty: 200, receivedQty: 200 }),
+      row({ actualArrival: "", invoicedQty: 300, receivedQty: 300 }),
+    ]);
+    expect(agg?.actualArrival).toBe("");
     expect(agg?.partial).toBe(false);
   });
 });

@@ -1066,6 +1066,15 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
   font-size: 9px;
 }
 
+/* Qualifies the whole CMS aggregate as covering only part of a multi-invoice
+   shipment (missing match, or arrival/quantity known for only some invoices),
+   so neither the arrival nor the received/invoiced figure is read as final. */
+.cms-enrichment-partial {
+  font-style: italic;
+  font-weight: 700;
+  opacity: .85;
+}
+
 .data-grid {
   display: grid;
   gap: 0;
