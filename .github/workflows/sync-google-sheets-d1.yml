@@ -47,6 +47,7 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GOOGLE_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_EMAIL }}
           GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}
+          CLASP_ACCESS_TOKEN: ${{ secrets.CLASP_ACCESS_TOKEN }}
         run: node scripts/sync-google-sheets-d1.mjs
 
       - name: Verify D1 mirror health
