@@ -497,6 +497,35 @@ test("renders live schedules and KPI cards from the D1 snapshot", async ({ page 
   expect(directSheetReads, `unexpected direct Sheets reads: ${directSheetReads.join(", ")}`).toEqual([]);
 });
 
+test("reconciles the tracked shipment updates panel against live source rows", async ({ page }) => {
+  await mockWorkbooks(page);
+  await page.goto("/");
+
+  const panel = page.locator(".tracked-updates-panel");
+  await expect(panel.getByRole("heading", { name: "Tracked Shipment Updates" })).toBeVisible();
+
+  // The needsReview fixture event (IN00778) has no ETA and must surface with a
+  // priority badge and its issue text — nothing here is hard-coded in the app.
+  const row = panel.locator(".tracked-update", { hasText: "IN00778" });
+  await expect(row).toHaveCount(1);
+  await expect(row).toContainText("No ETA or ship date found.");
+  await expect(row.locator(".tracked-priority")).toBeVisible();
+
+  // The reviewed-through line is the snapshot's own generation time, so it can
+  // never read as a stale hand-review date.
+  await expect(panel.locator(".tracked-updates-sub")).not.toContainText("08/22/26");
+
+  // A row that resolves to a live schedule item links at that sheet + row; one
+  // that resolves to nothing says so instead of inventing a row number.
+  const footers = panel.locator(".tracked-update-foot");
+  await expect(footers.first()).toBeVisible();
+  for (const text of await footers.allTextContents()) {
+    expect(text).toMatch(/row \d+|No source link|Source email|No matching source row/);
+  }
+
+  await panel.screenshot({ path: "test-results/tracked-shipment-updates.png" });
+});
+
 test("saves a status edit through the Apps Script endpoint and confirms it", async ({ page }) => {
   const state = await mockWorkbooks(page);
   await page.goto("/");

@@ -2284,6 +2284,163 @@ footer strong {
 [data-theme="dark"] .status.neutral { background: rgba(57, 135, 229, .16); color: #8fb4ff; }
 
 /* ============================================================
+   Tracked Shipment Updates — email to canonical sheet reconciliation
+   Derived entirely from the live D1 snapshot (gmailIngestion events
+   matched against the live schedule rows). See
+   app/tracked-shipment-updates-card.tsx.
+   ============================================================ */
+.tracked-updates-panel {
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, .86);
+  box-shadow: inset 0 4px 0 var(--orange);
+}
+
+.tracked-updates-heading { align-items: flex-start; }
+.tracked-updates-panel .eyebrow { text-transform: uppercase; }
+.tracked-updates-sub {
+  max-width: 78ch;
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.tracked-updates-counts { display: flex; flex-wrap: wrap; gap: 6px; }
+.tracked-count {
+  padding: 3px 10px;
+  border-radius: 20px;
+  font: 600 10px "IBM Plex Mono", monospace;
+  letter-spacing: .04em;
+  white-space: nowrap;
+}
+.tracked-count.urgent { color: var(--status-critical); background: rgba(178, 58, 58, .12); }
+.tracked-count.missing { color: var(--status-serious); background: rgba(193, 96, 47, .12); }
+.tracked-count.total { color: var(--muted); background: var(--surface-inset); }
+
+.tracked-updates-alert {
+  margin: 14px 14px 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(193, 96, 47, .34);
+  border-radius: 6px;
+  background: rgba(228, 87, 46, .07);
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.tracked-updates-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tracked-update {
+  padding: 11px 14px 12px;
+  border-top: 1px solid var(--line);
+  min-width: 0;
+}
+.tracked-update:nth-child(odd) { border-right: 1px solid var(--line); }
+
+.tracked-update-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.tracked-update-id {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font: 600 12px "IBM Plex Mono", monospace;
+  letter-spacing: .01em;
+}
+.tracked-update-sep { color: var(--text-faint); }
+
+.tracked-priority {
+  padding: 2px 8px;
+  border-radius: 20px;
+  font: 700 9px "IBM Plex Mono", monospace;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.tracked-priority.urgent { color: #8d2f2f; background: rgba(178, 58, 58, .16); }
+.tracked-priority.high { color: #8f4620; background: rgba(193, 96, 47, .16); }
+.tracked-priority.monitor { color: var(--muted); background: var(--surface-inset); }
+
+.tracked-update-headline {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--accent-imports);
+}
+.tracked-update-headline.urgent { color: var(--status-critical); }
+.tracked-update-headline.high { color: var(--ink-soft); }
+
+.tracked-update-detail {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+.tracked-update-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 8px;
+}
+.tracked-update-state,
+.tracked-update-source {
+  font: 600 9px "IBM Plex Mono", monospace;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.tracked-update-state { color: var(--muted); }
+.tracked-update-state.missing { color: var(--status-serious); }
+.tracked-update-source { color: var(--ink-soft); text-align: right; }
+.tracked-update-source.muted { color: var(--text-faint); }
+a.tracked-update-source:hover { color: var(--orange); }
+
+.tracked-updates-note { padding: 12px 14px 14px; }
+
+@media (max-width: 780px) {
+  .tracked-updates-grid { grid-template-columns: minmax(0, 1fr); }
+  .tracked-update:nth-child(odd) { border-right: 0; }
+}
+
+[data-theme="dark"] .tracked-updates-panel { border-color: var(--hairline-strong); background: var(--surface); }
+[data-theme="dark"] .tracked-updates-panel .panel-heading { border-bottom-color: var(--hairline); }
+[data-theme="dark"] .tracked-updates-panel .panel-heading h2 { color: var(--text); }
+[data-theme="dark"] .tracked-updates-sub { color: var(--text-faint); }
+[data-theme="dark"] .tracked-count.total { color: var(--text-faint); background: var(--surface-inset); }
+[data-theme="dark"] .tracked-count.urgent { color: #ff9a95; background: rgba(208, 59, 59, .18); }
+[data-theme="dark"] .tracked-count.missing { color: #ff9d80; background: rgba(236, 131, 90, .18); }
+[data-theme="dark"] .tracked-updates-alert {
+  border-color: rgba(236, 131, 90, .34);
+  background: rgba(236, 131, 90, .1);
+  color: var(--text-soft);
+}
+[data-theme="dark"] .tracked-update { border-top-color: var(--hairline); }
+[data-theme="dark"] .tracked-update:nth-child(odd) { border-right-color: var(--hairline); }
+[data-theme="dark"] .tracked-update-id { color: var(--text); }
+[data-theme="dark"] .tracked-priority.urgent { color: #ff9a95; background: rgba(208, 59, 59, .18); }
+[data-theme="dark"] .tracked-priority.high { color: #ff9d80; background: rgba(236, 131, 90, .18); }
+[data-theme="dark"] .tracked-priority.monitor { color: var(--text-faint); background: var(--surface-inset); }
+[data-theme="dark"] .tracked-update-headline { color: var(--accent-imports); }
+[data-theme="dark"] .tracked-update-headline.urgent { color: #ff9a95; }
+[data-theme="dark"] .tracked-update-headline.high { color: var(--text); }
+[data-theme="dark"] .tracked-update-detail,
+[data-theme="dark"] .tracked-update-state { color: var(--text-faint); }
+[data-theme="dark"] .tracked-update-state.missing { color: #ff9d80; }
+[data-theme="dark"] .tracked-update-source { color: var(--text-soft); }
+[data-theme="dark"] a.tracked-update-source:hover { color: var(--accent-outbound); }
+[data-theme="dark"] .tracked-updates-note { color: var(--text-faint); }
+
+/* ============================================================
    Dark theme: full coverage pass (PR-8)
    Everything left over from PR-2 through PR-7: the metrics strip,
    search/filter control panel, mode/department legends, Import

@@ -7,7 +7,7 @@ import { packingListPallets } from "./inbound-pallets";
 import FulfillmentTkOrders from "./FulfillmentTkOrders";
 import { GmailIngestionCard, type GmailIngestionEvent } from "./gmail-ingestion-card";
 import { DriveArchiveCard, driveLinkGlyph } from "./drive-archive-card";
-import ShipmentEventTrackerCard from "./ShipmentEventTrackerCard";
+import { TrackedShipmentUpdatesCard } from "./tracked-shipment-updates-card";
 import { InventoryReconciliationCard, type CmsInventoryItem } from "./inventory-reconciliation-card";
 import { useParcelTracking, type TrackableShipment, type TrackingResult } from "./live-map";
 import { ThemeToggle } from "./theme-toggle";
@@ -1220,6 +1220,7 @@ async function fetchOperationalSnapshot() {
         storage: snapshot.storage,
         version: snapshot.version,
         detail: snapshot.staleReason,
+        generatedAt: snapshot.generatedAt ?? null,
         degradedSources: (snapshot.sourceHealth ?? []).filter((source) => !source.ok).length,
       },
     };
@@ -3572,7 +3573,15 @@ export default function Home() {
 
       <StatusLegend />
 
-      <ShipmentEventTrackerCard />
+      <TrackedShipmentUpdatesCard
+        events={gmailIngestion}
+        items={items}
+        loading={loading}
+        generatedAt={connection?.generatedAt ?? null}
+        stale={connection?.mode === "stale"}
+        staleReason={connection?.detail}
+        sheetUrl={SHEET_URL}
+      />
 
       <footer>
         <p><strong>SK</strong> STYLEKOREAN LOGISTICS · COMPANY OPERATIONS</p>
