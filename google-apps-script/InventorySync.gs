@@ -372,34 +372,6 @@ function isGreyedImportRow_(backgrounds) {
   return greyCells >= 3;
 }
 
-/**
- * Backward-compatible terminal-set helper used by other inventory routines.
- * The allow-list above is authoritative for inbound inventory.
- */
-function getCompletedImportShipments_() {
-  var active = getActiveImportShipments_();
-  var excluded = new Set();
-  try {
-    var ss = SpreadsheetApp.openById(INVENTORY_SYNC.masterId);
-    var sheet = ss.getSheetByName(INVENTORY_SYNC.importsTab);
-    if (!sheet) return excluded;
-    var data = sheet.getDataRange().getDisplayValues();
-    var headerIdx = findHeaderRowIdx_(data);
-    var map = headerMap_(data[headerIdx]);
-    var idCols = ["SHIPMENT", "DOCS", "INVOICE", "MBL", "HBL", "CONTAINER", "CONTAINER RAW (SYSTEM)"]
-      .map(function (name) { return map[name]; }).filter(function (index) { return index !== undefined; });
-    for (var r = headerIdx + 1; r < data.length; r++) {
-      for (var i = 0; i < idCols.length; i++) {
-        splitImportIdentifiers_(data[r][idCols[i]]).forEach(function (identifier) {
-          var normalized = normalizeImportIdentifier_(identifier);
-          if (normalized && !active.has(normalized)) excluded.add(String(identifier).trim().toUpperCase());
-        });
-      }
-    }
-  } catch (e) { Logger.log("Could not build completed import compatibility set: " + e.message); }
-  return excluded;
-}
-
 /* ------------------------------------------------------------------ */
 /* Writers                                                             */
 /* ------------------------------------------------------------------ */

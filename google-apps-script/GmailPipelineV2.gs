@@ -196,13 +196,6 @@ function gmailV2FailureDisposition_(message, error) {
   return { seen: true, pending: true, attempts: attempts };
 }
 
-/**
- * Backward-compatible setup helper. Trigger creation is owned by setupAllTriggers().
- */
-function ensureGmailV2Trigger_() {
-  return GMAIL_PIPELINE_TRIGGER_SYNC_VERSION;
-}
-
 function processLogisticsMessageV2_(message) {
   var subject = String(message.getSubject() || "").trim();
   var body = String(message.getPlainBody() || "");
