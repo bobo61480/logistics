@@ -41,6 +41,29 @@ describe("Nationals KPI schema drift", () => {
     expect(result.nationalsSalesYtd).toBe(0);
   });
 
+  // Early-schema rows put a retailer name in Dept instead of "National".
+  // They are still Nationals orders, so requiring the literal label would drop
+  // real historical revenue out of the headline YTD total.
+  it("counts early-schema rows whose Dept mirrors the retailer name", () => {
+    const result = compute([
+      ["Status", "Channel", "Dept", "PO#", "Amount", "Amount in $", "", "Order Date"],
+      ["Shipped", "ROSS", "ROSS", "#1", "40K", "$40,000", "", "8/11/2026"],
+      ["Shipped", "TJX", "TJX", "#2", "10K", "$10,000", "", "8/12/2026"],
+      ["Shipped", "TARGET", "MBX", "#3", "99K", "$99,000", "", "8/13/2026"],
+    ]);
+    expect(result.nationalsSalesMtd).toBe(50_000);
+  });
+
+  // If the dollar column is renamed or dropped, the unit-quantity column must
+  // not quietly stand in for it — that would report quantities as money.
+  it("reports zero rather than reading units as revenue when no dollar column exists", () => {
+    const result = compute([
+      ["Status", "Channel", "Dept", "PO#", "Amount", "Spacer", "Order Date"],
+      ["Shipped", "TJX", "National", "#1", "50K", "", "8/11/2026"],
+    ]);
+    expect(result.nationalsSalesMtd).toBe(0);
+  });
+
   it("keeps compatibility with the older workbook layout", () => {
     const result = compute([
       ["Overall PO Status", "Channel", "Department", "Order#", "Total Order Amount", "PO#", "Order Date"],

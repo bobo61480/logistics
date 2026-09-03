@@ -135,6 +135,14 @@ function normalizeDept(dept: string): string {
   return dept.trim() || "Other";
 }
 
+/**
+ * Departments that share the National Order Progress sheet but are NOT part of
+ * the Nationals business line, and so are reported on their own cards. Every
+ * other normalizeDept output — "Nationals" and the early-schema retailer labels
+ * alike — counts toward the Nationals headline total.
+ */
+const NON_NATIONALS_DEPTS = new Set(["MBX", "iHerb", "Wholesale B2B", "Wholesale B2C", "Moida"]);
+
 type NationalRecord = { date: number; value: number; retailer: string; dept: string };
 
 function nationalSalesRecords(
@@ -156,13 +164,17 @@ function nationalSalesRecords(
   // cell. Falling back per row would read a unit quantity as revenue and turn
   // "50K units, no dollar value yet" into $50,000 of money that does not exist.
   //
+  // "Amount" is deliberately NOT a legacy alias: it is the unit-quantity column
+  // on the current schema, so accepting it here would mean that merely renaming
+  // or dropping the "Amount in $" header silently reports quantities as money.
+  //
   // Both are resolved by header with an explicit -1 miss rather than a
   // positional default: a positional guess lands on whatever sits at that
   // index — a spacer or PO# — and reports $0 for every row.
   const dollarCol = headerIndex(header, ["Amount in $", "Amount in USD", "Amount In $"], -1);
   const legacyDollarCol = dollarCol >= 0
     ? -1
-    : headerIndex(header, ["Total Order Amount", "Amount"], -1);
+    : headerIndex(header, ["Total Order Amount"], -1);
   const amountCol = dollarCol >= 0 ? dollarCol : legacyDollarCol;
   const orderDateCol = headerIndex(header, ["Order Date"], 7);
 
@@ -290,11 +302,13 @@ export function computeKpisFromRows(input: Input): KpiSnapshot {
   const sum = (records: Array<{ date: number; value: number }>, start: number, end = today.code) =>
     records.filter((r) => r.date >= start && r.date <= end).reduce((t, r) => t + r.value, 0);
 
-  // The Nationals KPI card reports the Nationals department only. MBX and iHerb
-  // ride along in the same sheet and are reported separately, so folding them
-  // into this total overstates Nationals revenue. The per-retailer/per-dept
-  // breakdown below still sees every record.
-  const nationalsOnly = nationalSales.filter((record) => record.dept === "Nationals");
+  // The Nationals card excludes the other business lines that ride along in the
+  // same sheet, rather than matching the "Nationals" label exactly. Early-schema
+  // rows carry a retailer name in the Dept column (normalizeDept maps those to
+  // TJX/Ross/Ulta/Burlington), and they are still Nationals orders — requiring
+  // the literal label would silently drop that historical revenue from YTD.
+  // The per-retailer/per-department breakdowns below still see every record.
+  const nationalsOnly = nationalSales.filter((record) => !NON_NATIONALS_DEPTS.has(record.dept));
 
   // ── WMS sales ─────────────────────────────────────────────────────────────
   const wmsSales = input.wmsRows.slice(1).flatMap((row) => {
