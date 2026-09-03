@@ -121,7 +121,7 @@ function chunkRows(rows) {
   return chunks;
 }
 
-function decodeServiceAccountJson(raw) {
+function parseJsonSecret(raw, label) {
   if (!raw) return null;
   const candidates = [String(raw).trim()];
   try {
@@ -133,11 +133,11 @@ function decodeServiceAccountJson(raw) {
       if (parsed && typeof parsed === "object") return parsed;
     } catch {}
   }
-  throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON is set but is not valid JSON/base64 JSON");
+  throw new Error(`${label} is set but is not valid JSON/base64 JSON`);
 }
 
 function loadServiceAccount() {
-  const parsed = decodeServiceAccountJson(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+  const parsed = parseJsonSecret(process.env.GOOGLE_SERVICE_ACCOUNT_JSON, "GOOGLE_SERVICE_ACCOUNT_JSON");
   const clientEmail = String(process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || parsed?.client_email || "").trim();
   const privateKey = String(process.env.GOOGLE_PRIVATE_KEY || parsed?.private_key || "").replaceAll("\\n", "\n").trim();
   if (!clientEmail && !privateKey) return null;
@@ -145,46 +145,94 @@ function loadServiceAccount() {
   return { clientEmail, privateKey };
 }
 
+function loadClaspOAuth() {
+  const parsed = parseJsonSecret(process.env.CLASP_ACCESS_TOKEN, "CLASP_ACCESS_TOKEN");
+  if (!parsed) return null;
+  const token = parsed.token || parsed.tokens || parsed;
+  const settings = parsed.oauth2ClientSettings || parsed.oauth2_client_settings || parsed.credentials || {};
+  const accessToken = String(token.access_token || token.accessToken || "").trim();
+  const refreshToken = String(token.refresh_token || token.refreshToken || "").trim();
+  const clientId = String(settings.clientId || settings.client_id || parsed.client_id || "").trim();
+  const clientSecret = String(settings.clientSecret || settings.client_secret || parsed.client_secret || "").trim();
+  const expiryDate = Number(token.expiry_date || token.expiryDate || 0);
+  const scope = String(token.scope || "").trim();
+  if (!accessToken && !refreshToken) throw new Error("CLASP_ACCESS_TOKEN contains no OAuth access_token or refresh_token");
+  return { accessToken, refreshToken, clientId, clientSecret, expiryDate, scope };
+}
+
 const serviceAccount = loadServiceAccount();
+const claspOAuth = loadClaspOAuth();
 let accessTokenPromise = null;
 
 function base64Url(value) {
   return Buffer.from(value).toString("base64url");
 }
 
+async function exchangeServiceAccountToken() {
+  const now = Math.floor(Date.now() / 1000);
+  const header = base64Url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+  const claims = base64Url(JSON.stringify({
+    iss: serviceAccount.clientEmail,
+    scope: GOOGLE_SHEETS_SCOPE,
+    aud: GOOGLE_TOKEN_URL,
+    iat: now,
+    exp: now + 3600,
+  }));
+  const unsigned = `${header}.${claims}`;
+  const signer = createSign("RSA-SHA256");
+  signer.update(unsigned);
+  signer.end();
+  const signature = signer.sign(serviceAccount.privateKey).toString("base64url");
+  const response = await fetch(GOOGLE_TOKEN_URL, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion: `${unsigned}.${signature}`,
+    }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !payload.access_token) {
+    const detail = payload.error_description || payload.error || `HTTP ${response.status}`;
+    throw new Error(`Google service-account token exchange failed: ${detail}`);
+  }
+  return payload.access_token;
+}
+
+async function exchangeClaspRefreshToken() {
+  if (!claspOAuth?.refreshToken || !claspOAuth.clientId || !claspOAuth.clientSecret) {
+    if (claspOAuth?.accessToken) return claspOAuth.accessToken;
+    throw new Error("CLASP_ACCESS_TOKEN cannot refresh because OAuth client settings are incomplete");
+  }
+  const response = await fetch(GOOGLE_TOKEN_URL, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+    body: new URLSearchParams({
+      client_id: claspOAuth.clientId,
+      client_secret: claspOAuth.clientSecret,
+      refresh_token: claspOAuth.refreshToken,
+      grant_type: "refresh_token",
+    }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !payload.access_token) {
+    const detail = payload.error_description || payload.error || `HTTP ${response.status}`;
+    throw new Error(`Clasp OAuth refresh failed: ${detail}`);
+  }
+  return payload.access_token;
+}
+
 async function getGoogleAccessToken() {
-  if (!serviceAccount) throw new Error("Google service-account credentials are not configured");
+  if (!serviceAccount && !claspOAuth) throw new Error("No Google OAuth credential is configured");
   if (!accessTokenPromise) {
     accessTokenPromise = (async () => {
-      const now = Math.floor(Date.now() / 1000);
-      const header = base64Url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
-      const claims = base64Url(JSON.stringify({
-        iss: serviceAccount.clientEmail,
-        scope: GOOGLE_SHEETS_SCOPE,
-        aud: GOOGLE_TOKEN_URL,
-        iat: now,
-        exp: now + 3600,
-      }));
-      const unsigned = `${header}.${claims}`;
-      const signer = createSign("RSA-SHA256");
-      signer.update(unsigned);
-      signer.end();
-      const signature = signer.sign(serviceAccount.privateKey).toString("base64url");
-      const response = await fetch(GOOGLE_TOKEN_URL, {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
-        body: new URLSearchParams({
-          grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-          assertion: `${unsigned}.${signature}`,
-        }),
-        signal: AbortSignal.timeout(30_000),
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok || !payload.access_token) {
-        const detail = payload.error_description || payload.error || `HTTP ${response.status}`;
-        throw new Error(`Google service-account token exchange failed: ${detail}`);
+      if (serviceAccount) return exchangeServiceAccountToken();
+      if (claspOAuth.accessToken && (!claspOAuth.expiryDate || claspOAuth.expiryDate > Date.now() + 60_000)) {
+        return claspOAuth.accessToken;
       }
-      return payload.access_token;
+      return exchangeClaspRefreshToken();
     })();
   }
   return accessTokenPromise;
@@ -248,7 +296,7 @@ async function fetchTabRows(document, tab) {
   const label = `${document.alias}/${tab.title}`;
   const privateWorkbook = document.alias !== "logistics-master";
   if (privateWorkbook) {
-    if (!serviceAccount) throw new Error(`${label}: Google service-account credentials are required for private workbook sync`);
+    if (!serviceAccount && !claspOAuth) throw new Error(`${label}: authenticated Google OAuth is required for private workbook sync`);
     try {
       return await fetchSheetsApiRows(document, tab);
     } catch (apiError) {
@@ -265,7 +313,7 @@ async function fetchTabRows(document, tab) {
     const csv = await fetchWithRetry(gvizUrl(document, tab), label);
     return parseCsv(csv);
   } catch (gvizError) {
-    if (!serviceAccount) throw gvizError;
+    if (!serviceAccount && !claspOAuth) throw gvizError;
     return fetchSheetsApiRows(document, tab);
   }
 }
