@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createSign, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,6 +11,9 @@ const database = process.env.D1_DATABASE_NAME || manifest.database || "stylekore
 const CHUNK_BYTES = 48 * 1024;
 const FETCH_CONCURRENCY = 4;
 const MAX_FETCH_ATTEMPTS = 3;
+const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
+const GOOGLE_SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly";
+const GOOGLE_SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets/";
 
 function sql(value) {
   if (value === null || value === undefined) return "NULL";
@@ -118,6 +121,75 @@ function chunkRows(rows) {
   return chunks;
 }
 
+function decodeServiceAccountJson(raw) {
+  if (!raw) return null;
+  const candidates = [String(raw).trim()];
+  try {
+    candidates.push(Buffer.from(String(raw).trim(), "base64").toString("utf8"));
+  } catch {}
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === "object") return parsed;
+    } catch {}
+  }
+  throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON is set but is not valid JSON/base64 JSON");
+}
+
+function loadServiceAccount() {
+  const parsed = decodeServiceAccountJson(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+  const clientEmail = String(process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || parsed?.client_email || "").trim();
+  const privateKey = String(process.env.GOOGLE_PRIVATE_KEY || parsed?.private_key || "").replaceAll("\\n", "\n").trim();
+  if (!clientEmail && !privateKey) return null;
+  if (!clientEmail || !privateKey) throw new Error("Google service-account credentials are incomplete");
+  return { clientEmail, privateKey };
+}
+
+const serviceAccount = loadServiceAccount();
+let accessTokenPromise = null;
+
+function base64Url(value) {
+  return Buffer.from(value).toString("base64url");
+}
+
+async function getGoogleAccessToken() {
+  if (!serviceAccount) throw new Error("Google service-account credentials are not configured");
+  if (!accessTokenPromise) {
+    accessTokenPromise = (async () => {
+      const now = Math.floor(Date.now() / 1000);
+      const header = base64Url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+      const claims = base64Url(JSON.stringify({
+        iss: serviceAccount.clientEmail,
+        scope: GOOGLE_SHEETS_SCOPE,
+        aud: GOOGLE_TOKEN_URL,
+        iat: now,
+        exp: now + 3600,
+      }));
+      const unsigned = `${header}.${claims}`;
+      const signer = createSign("RSA-SHA256");
+      signer.update(unsigned);
+      signer.end();
+      const signature = signer.sign(serviceAccount.privateKey).toString("base64url");
+      const response = await fetch(GOOGLE_TOKEN_URL, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+        body: new URLSearchParams({
+          grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+          assertion: `${unsigned}.${signature}`,
+        }),
+        signal: AbortSignal.timeout(30_000),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.access_token) {
+        const detail = payload.error_description || payload.error || `HTTP ${response.status}`;
+        throw new Error(`Google service-account token exchange failed: ${detail}`);
+      }
+      return payload.access_token;
+    })();
+  }
+  return accessTokenPromise;
+}
+
 async function fetchWithRetry(url, label) {
   let lastError;
   for (let attempt = 1; attempt <= MAX_FETCH_ATTEMPTS; attempt += 1) {
@@ -139,6 +211,30 @@ async function fetchWithRetry(url, label) {
   throw new Error(`${label}: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
 }
 
+async function fetchSheetsApiRows(document, tab) {
+  const token = await getGoogleAccessToken();
+  const escapedTitle = String(tab.title).replaceAll("'", "''");
+  const range = `'${escapedTitle}'`;
+  const url = new URL(`${GOOGLE_SHEETS_API}${document.spreadsheetId}/values/${encodeURIComponent(range)}`);
+  url.searchParams.set("majorDimension", "ROWS");
+  url.searchParams.set("valueRenderOption", "FORMATTED_VALUE");
+  url.searchParams.set("dateTimeRenderOption", "FORMATTED_STRING");
+  const response = await fetch(url, {
+    headers: {
+      authorization: `Bearer ${token}`,
+      accept: "application/json",
+      "user-agent": "StyleKorean-D1-Sheet-Mirror/1.0",
+    },
+    signal: AbortSignal.timeout(45_000),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = payload?.error?.message || `HTTP ${response.status}`;
+    throw new Error(`${document.alias}/${tab.title}: Sheets API ${detail}`);
+  }
+  return Array.isArray(payload.values) ? payload.values : [];
+}
+
 function gvizUrl(document, tab) {
   const url = new URL(`https://docs.google.com/spreadsheets/d/${document.spreadsheetId}/gviz/tq`);
   url.searchParams.set("tqx", "out:csv");
@@ -146,6 +242,32 @@ function gvizUrl(document, tab) {
   url.searchParams.set("headers", "0");
   url.searchParams.set("_", String(Date.now()));
   return url.toString();
+}
+
+async function fetchTabRows(document, tab) {
+  const label = `${document.alias}/${tab.title}`;
+  const privateWorkbook = document.alias !== "logistics-master";
+  if (privateWorkbook) {
+    if (!serviceAccount) throw new Error(`${label}: Google service-account credentials are required for private workbook sync`);
+    try {
+      return await fetchSheetsApiRows(document, tab);
+    } catch (apiError) {
+      try {
+        const csv = await fetchWithRetry(gvizUrl(document, tab), label);
+        return parseCsv(csv);
+      } catch (gvizError) {
+        throw new Error(`${apiError instanceof Error ? apiError.message : String(apiError)}; public fallback failed: ${gvizError instanceof Error ? gvizError.message : String(gvizError)}`);
+      }
+    }
+  }
+
+  try {
+    const csv = await fetchWithRetry(gvizUrl(document, tab), label);
+    return parseCsv(csv);
+  } catch (gvizError) {
+    if (!serviceAccount) throw gvizError;
+    return fetchSheetsApiRows(document, tab);
+  }
 }
 
 function allTabs() {
@@ -241,8 +363,8 @@ async function main() {
   const candidates = allTabs().filter(({ tab }) => tab.mode !== "metadata_only");
   const fetched = await mapLimit(candidates, FETCH_CONCURRENCY, async ({ document, tab }) => {
     try {
-      const csv = await fetchWithRetry(gvizUrl(document, tab), `${document.alias}/${tab.title}`);
-      const rows = redactRows(trimGrid(parseCsv(csv)), tab.redactColumns || []);
+      const sourceRows = await fetchTabRows(document, tab);
+      const rows = redactRows(trimGrid(sourceRows), tab.redactColumns || []);
       const serialized = JSON.stringify(rows);
       const contentHash = sha256(serialized);
       return { document, tab, rows, contentHash, chunks: chunkRows(rows), error: null };
