@@ -223,7 +223,8 @@ function scanAndImportWmsTruckingOrdersV2() {
       if (!targetCustomer || !targetShipDate) continue;
 
       var targetDateInfo = normalizeWmsShipDate_(targetShipDate);
-      var targetKey = wmsExactGroupKey_(targetCustomer, targetDateInfo);
+      var targetDestinationHint = targetLocationIndex !== undefined ? normalizeWmsDestinationHint_(targetRow[targetLocationIndex]) : "";
+      var targetKey = wmsExactGroupKey_(targetCustomer, targetDateInfo, targetDestinationHint);
       var targetInvoices = splitWmsInvoices_(invoiceCell);
       targetInvoices.forEach(function (targetInvoice) {
         var signature = wmsInvoiceSignatureFromKey_(targetKey, targetInvoice);

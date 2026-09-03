@@ -17,7 +17,7 @@ describe("control tower Worker routing", () => {
     expect(worker).toContain('url.pathname === "/api/logistics/fulfillment"');
     expect(wrangler).toContain("FULFILLMENT_GAS_URL");
     expect(worker).toContain("env.ASSETS.fetch(request)");
-    expect(wrangler).toContain('main = "worker/index.ts"');
+    expect(wrangler).toContain('main = "worker/cached-index.ts"');
     expect(wrangler).toContain('[assets]');
     expect(wrangler).toContain('directory = "./out"');
     expect(wrangler).toContain('binding = "ASSETS"');

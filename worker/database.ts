@@ -189,7 +189,7 @@ export async function readCurrentSnapshot(db: D1Database): Promise<StoredSnapsho
   try {
     grids = await readSheetGrids(db);
   } catch (error) {
-    // If migration 0003 has not been applied yet, the current snapshot is still
+    // If migration 0005 has not been applied yet, the current snapshot is still
     // a pre-migration one that carries its grids inline — serve it rather than
     // failing the read. Once the store is in use, an unreadable store is a real
     // outage and must surface.

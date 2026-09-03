@@ -10,7 +10,7 @@ import {
 } from "../worker/sheet-store";
 import { applyConfirmedStatusToSnapshot } from "../worker/database";
 
-const migration = readFileSync("migrations/0003_relational_sheet_store.sql", "utf8");
+const migration = readFileSync("migrations/0005_relational_sheet_store.sql", "utf8");
 
 type Recorded = { sql: string; args: unknown[] };
 
