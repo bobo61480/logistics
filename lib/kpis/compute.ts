@@ -5,6 +5,9 @@ export type CarrierKpi = {
   shipmentPercent: number;
 };
 
+/** Per-retailer or per-department sales totals (MTD or YTD). */
+export type SalesByGroup = Record<string, number>;
+
 export type KpiSnapshot = {
   nationalsSalesMtd: number;
   nationalsSalesYtd: number;
@@ -27,6 +30,15 @@ export type KpiSnapshot = {
   totalLocalMtd: number;
   totalCaliforniaMtd: number;
   totalOutOfStateMtd: number;
+  // ── Sales breakdowns (2026 only, from National Order Progress sheet) ──────
+  /** MTD dollar sales grouped by normalized retailer/channel name. */
+  retailerSalesMtd: SalesByGroup;
+  /** YTD dollar sales grouped by normalized retailer/channel name. */
+  retailerSalesYtd: SalesByGroup;
+  /** MTD dollar sales grouped by normalized department. */
+  deptSalesMtd: SalesByGroup;
+  /** YTD dollar sales grouped by normalized department. */
+  deptSalesYtd: SalesByGroup;
 };
 
 export function dateCode(value: string) {
@@ -64,7 +76,6 @@ function headerIndex(header: string[], aliases: string[], fallback: number) {
 function normalizeCarrierName(carrier: string): string {
   const text = carrier.replace(/\s+/g, " ").trim();
   if (!text) return text;
-  // IATA air cargo prefix mapping (prefix + hyphen/space + flight number)
   if (/^YP[-\s]/i.test(text)) return "Air Premia";
   if (/^OZ[-\s]/i.test(text)) return "Asiana Airlines";
   if (/^KE[-\s]/i.test(text)) return "Korean Air";
@@ -72,7 +83,6 @@ function normalizeCarrierName(carrier: string): string {
   if (/^7C[-\s]/i.test(text)) return "Jeju Air";
   if (/^LJ[-\s]/i.test(text)) return "Jin Air";
   if (/^BX[-\s]/i.test(text)) return "Air Busan";
-  // Common trucking carrier normalizations
   if (/^C\.?H\.?\s*ROBINSON/i.test(text)) return "C.H. Robinson";
   if (/^XPO\b/i.test(text)) return "XPO Logistics";
   if (/^ESTES\b/i.test(text)) return "Estes Express";
@@ -82,23 +92,80 @@ function normalizeCarrierName(carrier: string): string {
   return text;
 }
 
-function nationalSalesRecords(rows: string[][], yearStart: number, todayCode: number) {
-  if (!rows.length) return [] as Array<{ date: number; value: number }>;
+/**
+ * Normalizes a Channel column value to a canonical retailer name.
+ * Case-insensitive; handles variant spellings (TJX/Tjx, ULTA STY/ULTA-STY).
+ */
+function normalizeRetailer(channel: string): string {
+  const c = (channel ?? "").trim().toUpperCase();
+  if (!c) return "Other";
+  if (c.startsWith("TJX") || c === "TJXC") return "TJX";
+  if (c.startsWith("ROSS")) return "Ross";
+  if (c.startsWith("MACY")) return "Macy's";
+  if (c.startsWith("NORDSTROM")) return "Nordstrom";
+  if (c === "IHERB" || c.startsWith("IHERB")) return "iHerb";
+  if (c.startsWith("ULTA")) return "Ulta";
+  if (c.startsWith("BURLINGTON")) return "Burlington";
+  if (c.startsWith("TARGET")) return "Target";
+  if (c.startsWith("CVS")) return "CVS";
+  if (c.startsWith("WALGREENS")) return "Walgreens";
+  if (c.startsWith("MINISO")) return "Miniso";
+  return channel.trim();
+}
+
+/**
+ * Normalizes a Dept column value to a canonical department name.
+ * The National sheet's Dept column uses inconsistent casing and sometimes
+ * mirrors the Channel column for early-schema rows.
+ */
+function normalizeDept(dept: string): string {
+  const d = (dept ?? "").trim().toLowerCase();
+  if (!d) return "Other";
+  if (d === "national" || d === "nationals") return "Nationals";
+  if (d === "mbx" || d === "mbx mkt") return "MBX";
+  if (d === "iherb") return "iHerb";
+  if (d.includes("wholesale b2b") || d === "b2b") return "Wholesale B2B";
+  if (d.includes("wholesale b2c") || d === "b2c") return "Wholesale B2C";
+  if (d === "moida") return "Moida";
+  // Early-schema rows where Dept mirrors Channel name — normalize to retailer
+  if (d.startsWith("tjx") || d === "tjxc") return "TJX";
+  if (d.startsWith("ross")) return "Ross";
+  if (d.startsWith("ulta")) return "Ulta";
+  if (d.startsWith("burlington")) return "Burlington";
+  return dept.trim() || "Other";
+}
+
+type NationalRecord = { date: number; value: number; retailer: string; dept: string };
+
+function nationalSalesRecords(
+  rows: string[][],
+  yearStart: number,
+  todayCode: number,
+): NationalRecord[] {
+  if (!rows.length) return [];
   const header = rows[0] ?? [];
-  const statusCol = headerIndex(header, ["Status", "Overall PO Status"], 0);
-  const amountCol = headerIndex(header, ["Amount", "Total Order Amount"], 4);
-  const orderDateCol = headerIndex(header, ["Order Date"], 6);
-  const deptCol = headerIndex(header, ["Dept", "Department"], 2);
-  // NOTE: Earlier code filtered the Channel column (brand/customer names like
-  // ULTA STY, ROSS) against the literal string "national", which matched no
-  // rows and always computed $0. The Dept/Department column is what actually
-  // carries "National" vs. non-national buckets like MBX and Iherb.
-  return rows.slice(1).flatMap((row) => {
-    if ((row[deptCol] ?? "").trim().toLowerCase() !== "national") return [];
+  const statusCol   = headerIndex(header, ["Status", "Overall PO Status"], 0);
+  const channelCol  = headerIndex(header, ["Channel"], 1);
+  const deptCol     = headerIndex(header, ["Dept", "Department"], 2);
+  // IMPORTANT: Use "Amount in $" (col 5) for dollar KPIs, NOT "Amount" (col 4)
+  // which holds unit quantities (e.g. "103K" = 103,000 units, not dollars).
+  const amountCol   = headerIndex(header, ["Amount in $", "Amount in USD", "Amount In $"], 5);
+  const orderDateCol = headerIndex(header, ["Order Date"], 7);
+
+  // NOTE: Dept column carries "National", "MBX", "Iherb" etc. — NOT the Channel
+  // column which carries retailer names. Earlier code filtered Channel against
+  // "national" which always matched $0.
+  return rows.slice(1).flatMap((row): NationalRecord[] => {
     if ((row[statusCol] ?? "").trim().toLowerCase() === "cancelled") return [];
-    const date = dateCode(row[orderDateCol] ?? "");
-    const value = amount(row[amountCol] ?? "", true);
-    return date >= yearStart && date <= todayCode && value !== null && value > 0 ? [{ date, value }] : [];
+    const dateStr = row[orderDateCol] ?? "";
+    const date    = dateCode(dateStr);
+    if (!date || date < yearStart || date > todayCode) return [];
+    const rawAmount = row[amountCol] ?? "";
+    const value = amount(rawAmount, true);
+    if (value === null || value <= 0) return [];
+    const retailer = normalizeRetailer(row[channelCol] ?? "");
+    const dept     = normalizeDept(row[deptCol] ?? "");
+    return [{ date, value, retailer, dept }];
   });
 }
 
@@ -115,9 +182,9 @@ function freightDateCode(value: string, today: KpiToday) {
   const match = String(value ?? "").trim().match(/^(\d{1,2})\/(\d{1,2})$/);
   if (!match) return 0;
   const month = Number(match[1]);
-  const day = Number(match[2]);
+  const day   = Number(match[2]);
   const hasOccurred = month < today.month || (month === today.month && day <= today.day);
-  const year = hasOccurred ? today.year : today.year + 1;
+  const year  = hasOccurred ? today.year : today.year + 1;
   return year * 10_000 + month * 100 + day;
 }
 
@@ -135,7 +202,7 @@ function distanceBand(destination: string) {
   const text = String(destination ?? "").trim().toUpperCase();
   if (!text) return "unknown" as const;
   const localCity = /\b(BUENA PARK|ANAHEIM|CERRITOS|LA MIRADA|FULLERTON|LA HABRA|BREA|ORANGE|SANTA ANA|IRVINE|COSTA MESA|HUNTINGTON BEACH|LONG BEACH|CARSON|TORRANCE|COMPTON|DOWNEY|NORWALK|WHITTIER|POMONA|ONTARIO|BLOOMINGTON|LOS ANGELES|GLENDALE|PASADENA)\b/;
-  const localZip = /\b(90[0-8]\d{2}|91[0-2]\d{2}|917\d{2}|918\d{2}|92316|926\d{2}|927\d{2}|928\d{2})\b/;
+  const localZip  = /\b(90[0-8]\d{2}|91[0-2]\d{2}|917\d{2}|918\d{2}|92316|926\d{2}|927\d{2}|928\d{2})\b/;
   if (localCity.test(text) || localZip.test(text)) return "local" as const;
   if (/\bCA\b|CALIFORNIA/.test(text)) return "california" as const;
   if (/\b(AL|AK|AZ|AR|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY)\b/.test(text) || /\b(NEW JERSEY|NEW YORK|WASHINGTON|TEXAS|ILLINOIS|FLORIDA|GEORGIA|PENNSYLVANIA|MASSACHUSETTS|ARIZONA|NEVADA|OREGON|COLORADO)\b/.test(text)) return "out-of-state" as const;
@@ -145,26 +212,48 @@ function distanceBand(destination: string) {
 export type KpiToday = { year: number; month: number; day: number; code: number };
 
 export function pacificToday(): KpiToday {
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", year: "numeric", month: "numeric", day: "numeric" }).formatToParts(new Date());
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    year: "numeric", month: "numeric", day: "numeric",
+  }).formatToParts(new Date());
   const values = Object.fromEntries(parts.map((part) => [part.type, Number(part.value)]));
-  return { year: values.year, month: values.month, day: values.day, code: values.year * 10_000 + values.month * 100 + values.day };
+  return {
+    year: values.year, month: values.month, day: values.day,
+    code: values.year * 10_000 + values.month * 100 + values.day,
+  };
 }
 
 export function selectedMonthBounds(today: KpiToday, selectedMonth?: string) {
   const fallback = `${today.year}-${String(today.month).padStart(2, "0")}`;
   const monthKey = String(selectedMonth ?? fallback).trim();
-  const match = monthKey.match(/^(\d{4})-(\d{2})$/);
+  const match    = monthKey.match(/^(\d{4})-(\d{2})$/);
   if (!match) throw new Error("KPI_MONTH_INVALID");
-  const year = Number(match[1]);
+  const year  = Number(match[1]);
   const month = Number(match[2]);
   if (year !== today.year || month < 1 || month > today.month) throw new Error("KPI_MONTH_INVALID");
   const lastDay = new Date(year, month, 0).getDate();
-  const endDay = month === today.month ? today.day : lastDay;
+  const endDay  = month === today.month ? today.day : lastDay;
   return {
     monthKey,
     monthStart: year * 10_000 + month * 100 + 1,
-    monthEnd: year * 10_000 + month * 100 + endDay,
+    monthEnd:   year * 10_000 + month * 100 + endDay,
   };
+}
+
+/** Accumulates sales amounts into a SalesByGroup map. */
+function accumulate(
+  records: NationalRecord[],
+  start: number,
+  end: number,
+  groupFn: (r: NationalRecord) => string,
+): SalesByGroup {
+  const out: SalesByGroup = {};
+  for (const r of records) {
+    if (r.date < start || r.date > end) continue;
+    const key = groupFn(r);
+    out[key] = (out[key] ?? 0) + r.value;
+  }
+  return out;
 }
 
 type Input = {
@@ -177,62 +266,118 @@ type Input = {
 };
 
 export function computeKpisFromRows(input: Input): KpiSnapshot {
-  const today = input.today ?? pacificToday();
+  const today    = input.today ?? pacificToday();
+  // YTD = 2026 Jan 1 through today (today.year ensures this stays correct)
   const yearStart = today.year * 10_000 + 101;
   const { monthStart, monthEnd } = selectedMonthBounds(today, input.selectedMonth);
+
+  // ── National sales (using "Amount in $" column, includes retailer + dept) ──
   const nationalSales = nationalSalesRecords(input.nationalRows, yearStart, today.code);
+
+  // Aggregate totals (matches existing nationalsSalesMtd/Ytd semantics:
+  // all non-cancelled rows with a valid dollar amount and 2026 order date)
+  const sum = (records: Array<{ date: number; value: number }>, start: number, end = today.code) =>
+    records.filter((r) => r.date >= start && r.date <= end).reduce((t, r) => t + r.value, 0);
+
+  // ── WMS sales ─────────────────────────────────────────────────────────────
   const wmsSales = input.wmsRows.slice(1).flatMap((row) => {
-    const date = dateCode(row[0] ?? "");
+    const date  = dateCode(row[0] ?? "");
     const value = amount(row[6] ?? "", false);
     return date >= yearStart && date <= today.code && value !== null ? [{ date, value }] : [];
   });
-  const sum = (records: Array<{ date: number; value: number }>, start: number, end = today.code) => records.filter((r) => r.date >= start && r.date <= end).reduce((total, r) => total + r.value, 0);
+
+  // ── Freight records ───────────────────────────────────────────────────────
   const trucking = input.truckingRows.slice(2).flatMap((row) => {
     const date = freightDateCode(row[3] ?? "", today);
     if (!date) return [];
-    return [{ date, cost: freightAmount(row[21] ?? "") || freightAmount(row[17] ?? ""), carrier: normalizeCarrierName((row[16] ?? "").trim()), destination: (row[2] ?? "").trim(), loadType: loadType([row[4], row[5]].filter(Boolean).join(" ")), isTransfer: false }];
+    return [{
+      date, isTransfer: false,
+      cost:        freightAmount(row[21] ?? "") || freightAmount(row[17] ?? ""),
+      carrier:     normalizeCarrierName((row[16] ?? "").trim()),
+      destination: (row[2] ?? "").trim(),
+      loadType:    loadType([row[4], row[5]].filter(Boolean).join(" ")),
+    }];
   });
+
   const transfer = input.transferRows.slice(1).flatMap((row) => {
     const date = freightDateCode(row[5] ?? "", today);
     if (!date) return [];
-    return [{ date, cost: freightAmount(row[9] ?? "") || freightAmount(row[8] ?? ""), carrier: normalizeCarrierName((row[6] ?? "").trim()), destination: (row[4] ?? "").trim(), loadType: loadType(row[1] ?? ""), isTransfer: true }];
+    return [{
+      date, isTransfer: true,
+      cost:        freightAmount(row[9] ?? "") || freightAmount(row[8] ?? ""),
+      carrier:     normalizeCarrierName((row[6] ?? "").trim()),
+      destination: (row[4] ?? "").trim(),
+      loadType:    loadType(row[1] ?? ""),
+    }];
   });
-  const freight = [...trucking, ...transfer].filter((r) => r.date >= yearStart && r.date <= today.code);
-  const freightMtd = freight.filter((r) => r.date >= monthStart && r.date <= monthEnd);
+
+  const freight     = [...trucking, ...transfer].filter((r) => r.date >= yearStart && r.date <= today.code);
+  const freightMtd  = freight.filter((r) => r.date >= monthStart && r.date <= monthEnd);
   const truckingYtd = freight.filter((r) => !r.isTransfer);
   const truckingMtd = freightMtd.filter((r) => !r.isTransfer);
   const transferYtd = freight.filter((r) => r.isTransfer);
   const transferMtd = freightMtd.filter((r) => r.isTransfer);
   const njTransferYtd = transferYtd.filter((r) => isNewJerseyDestination(r.destination));
   const njTransferMtd = transferMtd.filter((r) => isNewJerseyDestination(r.destination));
+
+  // ── Carrier stats ─────────────────────────────────────────────────────────
   const carrierTotals = freight.reduce((totals, record) => {
     if (!record.carrier) return totals;
-    const key = record.carrier.toUpperCase();
+    const key     = record.carrier.toUpperCase();
     const current = totals.get(key) ?? { name: record.carrier, earnings: 0, moves: 0 };
     current.earnings += record.cost;
-    current.moves += 1;
+    current.moves    += 1;
     totals.set(key, current);
     return totals;
   }, new Map<string, { name: string; earnings: number; moves: number }>());
-  const namedMoves = [...carrierTotals.values()].reduce((total, carrier) => total + carrier.moves, 0);
-  const topCarriers = [...carrierTotals.values()].sort((a, b) => b.moves - a.moves || b.earnings - a.earnings).slice(0, 3).map((carrier) => ({ ...carrier, shipmentPercent: namedMoves ? Math.round((carrier.moves / namedMoves) * 1_000) / 10 : 0 }));
+
+  const namedMoves = [...carrierTotals.values()].reduce((t, c) => t + c.moves, 0);
+  const topCarriers = [...carrierTotals.values()]
+    .sort((a, b) => b.moves - a.moves || b.earnings - a.earnings)
+    .slice(0, 3)
+    .map((c) => ({ ...c, shipmentPercent: namedMoves ? Math.round((c.moves / namedMoves) * 1_000) / 10 : 0 }));
+
   const classified = freight.filter((r) => !r.isTransfer || r.cost > 0);
   const ltl = classified.filter((r) => r.loadType === "LTL").length;
   const ftl = classified.filter((r) => r.loadType === "FTL").length;
   const splitTotal = ltl + ftl;
-  const laneTotal = (records: typeof freight, band: "local" | "california" | "out-of-state") => {
-    const matching = records.filter((r) => !r.isTransfer && r.cost > 0 && distanceBand(r.destination) === band);
-    return matching.reduce((total, r) => total + r.cost, 0);
-  };
+
+  const laneTotal = (records: typeof freight, band: "local" | "california" | "out-of-state") =>
+    records
+      .filter((r) => !r.isTransfer && r.cost > 0 && distanceBand(r.destination) === band)
+      .reduce((t, r) => t + r.cost, 0);
+
+  // ── Retailer & department breakdowns (2026 only) ──────────────────────────
+  const retailerSalesMtd = accumulate(nationalSales, monthStart, monthEnd, (r) => r.retailer);
+  const retailerSalesYtd = accumulate(nationalSales, yearStart, today.code, (r) => r.retailer);
+  const deptSalesMtd     = accumulate(nationalSales, monthStart, monthEnd, (r) => r.dept);
+  const deptSalesYtd     = accumulate(nationalSales, yearStart, today.code, (r) => r.dept);
+
   return {
-    nationalsSalesMtd: sum(nationalSales, monthStart, monthEnd), nationalsSalesYtd: sum(nationalSales, yearStart),
-    wmsSalesMtd: sum(wmsSales, monthStart, monthEnd), wmsSalesYtd: sum(wmsSales, yearStart),
-    shippingMtd: freightMtd.reduce((t, r) => t + r.cost, 0), shippingYtd: freight.reduce((t, r) => t + r.cost, 0),
-    transfersMtd: transferMtd.reduce((t, r) => t + r.cost, 0), transfersYtd: transferYtd.reduce((t, r) => t + r.cost, 0),
-    njTransferMtd: njTransferMtd.reduce((t, r) => t + r.cost, 0), njTransferYtd: njTransferYtd.reduce((t, r) => t + r.cost, 0),
-    topCarriers, ltlPercent: splitTotal ? Math.round((ltl / splitTotal) * 100) : 0, ftlPercent: splitTotal ? Math.round((ftl / splitTotal) * 100) : 0,
-    truckingMtd: truckingMtd.reduce((t, r) => t + r.cost, 0), truckingYtd: truckingYtd.reduce((t, r) => t + r.cost, 0),
-    totalLocal: laneTotal(freight, "local"), totalCalifornia: laneTotal(freight, "california"), totalOutOfState: laneTotal(freight, "out-of-state"),
-    totalLocalMtd: laneTotal(freightMtd, "local"), totalCaliforniaMtd: laneTotal(freightMtd, "california"), totalOutOfStateMtd: laneTotal(freightMtd, "out-of-state"),
+    nationalsSalesMtd: sum(nationalSales, monthStart, monthEnd),
+    nationalsSalesYtd: sum(nationalSales, yearStart),
+    wmsSalesMtd:       sum(wmsSales, monthStart, monthEnd),
+    wmsSalesYtd:       sum(wmsSales, yearStart),
+    shippingMtd:       freightMtd.reduce((t, r) => t + r.cost, 0),
+    shippingYtd:       freight.reduce((t, r) => t + r.cost, 0),
+    transfersMtd:      transferMtd.reduce((t, r) => t + r.cost, 0),
+    transfersYtd:      transferYtd.reduce((t, r) => t + r.cost, 0),
+    njTransferMtd:     njTransferMtd.reduce((t, r) => t + r.cost, 0),
+    njTransferYtd:     njTransferYtd.reduce((t, r) => t + r.cost, 0),
+    topCarriers,
+    ltlPercent:  splitTotal ? Math.round((ltl / splitTotal) * 100) : 0,
+    ftlPercent:  splitTotal ? Math.round((ftl / splitTotal) * 100) : 0,
+    truckingMtd: truckingMtd.reduce((t, r) => t + r.cost, 0),
+    truckingYtd: truckingYtd.reduce((t, r) => t + r.cost, 0),
+    totalLocal:             laneTotal(freight, "local"),
+    totalCalifornia:        laneTotal(freight, "california"),
+    totalOutOfState:        laneTotal(freight, "out-of-state"),
+    totalLocalMtd:          laneTotal(freightMtd, "local"),
+    totalCaliforniaMtd:     laneTotal(freightMtd, "california"),
+    totalOutOfStateMtd:     laneTotal(freightMtd, "out-of-state"),
+    retailerSalesMtd,
+    retailerSalesYtd,
+    deptSalesMtd,
+    deptSalesYtd,
   };
 }

@@ -11,7 +11,6 @@ import { TrackedShipmentUpdatesCard } from "./tracked-shipment-updates-card";
 import { InventoryReconciliationCard, type CmsInventoryItem } from "./inventory-reconciliation-card";
 import { useParcelTracking, type TrackableShipment, type TrackingResult } from "./live-map";
 import { ThemeToggle } from "./theme-toggle";
-import { DataGrids } from "./data-grids";
 import { IngestionRoadmapCard } from "./ingestion-roadmap-card";
 import { airlineNameFromFlight } from "../lib/domain/airlines";
 
@@ -3676,16 +3675,6 @@ export default function Home() {
         />
       </div>
 
-      <DataGrids
-        imports={importScheduleItems}
-        outbound={outboundVisibleItems}
-        nationals={nationalsGridItems}
-        wms={wmsGridItems}
-        inventory={[...inboundInventory, ...warehouseStock]}
-        loading={loading}
-        includeFinished={includeFinished}
-        onToggleFinished={setIncludeFinished}
-      />
 
       {/* .ingestion-archive-row keeps this row ordered above the footer on the
           flex-reordered /light, /light-full, and /fulfillment-style variants. */}
