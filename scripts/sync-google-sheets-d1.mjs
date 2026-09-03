@@ -278,9 +278,36 @@ async function fetchSheetsApiRows(document, tab) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     const detail = payload?.error?.message || `HTTP ${response.status}`;
+    if (isFatalSheetsFailure(response.status, payload)) {
+      throw new FatalSheetsError(`Sheets API ${detail}`);
+    }
     throw new Error(`${document.alias}/${tab.title}: Sheets API ${detail}`);
   }
   return Array.isArray(payload.values) ? payload.values : [];
+}
+
+/**
+ * Raised for a Sheets API failure that is a property of the project or the
+ * credential, not of one tab — a disabled API, a revoked token, a denied
+ * scope. Every remaining tab is guaranteed to fail the same way, so the run
+ * aborts instead of grinding through all of them.
+ */
+class FatalSheetsError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "FatalSheetsError";
+    this.fatal = true;
+  }
+}
+
+function isFatalSheetsFailure(status, payload) {
+  if (status === 401) return true;
+  if (status !== 403) return false;
+  const reasons = (payload?.error?.errors || []).map((entry) => String(entry?.reason || ""));
+  const message = String(payload?.error?.message || "");
+  return payload?.error?.status === "PERMISSION_DENIED"
+    || reasons.some((reason) => reason === "accessNotConfigured" || reason === "SERVICE_DISABLED")
+    || /has not been used in project|is disabled/i.test(message);
 }
 
 function gvizUrl(document, tab) {
@@ -300,6 +327,7 @@ async function fetchTabRows(document, tab) {
     try {
       return await fetchSheetsApiRows(document, tab);
     } catch (apiError) {
+      if (apiError instanceof FatalSheetsError) throw apiError;
       try {
         const csv = await fetchWithRetry(gvizUrl(document, tab), label);
         return parseCsv(csv);
@@ -409,7 +437,13 @@ async function main() {
   executeFile(registrySql(startedAt), "registry");
   const hashes = currentHashes();
   const candidates = allTabs().filter(({ tab }) => tab.mode !== "metadata_only");
+  // A fatal credential/project failure is recorded once and stops the run. It
+  // is not a per-tab condition: every remaining tab would fail identically, so
+  // continuing only burns minutes and buries the one actionable cause under
+  // dozens of copies of itself.
+  let fatal = null;
   const fetched = await mapLimit(candidates, FETCH_CONCURRENCY, async ({ document, tab }) => {
+    if (fatal) return { document, tab, rows: [], contentHash: "", chunks: [], error: null, skipped: true };
     try {
       const sourceRows = await fetchTabRows(document, tab);
       const rows = redactRows(trimGrid(sourceRows), tab.redactColumns || []);
@@ -417,9 +451,26 @@ async function main() {
       const contentHash = sha256(serialized);
       return { document, tab, rows, contentHash, chunks: chunkRows(rows), error: null };
     } catch (error) {
+      if (error instanceof FatalSheetsError && !fatal) fatal = error;
       return { document, tab, rows: [], contentHash: "", chunks: [], error: error instanceof Error ? error.message : String(error) };
     }
   });
+
+  if (fatal) {
+    const finishedAt = new Date().toISOString();
+    console.error(`FATAL ${fatal.message}`);
+    console.error(
+      "Every private workbook read uses this credential, so no tab can sync until it is resolved. "
+      + "If the Sheets API is disabled, enable it for the Google Cloud project that owns the OAuth "
+      + "client and re-run; the sync is idempotent, so a re-run is safe.",
+    );
+    executeSql(`INSERT INTO google_sheet_sync_runs
+      (id, started_at, finished_at, status, checked_tabs, changed_tabs, error_tabs, detail_json)
+      VALUES (${sql(runId)}, ${sql(startedAt)}, ${sql(finishedAt)}, 'error', 0, 0, 0, ${sql(JSON.stringify({ fatal: fatal.message }))});`);
+    console.log(JSON.stringify({ runId, status: "error", fatal: fatal.message, startedAt, finishedAt }, null, 2));
+    process.exitCode = 1;
+    return;
+  }
 
   let checkedTabs = 0;
   let changedTabs = 0;
