@@ -49,6 +49,10 @@ describe("CMS sales KPI aggregation", () => {
     totalLocalMtd: 140,
     totalCaliforniaMtd: 150,
     totalOutOfStateMtd: 160,
+    retailerSalesMtd: {},
+    retailerSalesYtd: {},
+    deptSalesMtd: {},
+    deptSalesYtd: {},
   };
 
   it("keeps the synchronized WMS sales values available when the CMS gateway is down", () => {
