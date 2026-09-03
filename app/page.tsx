@@ -3541,9 +3541,11 @@ export default function Home() {
           <p>
             All rows, including hidden/completed entries. Shipping costs use freight Invoice first,
             then Rate when Invoice is blank—never shipment Invoice Amount. Nationals sales use
-            Order Date and the Amount in $ column—falling back to Amount only where Amount in $ is
-            blank, since Amount carries unit quantities—expand K values, exclude cancelled orders,
-            and count the Nationals department only (MBX and iHerb are reported separately).
+            Order Date and the Amount in $ column—Amount carries unit quantities and is never
+            read as revenue, so a blank dollar cell counts as zero rather than being converted;
+            older sheets without an Amount in $ column fall back to Total Order Amount—expand K
+            values, exclude cancelled orders, and count the Nationals department only (MBX and
+            iHerb are reported separately).
             WMS wholesale sales use Date (column A) and numeric INVOICE AMOUNT (column G);
             text entries such as “FREE SAMPLE,” “FOC,” “Sample,” and operational notes are excluded.
             MTD is the current month through today; YTD begins January 1, 2026. Trucking totals

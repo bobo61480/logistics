@@ -150,14 +150,20 @@ function nationalSalesRecords(
   // "Amount in $" (col F) is the dollar column; "Amount" (col E) holds unit
   // quantities on the current schema (e.g. "103K" units against "$613,881.32").
   //
-  // But col F is absent on older layouts that ship only "Total Order Amount",
-  // and it is left blank on individual rows, so a fallback is required. Without
-  // one, a row whose col F is empty silently contributes $0. Resolving by
-  // header with an explicit -1 miss (rather than a positional default) matters
-  // too: a positional guess lands on whatever sits at that index — a spacer or
-  // PO# — and reports $0 for every row instead of failing to resolve.
-  const amountCol = headerIndex(header, ["Amount in $", "Amount in USD", "Amount In $"], -1);
-  const fallbackAmountCol = headerIndex(header, ["Amount", "Total Order Amount"], -1);
+  // Older layouts predate "Amount in $" and carry dollars in "Total Order
+  // Amount". That legacy column is therefore consulted only when the dollar
+  // column is missing from the SCHEMA — never as a per-row fallback for a blank
+  // cell. Falling back per row would read a unit quantity as revenue and turn
+  // "50K units, no dollar value yet" into $50,000 of money that does not exist.
+  //
+  // Both are resolved by header with an explicit -1 miss rather than a
+  // positional default: a positional guess lands on whatever sits at that
+  // index — a spacer or PO# — and reports $0 for every row.
+  const dollarCol = headerIndex(header, ["Amount in $", "Amount in USD", "Amount In $"], -1);
+  const legacyDollarCol = dollarCol >= 0
+    ? -1
+    : headerIndex(header, ["Total Order Amount", "Amount"], -1);
+  const amountCol = dollarCol >= 0 ? dollarCol : legacyDollarCol;
   const orderDateCol = headerIndex(header, ["Order Date"], 7);
 
   // NOTE: Dept column carries "National", "MBX", "Iherb" etc. — NOT the Channel
@@ -168,10 +174,7 @@ function nationalSalesRecords(
     const dateStr = row[orderDateCol] ?? "";
     const date    = dateCode(dateStr);
     if (!date || date < yearStart || date > todayCode) return [];
-    const preferred = amountCol >= 0 ? amount(row[amountCol] ?? "", true) : null;
-    const value = preferred !== null && preferred > 0
-      ? preferred
-      : (fallbackAmountCol >= 0 ? amount(row[fallbackAmountCol] ?? "", true) : null);
+    const value = amountCol >= 0 ? amount(row[amountCol] ?? "", true) : null;
     if (value === null || value <= 0) return [];
     const retailer = normalizeRetailer(row[channelCol] ?? "");
     const dept     = normalizeDept(row[deptCol] ?? "");

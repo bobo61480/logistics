@@ -29,6 +29,18 @@ describe("Nationals KPI schema drift", () => {
     expect(result.nationalsSalesYtd).toBe(82_000);
   });
 
+  // Guards against reading unit quantities as revenue: on the current schema a
+  // blank dollar cell means "no dollar value recorded yet", not "use the units
+  // column". Converting 50K units into $50,000 would invent money.
+  it("never falls back to the unit-quantity column when the dollar cell is blank", () => {
+    const result = compute([
+      ["Status", "Channel", "Dept", "PO#", "Amount", "Amount in $", "", "Order Date"],
+      ["Shipped", "TJX", "National", "#1", "50K", "", "", "8/11/2026"],
+    ]);
+    expect(result.nationalsSalesMtd).toBe(0);
+    expect(result.nationalsSalesYtd).toBe(0);
+  });
+
   it("keeps compatibility with the older workbook layout", () => {
     const result = compute([
       ["Overall PO Status", "Channel", "Department", "Order#", "Total Order Amount", "PO#", "Order Date"],
@@ -37,13 +49,17 @@ describe("Nationals KPI schema drift", () => {
     expect(result.nationalsSalesYtd).toBe(103_000);
   });
 
+  // Dollars belong in "Amount in $"; "Amount" is unit quantity. This fixture
+  // previously left the dollar column empty on every row and put dollars in
+  // "Amount" (including "$347,918.62"), which only summed correctly while the
+  // engine misread the units column as revenue.
   it("excludes MBX, Iherb, and cancelled rows from the Nationals card", () => {
     const result = compute([
       ["Status", "Channel", "Dept", "PO#", "Amount", "Amount in $", "", "Order Date"],
-      ["Shipped", "TARGET", "MBX", "#1", "600K", "", "", "8/1/2026"],
-      ["Shipped", "IHERB", "Iherb", "", "$347,918.62", "", "", "8/14/2026"],
-      ["Cancelled", "ULTA-STY", "National", "#100", "60K", "", "", "8/4/2026"],
-      ["Shipped", "TJX", "National", "50k", "50k", "", "", "8/11/2026"],
+      ["Shipped", "TARGET", "MBX", "#1", "600K", "$1,200,000", "", "8/1/2026"],
+      ["Shipped", "IHERB", "Iherb", "", "180K", "$347,918.62", "", "8/14/2026"],
+      ["Cancelled", "ULTA-STY", "National", "#100", "60K", "$120,000", "", "8/4/2026"],
+      ["Shipped", "TJX", "National", "50k", "50K", "$50,000", "", "8/11/2026"],
     ]);
     expect(result.nationalsSalesMtd).toBe(50_000);
   });
