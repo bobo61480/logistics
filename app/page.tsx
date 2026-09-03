@@ -3541,8 +3541,10 @@ export default function Home() {
           <p>
             All rows, including hidden/completed entries. Shipping costs use freight Invoice first,
             then Rate when Invoice is blank—never shipment Invoice Amount. Nationals sales use
-            Order Date (column G) and Amount (column E), expand K values, and exclude cancelled
-            orders. WMS wholesale sales use Date (column A) and numeric INVOICE AMOUNT (column G);
+            Order Date and the Amount in $ column—falling back to Amount only where Amount in $ is
+            blank, since Amount carries unit quantities—expand K values, exclude cancelled orders,
+            and count the Nationals department only (MBX and iHerb are reported separately).
+            WMS wholesale sales use Date (column A) and numeric INVOICE AMOUNT (column G);
             text entries such as “FREE SAMPLE,” “FOC,” “Sample,” and operational notes are excluded.
             MTD is the current month through today; YTD begins January 1, 2026. Trucking totals
             sum freight Invoice first, then Rate when Invoice is blank, and exclude transfers. Lane totals exclude unclassified destinations; local / regional uses a destination city/ZIP heuristic for the Southern California operating area and is not a measured mileage radius.

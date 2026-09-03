@@ -15,11 +15,15 @@ function compute(nationalRows: string[][]) {
 }
 
 describe("Nationals KPI schema drift", () => {
+  // "Amount" (col E) is unit quantity and "Amount in $" (col F) is the dollar
+  // value, so a row carries both and they legitimately differ. This fixture
+  // previously paired "50k" units with "50" dollars, which is not a plausible
+  // pair and encoded the pre-"Amount in $" reading of the schema.
   it("finds Order Date by header after Amount in $ and a spacer were inserted", () => {
     const result = compute([
       ["Status", "Channel", "Dept", "PO#", "Amount", "Amount in $", "", "Order Date"],
-      ["Shipped", "TJX", "National", "50k", "50k", "50", "", "8/11/2026"],
-      ["Ready for Shipment", "ROSS", "National", "32k", "32k", "32", "", "8/14/2026"],
+      ["Shipped", "TJX", "National", "50k", "50k", "$50,000", "", "8/11/2026"],
+      ["Ready for Shipment", "ROSS", "National", "32k", "32k", "32K", "", "8/14/2026"],
     ]);
     expect(result.nationalsSalesMtd).toBe(82_000);
     expect(result.nationalsSalesYtd).toBe(82_000);

@@ -147,9 +147,17 @@ function nationalSalesRecords(
   const statusCol   = headerIndex(header, ["Status", "Overall PO Status"], 0);
   const channelCol  = headerIndex(header, ["Channel"], 1);
   const deptCol     = headerIndex(header, ["Dept", "Department"], 2);
-  // IMPORTANT: Use "Amount in $" (col 5) for dollar KPIs, NOT "Amount" (col 4)
-  // which holds unit quantities (e.g. "103K" = 103,000 units, not dollars).
-  const amountCol   = headerIndex(header, ["Amount in $", "Amount in USD", "Amount In $"], 5);
+  // "Amount in $" (col F) is the dollar column; "Amount" (col E) holds unit
+  // quantities on the current schema (e.g. "103K" units against "$613,881.32").
+  //
+  // But col F is absent on older layouts that ship only "Total Order Amount",
+  // and it is left blank on individual rows, so a fallback is required. Without
+  // one, a row whose col F is empty silently contributes $0. Resolving by
+  // header with an explicit -1 miss (rather than a positional default) matters
+  // too: a positional guess lands on whatever sits at that index — a spacer or
+  // PO# — and reports $0 for every row instead of failing to resolve.
+  const amountCol = headerIndex(header, ["Amount in $", "Amount in USD", "Amount In $"], -1);
+  const fallbackAmountCol = headerIndex(header, ["Amount", "Total Order Amount"], -1);
   const orderDateCol = headerIndex(header, ["Order Date"], 7);
 
   // NOTE: Dept column carries "National", "MBX", "Iherb" etc. — NOT the Channel
@@ -160,8 +168,10 @@ function nationalSalesRecords(
     const dateStr = row[orderDateCol] ?? "";
     const date    = dateCode(dateStr);
     if (!date || date < yearStart || date > todayCode) return [];
-    const rawAmount = row[amountCol] ?? "";
-    const value = amount(rawAmount, true);
+    const preferred = amountCol >= 0 ? amount(row[amountCol] ?? "", true) : null;
+    const value = preferred !== null && preferred > 0
+      ? preferred
+      : (fallbackAmountCol >= 0 ? amount(row[fallbackAmountCol] ?? "", true) : null);
     if (value === null || value <= 0) return [];
     const retailer = normalizeRetailer(row[channelCol] ?? "");
     const dept     = normalizeDept(row[deptCol] ?? "");
@@ -274,10 +284,14 @@ export function computeKpisFromRows(input: Input): KpiSnapshot {
   // ── National sales (using "Amount in $" column, includes retailer + dept) ──
   const nationalSales = nationalSalesRecords(input.nationalRows, yearStart, today.code);
 
-  // Aggregate totals (matches existing nationalsSalesMtd/Ytd semantics:
-  // all non-cancelled rows with a valid dollar amount and 2026 order date)
   const sum = (records: Array<{ date: number; value: number }>, start: number, end = today.code) =>
     records.filter((r) => r.date >= start && r.date <= end).reduce((t, r) => t + r.value, 0);
+
+  // The Nationals KPI card reports the Nationals department only. MBX and iHerb
+  // ride along in the same sheet and are reported separately, so folding them
+  // into this total overstates Nationals revenue. The per-retailer/per-dept
+  // breakdown below still sees every record.
+  const nationalsOnly = nationalSales.filter((record) => record.dept === "Nationals");
 
   // ── WMS sales ─────────────────────────────────────────────────────────────
   const wmsSales = input.wmsRows.slice(1).flatMap((row) => {
@@ -354,8 +368,8 @@ export function computeKpisFromRows(input: Input): KpiSnapshot {
   const deptSalesYtd     = accumulate(nationalSales, yearStart, today.code, (r) => r.dept);
 
   return {
-    nationalsSalesMtd: sum(nationalSales, monthStart, monthEnd),
-    nationalsSalesYtd: sum(nationalSales, yearStart),
+    nationalsSalesMtd: sum(nationalsOnly, monthStart, monthEnd),
+    nationalsSalesYtd: sum(nationalsOnly, yearStart),
     wmsSalesMtd:       sum(wmsSales, monthStart, monthEnd),
     wmsSalesYtd:       sum(wmsSales, yearStart),
     shippingMtd:       freightMtd.reduce((t, r) => t + r.cost, 0),
