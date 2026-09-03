@@ -1,36 +1,65 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const DIR = "google-apps-script";
 const files = readdirSync(DIR).filter((name) => name.endsWith(".gs")).sort();
 const sources = new Map(files.map((name) => [name, readFileSync(join(DIR, name), "utf8")]));
 
+type Declaration = { file: string; kind: string };
+
 /**
- * Every GLOBAL function declaration, mapped to the files declaring it. Anchored
- * at column 0 on purpose: an indented `function` is nested inside another and
- * is locally scoped, so it never participates in the global namespace.
+ * Every GLOBAL declaration, mapped to where it is declared.
+ *
+ * Parsed rather than regex-matched, and read from `SourceFile.statements` so
+ * only true top-level declarations count — scope is decided by syntax, not by
+ * indentation, so a nested helper is excluded because it is not a top-level
+ * statement, not because of how it is formatted.
+ *
+ * Covers functions, classes and var/let/const alike: a `const` in one file and
+ * a `var` of the same name in another is the collision that actually breaks a
+ * deployment, and looking only at functions would miss it entirely.
  */
 const declarations = (() => {
-  const map = new Map<string, string[]>();
-  for (const [name, source] of sources) {
-    for (const match of source.matchAll(/^function\s+([A-Za-z0-9_$]+)\s*\(/gm)) {
-      map.set(match[1], [...(map.get(match[1]) ?? []), name]);
+  const map = new Map<string, Declaration[]>();
+  const add = (name: string, file: string, kind: string) =>
+    map.set(name, [...(map.get(name) ?? []), { file, kind }]);
+
+  for (const [file, source] of sources) {
+    const parsed = ts.createSourceFile(file, source, ts.ScriptTarget.ES2019, true, ts.ScriptKind.JS);
+    for (const statement of parsed.statements) {
+      if (ts.isFunctionDeclaration(statement) && statement.name) {
+        add(statement.name.text, file, "function");
+      } else if (ts.isClassDeclaration(statement) && statement.name) {
+        add(statement.name.text, file, "class");
+      } else if (ts.isVariableStatement(statement)) {
+        const { flags } = statement.declarationList;
+        const kind = flags & ts.NodeFlags.Const ? "const" : flags & ts.NodeFlags.Let ? "let" : "var";
+        for (const declaration of statement.declarationList.declarations) {
+          if (ts.isIdentifier(declaration.name)) add(declaration.name.text, file, kind);
+        }
+      }
     }
   }
   return map;
 })();
 
+const isFunction = (name: string) =>
+  (declarations.get(name) ?? []).some((entry) => entry.kind === "function");
+
 const triggers = sources.get("Triggers.gs") ?? "";
 
 describe("Apps Script global surface", () => {
-  // Apps Script loads every .gs file into ONE global scope, so two files
-  // declaring the same name silently resolve to whichever loads last. That is
-  // invisible in review and produces a wrong-implementation bug at runtime.
-  it("declares every function exactly once across the whole project", () => {
+  // Apps Script loads every .gs file into ONE global scope. Two files declaring
+  // the same name is either a silent wrong-implementation bug (two functions —
+  // whichever loads last wins) or a hard load failure that takes down the whole
+  // project ("Identifier X has already been declared", when either side is a
+  // const or let). Neither is visible in a per-file review.
+  it("declares every global exactly once across the whole project", () => {
     const duplicated = [...declarations.entries()]
       .filter(([, where]) => where.length > 1)
-      .map(([name, where]) => `${name} (${where.join(", ")})`);
+      .map(([name, where]) => `${name}: ${where.map((w) => `${w.file} (${w.kind})`).join(" vs ")}`);
     expect(duplicated).toEqual([]);
   });
 
@@ -41,7 +70,7 @@ describe("Apps Script global surface", () => {
     const planned = [...triggers.matchAll(/\{\s*handler:\s*"([A-Za-z0-9_$]+)"/g)].map((m) => m[1]);
     expect(planned.length).toBeGreaterThan(0);
     for (const handler of planned) {
-      expect(declarations.has(handler), `TRIGGER_PLAN handler ${handler} has no definition`).toBe(true);
+      expect(isFunction(handler), `TRIGGER_PLAN handler ${handler} has no function definition`).toBe(true);
     }
   });
 
@@ -50,7 +79,7 @@ describe("Apps Script global surface", () => {
   // from hard-erroring in the meantime, so they outlive their schedule.
   it("keeps the legacy handler aliases that pending trigger cleanup still needs", () => {
     for (const alias of ["scanAndImportWmsTruckingOrders", "dedupeWhTruckingLocationSafeV5", "requestSiteRedeploy"]) {
-      expect(declarations.has(alias), `${alias} is still referenced by TRIGGER_CLEANUP_HANDLERS`).toBe(true);
+      expect(isFunction(alias), `${alias} is still referenced by TRIGGER_CLEANUP_HANDLERS`).toBe(true);
     }
   });
 

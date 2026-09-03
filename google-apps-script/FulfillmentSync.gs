@@ -9,7 +9,11 @@
  */
 
 var LOGISTICS_SPREADSHEET_ID = "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc";
-var WMS_SPREADSHEET_ID       = "14lH9SQzTLj8MR7UbxMfkoTDDlzhPoE8CqHV3IpK450I";
+// WMS_SPREADSHEET_ID is declared once in Code.gs as a const and read from the
+// shared global scope here, as InventorySync.gs and WmsTruckingSyncV2.gs do.
+// Re-declaring it with `var` threw "Identifier 'WMS_SPREADSHEET_ID' has already
+// been declared" at load time, which fails the WHOLE project — every trigger,
+// not just this file.
 var FULFILLMENT_SHEET_NAME   = "Fulfillment";
 var TRUCKING_SHEET_NAME      = "WH Trucking Request";
 var PARCELS_SHEET_NAME       = "Small Parcels";
