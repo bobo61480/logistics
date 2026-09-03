@@ -141,7 +141,7 @@ function normalizeDept(dept: string): string {
  * other normalizeDept output — "Nationals" and the early-schema retailer labels
  * alike — counts toward the Nationals headline total.
  */
-const NON_NATIONALS_DEPTS = new Set(["MBX", "iHerb", "Wholesale B2B", "Wholesale B2C", "Moida"]);
+export const NON_NATIONALS_DEPTS = new Set(["MBX", "iHerb", "Wholesale B2B", "Wholesale B2C", "Moida"]);
 
 type NationalRecord = { date: number; value: number; retailer: string; dept: string };
 

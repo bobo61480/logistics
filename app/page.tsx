@@ -3544,8 +3544,10 @@ export default function Home() {
             Order Date and the Amount in $ column—Amount carries unit quantities and is never
             read as revenue, so a blank dollar cell counts as zero rather than being converted;
             older sheets without an Amount in $ column fall back to Total Order Amount—expand K
-            values, exclude cancelled orders, and count the Nationals department only (MBX and
-            iHerb are reported separately).
+            values, and exclude cancelled orders. The card counts every department except the
+            separately-reported business lines (MBX, iHerb, Wholesale B2B, Wholesale B2C, and
+            Moida), so early rows whose Department holds a retailer name such as TJX, Ross, Ulta,
+            or Burlington are still counted as Nationals orders.
             WMS wholesale sales use Date (column A) and numeric INVOICE AMOUNT (column G);
             text entries such as “FREE SAMPLE,” “FOC,” “Sample,” and operational notes are excluded.
             MTD is the current month through today; YTD begins January 1, 2026. Trucking totals

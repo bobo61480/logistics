@@ -1,5 +1,6 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { computeKpisFromRows } from "../lib/kpis/compute";
+import { computeKpisFromRows, NON_NATIONALS_DEPTS } from "../lib/kpis/compute";
 
 const today = { year: 2026, month: 8, day: 29, code: 20260829 };
 const emptyFreight = [[""]];
@@ -85,5 +86,18 @@ describe("Nationals KPI schema drift", () => {
       ["Shipped", "TJX", "National", "50k", "50K", "$50,000", "", "8/11/2026"],
     ]);
     expect(result.nationalsSalesMtd).toBe(50_000);
+  });
+});
+
+// The operator-facing methodology note is how someone reconciles the headline
+// KPI by hand. It has drifted from the filter twice, so tie the two together:
+// every department the card excludes must be named in the note.
+describe("Nationals methodology note", () => {
+  it("names every department the headline total excludes", () => {
+    const page = readFileSync("app/page.tsx", "utf8");
+    const note = page.slice(page.indexOf("Methodology notes"));
+    for (const dept of NON_NATIONALS_DEPTS) {
+      expect(note, `methodology note does not mention excluded dept ${dept}`).toContain(dept);
+    }
   });
 });
