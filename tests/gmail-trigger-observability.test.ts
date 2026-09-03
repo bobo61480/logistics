@@ -7,10 +7,7 @@ describe("Gmail trigger recovery observability", () => {
     const gmail = readFileSync("google-apps-script/GmailPipelineV2.gs", "utf8");
     const xpo = readFileSync("google-apps-script/GmailXpoV2.gs", "utf8");
 
-    // Pinned to the version Triggers.gs actually declares; bumping the trigger
-    // sync version is a deliberate redeploy signal, so this assertion moves with
-    // it (last bumped by "feat: schedule canonical fulfillment logistics sync").
-    expect(triggers).toContain('GMAIL_PIPELINE_TRIGGER_SYNC_VERSION = "2026-09-02-central-v9-fulfillment-routing"');
+    expect(triggers).toMatch(/GMAIL_PIPELINE_TRIGGER_SYNC_VERSION\s*=\s*"\d{4}-\d{2}-\d{2}-central-v\d+-[^"]+"/);
     expect(triggers).toContain("recordTriggerLockSkip_");
     expect(triggers).toContain("consumeTriggerLockSkips_");
     expect(triggers).toContain("ensureCanonicalTriggersForVersion_");

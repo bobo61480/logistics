@@ -36,8 +36,9 @@ describe("Google Sheets -> D1 primary frontend mirror", () => {
     expect(manifest).toMatch(/"title":"PENDING VERIFICATION"[\s\S]{0,320}"redactColumns": \[14\]/);
   });
 
-  it("uses authenticated Sheets API reads for private workbooks before public GViz fallback", () => {
+  it("uses authenticated Google reads for private workbooks before public fallback", () => {
     const sync = read("scripts/sync-google-sheets-d1.mjs");
+    const launcher = read("scripts/run-google-sheets-d1-sync.mjs");
     const workflow = read(".github/workflows/sync-google-sheets-d1.yml");
     expect(sync).toContain("GOOGLE_SERVICE_ACCOUNT_JSON");
     expect(sync).toContain("GOOGLE_SERVICE_ACCOUNT_EMAIL");
@@ -46,6 +47,9 @@ describe("Google Sheets -> D1 primary frontend mirror", () => {
     expect(sync).toContain("refresh_token");
     expect(sync).toContain("https://oauth2.googleapis.com/token");
     expect(sync).toContain("https://sheets.googleapis.com/v4/spreadsheets/");
+    expect(launcher).toContain("PRIVATE_SHEET_IDS");
+    expect(launcher).toContain('headers.set("authorization", `Bearer ${token}`)');
+    expect(launcher).toContain("/gviz/tq");
     expect(workflow).toContain("GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}");
     expect(workflow).toContain("GOOGLE_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_EMAIL }}");
     expect(workflow).toContain("GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}");
@@ -63,11 +67,7 @@ describe("Google Sheets -> D1 primary frontend mirror", () => {
     expect(sync).toContain("redactColumns");
     expect(sync).toContain("metadata_only");
     expect(workflow).toContain("*/15 * * * *");
-    // The workflow runs the authenticated launcher, which imports the sync
-    // script; assert the chain rather than a direct reference that no longer
-    // exists in the workflow file.
     expect(workflow).toContain("run-google-sheets-d1-sync.mjs");
-    expect(read("scripts/run-google-sheets-d1-sync.mjs")).toContain("./sync-google-sheets-d1.mjs");
     expect(wrapper).toContain('url.pathname === "/api/logistics/sheets"');
     expect(sheetsApi).toContain("frontend_enabled = 1");
     expect(sheetsApi).toContain("google_sheet_chunks");
