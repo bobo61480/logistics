@@ -48,7 +48,7 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_EMAIL }}
           GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}
           CLASP_ACCESS_TOKEN: ${{ secrets.CLASP_ACCESS_TOKEN }}
-        run: node scripts/sync-google-sheets-d1.mjs
+        run: node scripts/run-google-sheets-d1-sync.mjs
 
       - name: Verify D1 mirror health
         env:
@@ -68,5 +68,5 @@ jobs:
           const rows=Array.isArray(parsed)?parsed.flatMap(x=>x.results||[]):[];
           const h=rows[0]||{};
           console.log('D1 Google Sheets mirror:', h);
-          if(Number(h.documents)!==3 || Number(h.tabs)!==73 || Number(h.missing_frontend_tabs)!==0) process.exit(1);
+          if(Number(h.documents)!==3 || Number(h.tabs)!==73 || Number(h.missing_frontend_tabs)!==0 || Number(h.error_tabs)!==0) process.exit(1);
           NODE
