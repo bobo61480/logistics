@@ -132,7 +132,7 @@ exit $ERRORS
 
 ### Critical — .gitignore gaps
 
-- [ ] **GIT-ITEM-2.1 [Update .gitignore]**:
+- [x] **GIT-ITEM-2.1 [Update .gitignore]**: Done — .gitignore already contains bob-task-*.json, git-error-*.txt, and OS artifact entries (verified 2026-09-03).
   - **Purpose**: Exclude ephemeral task files, error dumps, and OS artifacts that are currently tracked.
   - **Changes to `.gitignore`**:
 
@@ -154,7 +154,7 @@ exit $ERRORS
 +desktop.ini
 ```
 
-- [ ] **GIT-ITEM-2.2 [Remove tracked ephemeral files]**:
+- [x] **GIT-ITEM-2.2 [Remove tracked ephemeral files]**: Done — no bob-task-*.json or git-error-*.txt tracked on main (verified via git ls-tree, 2026-09-03).
   - **Purpose**: Untrack the `bob-task-*.json` and `git-error-*.txt` files already committed.
   - **Commands**:
 
@@ -180,7 +180,7 @@ git commit -m "chore: untrack ephemeral task and error files"
 
 ### High — PR template
 
-- [ ] **GIT-ITEM-3.2 [Add PR template]**:
+- [x] **GIT-ITEM-3.2 [Add PR template]**: Added .github/pull_request_template.md (2026-09-03).
   - **Purpose**: Standardize PR descriptions so reviewers can quickly understand changes.
   - **File**: `.github/pull_request_template.md`
 
