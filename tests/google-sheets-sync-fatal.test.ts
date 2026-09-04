@@ -61,6 +61,8 @@ describe("Google Sheets -> D1 sync fatal-failure handling", () => {
     // GViz reads. A disabled Sheets API must not prevent that viable path.
     expect(source).not.toContain("if (apiError instanceof FatalSheetsError) throw apiError;");
     expect(source).toContain("authenticated GViz fallback failed");
+    expect(source).toContain("authenticated export fallback failed");
+    expect(source).toContain("function exportUrl(");
   });
 
   it("aborts the run and records it rather than reporting every tab", () => {

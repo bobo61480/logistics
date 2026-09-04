@@ -113,4 +113,11 @@ describe("Nationals methodology note", () => {
       expect(note, `methodology note does not mention excluded dept ${dept}`).toContain(dept);
     }
   });
+
+  it("describes every compact Amount value as revenue without a formatting qualifier", () => {
+    const page = readFileSync("app/page.tsx", "utf8");
+    const note = page.slice(page.indexOf("Methodology notes"));
+    expect(note).toContain("Compact sheets use their sole Amount column for every populated sales value");
+    expect(note).not.toContain("Compact sheets where Amount contains explicit currency values");
+  });
 });
