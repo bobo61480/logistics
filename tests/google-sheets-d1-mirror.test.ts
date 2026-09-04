@@ -68,6 +68,7 @@ describe("Google Sheets -> D1 primary frontend mirror", () => {
     expect(sync).toContain("metadata_only");
     expect(workflow).toContain("*/15 * * * *");
     expect(workflow).toContain("run-google-sheets-d1-sync.mjs");
+    expect(workflow).toContain("Number(h.mirrored_tabs)!==70");
     expect(wrapper).toContain('url.pathname === "/api/logistics/sheets"');
     expect(sheetsApi).toContain("frontend_enabled = 1");
     expect(sheetsApi).toContain("google_sheet_chunks");
