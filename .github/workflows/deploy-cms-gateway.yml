@@ -22,6 +22,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate required secrets
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -n "${CLOUDFLARE_API_TOKEN:-}" ] || missing+=("CLOUDFLARE_API_TOKEN")
+          [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || missing+=("CLOUDFLARE_ACCOUNT_ID")
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "Missing required GitHub Actions secrets:" >&2
+            printf '  - %s\n' "${missing[@]}" >&2
+            echo "Create them under Settings > Secrets and variables > Actions." >&2
+            exit 1
+          fi
+          echo "Required secrets are configured; CMS_* secrets are optional and handled during configuration."
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22.13.0
