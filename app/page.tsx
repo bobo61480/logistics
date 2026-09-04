@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 37227)
-Total output lines: 3719
-
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -1489,7 +1486,782 @@ async function fetchOperationalSnapshot() {
         version: snapshot.version,
         detail: snapshot.staleReason,
         generatedAt: snapshot.generatedAt ?? null,
-        degradedSources: (snapshot.sourceHealth ?? []).filter((source) => !so…7227 tokens truncated…on salesOutboundItems(table: any): ScheduleItem[] {
+        degradedSources: (snapshot.sourceHealth ?? []).filter((source) => !source.ok).length,
+      },
+    };
+  } catch (workerError) {
+    // D1 is the only frontend authority. Do not silently switch the browser to
+    // direct Google Sheets reads during a Worker/D1 incident, because that can
+    // show operators a different state from the database used by writes and APIs.
+    console.error("D1 operational snapshot unavailable.", workerError);
+    throw workerError;
+  }
+}
+
+type ConnectionState = Awaited<ReturnType<typeof fetchOperationalSnapshot>>["connection"];
+
+function normalizeStatus(value: string) {
+  const normalized = clean(value).toLowerCase();
+  if (!normalized) return "Scheduled";
+  if (normalized === "wip") return "Work in Progress";
+  if (normalized === "ready" || normalized === "routed/booked" || normalized === "picked up") {
+    return "Scheduled";
+  }
+  return normalized.replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+type ImportSourceRecord = {
+  sourceRow: number;
+  shipmentNo: string;
+  invoice: string;
+  mbl: string;
+  hbl: string;
+  container: string;
+  vessel: string;
+  status: string;
+  etd: string;
+  eta: string;
+  deliveryExpected: string;
+};
+
+function importSectionMarkerIndex(rows: string[][], marker: string) {
+  const wanted = clean(marker).toUpperCase();
+  return rows.findIndex((row) => clean(cell(row, 0)).toUpperCase() === wanted);
+}
+
+function importsBoundaryRow(rows: string[][]) {
+  const index = importSectionMarkerIndex(rows, "SCHEDULING");
+  return index === -1 ? rows.length : index;
+}
+
+function importSourceRecords(rows: string[][]): ImportSourceRecord[] {
+  rows = rows.slice(0, importsBoundaryRow(rows));
+  return rows.flatMap((row, index) => {
+    const sourceRow = index + 1;
+    if (sourceRow <= 2) return [];
+    const shipmentNo = cell(row, 0);
+    const invoice = cell(row, 2);
+    const mbl = cell(row, 3);
+    const hbl = cell(row, 4);
+    if (!shipmentNo && !invoice && !mbl && !hbl) return [];
+    return [
+      {
+        sourceRow,
+        shipmentNo,
+        invoice,
+        mbl,
+        hbl,
+        container: cell(row, 7),
+        vessel: cell(row, 12),
+        status: cell(row, 27),
+        etd: cell(row, 13),
+        eta: cell(row, 14),
+        deliveryExpected: cell(row, 16),
+      },
+    ];
+  });
+}
+
+function cmsImportsByInvoice(cmsImports: CmsImportRow[]): Map<string, CmsImportRow> {
+  const map = new Map<string, CmsImportRow>();
+  for (const row of cmsImports) {
+    const key = clean(row.invoiceNo).toUpperCase();
+    if (key && !map.has(key)) map.set(key, row);
+  }
+  return map;
+}
+
+// Compact "received vs invoiced" quantity label for the CMS enrichment.
+// Received comes from TB_PNFM (masked by some access grades → absent);
+// invoiced from TB_INVC (present on any match). When the grade masks TB_PNFM,
+// received drops out but invoiced still shows, so the documented TB_INVC-only
+// degradation surfaces a quantity instead of hiding the enrichment entirely.
+export function cmsQtyLabel(
+  received: number | undefined,
+  invoiced: number | undefined,
+): string | null {
+  if (received !== undefined) {
+    return `Received ${received}${invoiced !== undefined ? `/${invoiced}` : ""}`;
+  }
+  if (invoiced !== undefined) return `Invoiced ${invoiced}`;
+  return null;
+}
+
+// Resolve each DISTINCT invoice an IMPORTS row carries to its CMS record (or a
+// miss). Deduping the normalized keys — not the resolved rows — means a
+// repeated cell value ("IN001, IN001" or mixed case) resolves the same CMS
+// record only once (no double-counting in aggregateCmsImports), while a
+// distinct invoice with no CMS row still contributes its own miss slot so a
+// partial shipment total is still flagged.
+export function resolveImportCmsLookups(
+  invoiceCell: string,
+  cmsByInvoice: Map<string, CmsImportRow>,
+): (CmsImportRow | undefined)[] {
+  const keys = Array.from(
+    new Set(splitValues(invoiceCell).map((value) => clean(value).toUpperCase())),
+  );
+  return keys.map((key) => cmsByInvoice.get(key));
+}
+
+type CmsImportAggregate = {
+  actualArrival: string;
+  receivedQty: number | null;
+  invoicedQty: number | null;
+  // true when the shipment-level view covers only part of the row's invoices:
+  // an invoice with no CMS row, a quantity known for only some invoices, or an
+  // arrival date present for some invoices but not others. Signals that the
+  // displayed arrival/quantity must not be read as the complete shipment figure.
+  partial: boolean;
+};
+
+// Combine every CMS record matching a (possibly multi-invoice) IMPORTS row into
+// one shipment-level view: the latest arrival date across the matched parts,
+// and received / invoiced quantities summed over them. A quantity stays null
+// (rendered as absent, never a false 0) only when every match had it masked;
+// when some matches supply a value (a quantity, or an arrival date) and others
+// don't, the aggregate is flagged partial so it is not read as complete.
+export function aggregateCmsImports(lookups: (CmsImportRow | undefined)[]): CmsImportAggregate | null {
+  const matches = lookups.filter((row): row is CmsImportRow => Boolean(row));
+  if (matches.length === 0) return null;
+  let actualArrival = "";
+  let receivedQty: number | null = null;
+  let invoicedQty: number | null = null;
+  let receivedUnknown = false;
+  let invoicedUnknown = false;
+  let arrivalUnknown = false;
+  for (const match of matches) {
+    if (match.actualArrival) {
+      if (match.actualArrival > actualArrival) actualArrival = match.actualArrival;
+    } else {
+      arrivalUnknown = true;
+    }
+    if (match.receivedQty !== null) receivedQty = (receivedQty ?? 0) + match.receivedQty;
+    else receivedUnknown = true;
+    if (match.invoicedQty !== null) invoicedQty = (invoicedQty ?? 0) + match.invoicedQty;
+    else invoicedUnknown = true;
+  }
+  // Partial when an invoice the row lists has no CMS row at all (e.g. it fell
+  // outside the query window, so its slot in `lookups` is undefined), when a
+  // matched invoice supplied only some of its quantities, or when an arrival
+  // date is known for some matched invoices but not others — in each case the
+  // displayed figure covers only part of the shipment.
+  const someInvoiceUnmatched = matches.length < lookups.length;
+  const partial = someInvoiceUnmatched
+    || (receivedQty !== null && receivedUnknown)
+    || (invoicedQty !== null && invoicedUnknown)
+    || (actualArrival !== "" && arrivalUnknown);
+  return { actualArrival, receivedQty, invoicedQty, partial };
+}
+
+function pendingImportItems(importsRows: string[][], cmsImports: CmsImportRow[] = []): ScheduleItem[] {
+  const today = startOfToday();
+  const cmsByInvoice = cmsImportsByInvoice(cmsImports);
+
+  return importSourceRecords(importsRows).flatMap((record) => {
+    const status = normalizeStatus(record.status);
+    const hasShipmentIdentity = Boolean(record.shipmentNo);
+    const shipmentLabel = clean(record.shipmentNo).toUpperCase();
+    const planningRow = /^(?:AS OF\b|SCHEDULING\b|SCHEDULED\b|NEED SCHEDULING\b|MONTH OF\b|URGENT\b|COMPLETED\b|ESTIMATED\b)/.test(shipmentLabel);
+    // Newly scheduled imports remain visible before invoice/MBL/container documents arrive,
+    // while planning-grid labels are never promoted into shipment rows.
+    if (!hasShipmentIdentity || planningRow || parcelCarrier(record.shipmentNo)) return [];
+
+    // Import Schedule is authoritative from IMPORTS column O (ETA) only.
+    const dated = firstDatedValue(record.eta);
+    if (!dated) return [];
+    const date = dated.date;
+    const overdue = date.getTime() < today.getTime();
+    const eta = `${dated.text}${overdue ? " · OVERDUE" : ""}`;
+    const mode = resolvedInboundMode(
+      "",
+      record.shipmentNo,
+      record.mbl,
+      record.hbl,
+      record.container,
+      record.vessel,
+    );
+    const trackingNumber = record.container;
+    const invoice = correctedInboundInvoice(record.shipmentNo, record.invoice);
+    const folderUrl = INBOUND_DOCUMENT_LINKS[record.shipmentNo] ?? importsCellUrl(record.sourceRow, "B");
+
+    // Match live CMS data on every DISTINCT invoice the row carries (a row may
+    // list several) and aggregate them into one shipment-level view. No match →
+    // no extra fields. Passing the raw lookups (misses included) lets
+    // aggregateCmsImports flag a partial total when the row lists an invoice the
+    // CMS query didn't return; deduping happens inside resolveImportCmsLookups.
+    const cms = aggregateCmsImports(resolveImportCmsLookups(invoice, cmsByInvoice));
+
+    return [{
+      id: `pending-import-${record.sourceRow}`,
+      direction: "inbound",
+      date,
+      dateText: eta,
+      title: record.shipmentNo,
+      reference: trackingNumber || invoice || record.mbl || record.hbl,
+      secondary: [mode, record.vessel].filter(Boolean).join(" · "),
+      status,
+      sourceSheet: "IMPORTS",
+      sourceRow: record.sourceRow,
+      sourceUrl: SHEET_URL,
+      editable: true,
+      shipmentNo: record.shipmentNo,
+      shipmentUrl: folderUrl,
+      invoice,
+      invoiceUrl: invoiceFileUrl(splitValues(invoice)[0] ?? ""),
+      container: record.container,
+      containerUrl: officialTrackingUrl(
+        trackingNumber,
+        [record.mbl, record.hbl, record.vessel, record.shipmentNo].filter(Boolean).join(" "),
+        importsCellUrl(record.sourceRow, "H"),
+      ),
+      mbl: record.mbl,
+      hbl: record.hbl,
+      mode,
+      vessel: record.vessel,
+      pod: /^OSL/i.test(record.shipmentNo) ? "LGB" : "LAX",
+      eta,
+      deliveryExpected: record.deliveryExpected,
+      cmsActualArrival: cms?.actualArrival || undefined,
+      cmsReceivedQty: cms && cms.receivedQty !== null ? cms.receivedQty : undefined,
+      cmsInvoicedQty: cms && cms.invoicedQty !== null ? cms.invoicedQty : undefined,
+      cmsPartial: cms && cms.partial ? true : undefined,
+      isSmallParcel: false,
+      // No dedicated carrier column exists in IMPORTS for Air/Ocean freight —
+      // vessel is the closest available proxy (ocean vessel names are usually
+      // carrier-branded, e.g. "MAERSK EDMONTON") and is already surfaced in
+      // `secondary` above, so reuse it rather than leaving Top Carriers blank.
+      carrier: record.vessel,
+      shippingMethod: mode,
+      sourceType: mode,
+    }];
+  });
+}
+
+function inboundParcelItems(rows: string[][]): ScheduleItem[] {
+  let currentCarrier = "";
+  const today = startOfToday();
+
+  return rows.flatMap((row, index) => {
+    const firstColumn = cell(row, 0);
+    const sectionCarrier = parcelCarrier(firstColumn);
+    if (sectionCarrier) {
+      currentCarrier = sectionCarrier;
+    } else if (firstColumn) {
+      currentCarrier = "";
+    }
+    const trackingNumber = trackingCandidate(cell(row, 1), cell(row, 10));
+    const trackingCarrier = carrierFromTrackingNumber(trackingNumber);
+    const resolvedCarrier = trackingCarrier || currentCarrier;
+    if (!resolvedCarrier) return [];
+
+    const invoice = cell(row, 2);
+    const department = cell(row, 3);
+    const etaSource = lastDateToken(cell(row, 4));
+    
+    const isSectionHeader =
+      /TRACKING\s*#?/i.test(cell(row, 1)) ||
+      (!trackingNumber && !invoice && !department && !etaSource);
+    if (isSectionHeader) return [];
+
+    const sourceRow = index + 1;
+    const status = normalizeStatus(cell(row, 27)); // Column AB holds the small-parcel status ("Delivered", "FDA Review / Hold", etc.); column AD is "BRAND", not status.
+    const datedValue = firstDatedValue(etaSource);
+    const sourceDate = datedValue?.date ?? today;
+    const unfinished = !finished.has(status.toLowerCase());
+    const isStale = sourceDate.getTime() < IMPORT_STALE_CUTOFF;
+    // Stale (pre-cutoff) rows are left at their real source date instead of being
+    // bumped to "today" so they fall out of the 14-day window and stay hidden,
+    // the same way old imports are treated as finished. Recent overdue rows still
+    // get pinned to today so they keep nagging until resolved.
+    const overdue = unfinished && !isStale && sourceDate.getTime() < today.getTime();
+    const date = overdue ? today : sourceDate;
+    const etaText = datedValue?.text
+      ? `${datedValue.text}${overdue ? " · OVERDUE" : ""}`
+      : "ETA pending";
+    const shipmentNo = trackingNumber || `${resolvedCarrier}-${sourceRow}`;
+
+    return [
+      {
+        id: `inbound-parcel-${sourceRow}`,
+        direction: "inbound",
+        date,
+        dateText: etaText,
+        title: trackingNumber || "Tracking pending",
+        reference: trackingNumber || invoice || `${resolvedCarrier} parcel`,
+        secondary: department,
+        status,
+        sourceSheet: "IMPORTS",
+        sourceRow,
+        sourceUrl: SHEET_URL,
+        editable: true,
+        shipmentNo,
+        shipmentUrl: importsCellUrl(sourceRow, "B"),
+        invoice,
+        invoiceUrl: invoice ? invoiceFileUrl(splitValues(invoice)[0] ?? "") : "",
+        containerUrl: officialTrackingUrl(
+          trackingNumber,
+          resolvedCarrier,
+          importsCellUrl(sourceRow, "B"),
+        ),
+        eta: etaText,
+        carrier: resolvedCarrier,
+        trackingNumber,
+        pro: trackingNumber,
+        isSmallParcel: true,
+        shippingMethod: resolvedCarrier,
+        sourceType: outboundSourceType(resolvedCarrier, true),
+      },
+    ];
+  });
+}
+
+function normalizedIdentifier(value: string) {
+  return clean(value).replace(/\s+/g, "").toUpperCase();
+}
+
+function resolveImportSource(
+  records: ImportSourceRecord[],
+  shipmentNo: string,
+  invoice: string,
+  mbl: string,
+  hbl: string,
+) {
+  const shipmentKey = normalizedIdentifier(shipmentNo);
+  const invoiceKeys = splitValues(invoice).map(normalizedIdentifier).filter(Boolean);
+  const mblKey = normalizedIdentifier(mbl);
+  const hblKey = normalizedIdentifier(hbl);
+
+  const uniqueMatch = (matches: ImportSourceRecord[]) =>
+    matches.length === 1 ? matches[0] : null;
+  if (shipmentKey) {
+    const shipmentMatch = uniqueMatch(
+      records.filter(
+        (record) => normalizedIdentifier(record.shipmentNo) === shipmentKey,
+      ),
+    );
+    if (shipmentMatch) return shipmentMatch;
+  }
+
+  return uniqueMatch(
+    records.filter((record) => {
+      const recordInvoices = splitValues(record.invoice).map(normalizedIdentifier);
+      const invoiceMatch =
+        invoiceKeys.length > 0 &&
+        invoiceKeys.some((value) => recordInvoices.includes(value));
+      const mblMatch = mblKey && normalizedIdentifier(record.mbl) === mblKey;
+      const hblMatch = hblKey && normalizedIdentifier(record.hbl) === hblKey;
+      return invoiceMatch && (mblMatch || hblMatch);
+    }),
+  );
+}
+
+function resolvedInboundMode(
+  reportedMode: string,
+  shipmentNo: string,
+  mbl: string,
+  hbl: string,
+  container: string,
+  vessel: string,
+) {
+  const shipmentCode = clean(shipmentNo).toUpperCase();
+  const transportIds = [mbl, hbl, container].map(clean).join(" ").toUpperCase();
+  const normalizedVessel = clean(vessel).toUpperCase();
+  const isAirPrefix = /^(?:JSL|KYL)/.test(shipmentCode);
+  const isAirWaybill = /\b\d{3}[- ]?\d{8}\b|\bMAWB\b/.test(transportIds);
+  const isFlightNumber = /^(?:[A-Z]{2}|[A-Z]\d|\d[A-Z])[- ]?\d{2,4}[A-Z]?$/.test(
+    normalizedVessel,
+  );
+  const isOceanScac = /\b[A-Z]{4}[- ]?\d{6,12}\b|\bSCAC\b/.test(transportIds);
+  if (
+    isAirPrefix ||
+    isAirWaybill ||
+    isFlightNumber ||
+    /\bAIR\b/i.test(reportedMode)
+  ) {
+    return "Air";
+  }
+  if (isOceanScac || /\bOCEAN\b/i.test(reportedMode)) return "Ocean";
+  return clean(reportedMode) || "Ocean";
+}
+
+function inboundItems(table: any, importsRows: string[][]): ScheduleItem[] {
+  const imports = importSourceRecords(importsRows);
+  return (table.rows ?? []).flatMap((row: any, index: number) => {
+    const eta = cell(row, 12);
+    const expectedDelivery = cell(row, 14);
+    const shipmentNo = cell(row, 1);
+    const invoiceValue = cell(row, 3);
+    const mbl = cell(row, 4);
+    const hbl = cell(row, 5);
+    const importSource = resolveImportSource(
+      imports,
+      shipmentNo,
+      invoiceValue,
+      mbl,
+      hbl,
+    );
+    const importsSourceRow = importSource?.sourceRow;
+    const container = cell(row, 6) || importSource?.container || "";
+    const reportedMode = cell(row, 0);
+    const vessel = cell(row, 10) || importSource?.vessel || "";
+    const mode = resolvedInboundMode(reportedMode, shipmentNo, mbl, hbl, container, vessel);
+    const smallParcelCarrier = parcelCarrier([mode, shipmentNo].join(" "));
+    const isSmallParcel = Boolean(smallParcelCarrier);
+    if (isSmallParcel) return [];
+    const datedValue = firstDatedValue(expectedDelivery, eta);
+    if (
+      !datedValue ||
+      !importsSourceRow ||
+      (!shipmentNo && !container)
+    ) {
+      return [];
+    }
+    const { date, text: dateText } = datedValue;
+    const sourceRow = importsSourceRow;
+    const status = normalizeStatus(importSource?.status || cell(row, 16));
+    const folderUrl = INBOUND_DOCUMENT_LINKS[shipmentNo] ?? importsCellUrl(sourceRow, "B");
+    const carrierKey = [cell(row, 0), cell(row, 4), cell(row, 5), cell(row, 10), shipmentNo]
+      .filter(Boolean)
+      .join(" ");
+    const invoice = correctedInboundInvoice(shipmentNo, invoiceValue);
+    const trackingNumber = container;
+    return [
+      {
+        id: `inbound-${sourceRow}-${index}`,
+        direction: "inbound",
+        date,
+        dateText,
+        title: shipmentNo || container,
+        reference: trackingNumber || invoice || "Inbound shipment",
+        secondary: [cell(row, 0), cell(row, 10)].filter(Boolean).join(" · "),
+        status,
+        sourceSheet: "IMPORTS",
+        sourceRow,
+        sourceUrl: SHEET_URL,
+        editable: true,
+        shipmentNo,
+        shipmentUrl: folderUrl,
+        container,
+        containerUrl: officialTrackingUrl(
+          trackingNumber,
+          `${carrierKey} ${smallParcelCarrier}`,
+          importsCellUrl(sourceRow, "H"),
+        ),
+        mbl,
+        hbl,
+        invoice,
+        invoiceUrl: invoiceFileUrl(splitValues(invoice)[0] ?? ""),
+        mode,
+        vessel,
+        pod: /^OSL/i.test(shipmentNo) ? "LGB" : "LAX",
+        eta: expectedDelivery || eta,
+        // See pendingImportItems: no dedicated carrier column exists for Air/Ocean
+        // freight, so vessel (already computed above) is the best available proxy.
+        carrier: vessel,
+        trackingNumber: "",
+        pro: "",
+        isSmallParcel: false,
+        shippingMethod: mode,
+        sourceType: mode === "Ocean" ? "Ocean" : "Air",
+      },
+    ];
+  });
+}
+
+function ImportSchedules({
+  items,
+  loading,
+  selectedInventory,
+}: {
+  items: ScheduleItem[];
+  loading: boolean;
+  selectedInventory: InventoryItem | null;
+}) {
+  const sortedItems = useMemo(
+    () => [...items].sort((a, b) => a.date.getTime() - b.date.getTime()),
+    [items],
+  );
+  const tableWrapRef = useRef<HTMLDivElement>(null);
+  const oceanCount = sortedItems.filter((item) => item.mode === "Ocean").length;
+  const airCount = sortedItems.filter((item) => item.mode === "Air").length;
+
+  useEffect(() => {
+    if (!selectedInventory) return;
+    const timer = window.setTimeout(() => {
+      const wrap = tableWrapRef.current;
+      const matchedRow = wrap?.querySelector<HTMLTableRowElement>(
+        'tr[data-shipment-match="true"]',
+      );
+      if (!wrap || !matchedRow) return;
+      const tableTop = matchedRow.offsetTop - (wrap.clientHeight - matchedRow.offsetHeight) / 2;
+      wrap.scrollTo({ top: Math.max(0, tableTop) });
+      window.requestAnimationFrame(() => {
+        const bounds = matchedRow.getBoundingClientRect();
+        const pageTop = window.scrollY + bounds.top - (window.innerHeight - bounds.height) / 2;
+        window.scrollTo({ top: Math.max(0, pageTop) });
+      });
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [selectedInventory, sortedItems]);
+
+  const linkValue = (value: string, href?: string) =>
+    value ? (
+      href ? (
+        <a href={href} target="_blank" rel="noreferrer">
+          {value} <span aria-hidden="true">↗</span>
+        </a>
+      ) : (
+        value
+      )
+    ) : (
+      "—"
+    );
+
+  return (
+    <section className="import-schedules" aria-labelledby="import-schedules-heading">
+      <div className="panel-heading import-heading">
+        <div>
+          <p className="eyebrow">
+            {selectedInventory ? "CURRENT + UPCOMING + SELECTED SHIPMENT" : "CURRENT + UPCOMING · OCEAN / AIR"}
+          </p>
+          <h2 id="import-schedules-heading">Import Schedules</h2>
+        </div>
+        <div className="import-totals" aria-label="Import schedule totals">
+          <span><b>{oceanCount}</b> Ocean</span>
+          <span><b>{airCount}</b> Air</span>
+          <strong>{sortedItems.length}</strong>
+        </div>
+      </div>
+      <div className="import-table-wrap" ref={tableWrapRef}>
+        <table className="import-table">
+          <thead>
+            <tr>
+              <th>Mode</th>
+              <th>Shipment</th>
+              <th>Invoice</th>
+              <th>MBL</th>
+              <th>HBL</th>
+              <th>Container #</th>
+              <th>VSL</th>
+              <th>POD</th>
+              <th>ETA</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sortedItems.map((item) => {
+              const shipmentMatch = scheduleMatchesInventoryShipment(item, selectedInventory);
+              return (
+              <tr
+                aria-label={shipmentMatch ? `Selected product shipment ${item.shipmentNo || item.title}` : undefined}
+                className={`${sourceClass(item.sourceType ?? item.mode ?? "")} ${shipmentMatch ? "shipment-match" : ""}`}
+                data-shipment-match={shipmentMatch || undefined}
+                key={`import-${item.id}`}
+              >
+                <td><span className={`mode-pill ${item.mode?.toLowerCase()}`}>{item.mode || "—"}</span></td>
+                <td>{linkValue(item.shipmentNo ?? item.title, item.shipmentUrl)}</td>
+                <td>
+                  <div className="multi-links">
+                    {splitValues(item.invoice ?? "").length
+                      ? splitValues(item.invoice ?? "").map((invoice) => (
+                          <a
+                            key={invoice}
+                            href={invoiceFileUrl(invoice)}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {invoice} <span aria-hidden="true">↗</span>
+                          </a>
+                        ))
+                      : "—"}
+                  </div>
+                </td>
+                <td>{item.mbl || "—"}</td>
+                <td>{item.hbl || "—"}</td>
+                <td>{linkValue(item.container ?? "", item.containerUrl)}</td>
+                <td>{item.vessel || "—"}</td>
+                <td>{item.pod || "—"}</td>
+                <td>
+                  <time dateTime={dayKey(item.date)}>{item.eta || item.dateText || "—"}</time>
+                  {item.cmsActualArrival || cmsQtyLabel(item.cmsReceivedQty, item.cmsInvoicedQty) ? (
+                    <span className="cms-enrichment cms-enrichment-inline">
+                      <span className="cms-enrichment-tag">CMS LIVE</span>
+                      {item.cmsActualArrival ? <span>Arrived {item.cmsActualArrival}</span> : null}
+                      {cmsQtyLabel(item.cmsReceivedQty, item.cmsInvoicedQty) ? (
+                        <span>{cmsQtyLabel(item.cmsReceivedQty, item.cmsInvoicedQty)}</span>
+                      ) : null}
+                      {item.cmsPartial ? <span className="cms-enrichment-partial">(partial)</span> : null}
+                    </span>
+                  ) : null}
+                </td>
+                <td>
+                  <span className={statusClass(item.status)}>{item.status}</span>
+                </td>
+              </tr>
+            )})}
+            {!loading && sortedItems.length === 0 && (
+              <tr>
+                <td className="import-empty" colSpan={10}>No unfinished imports match the active search.</td>
+              </tr>
+            )}
+            {loading && (
+              <tr>
+                <td className="import-empty" colSpan={10}>Syncing import schedules…</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+type OutboundSourceRecord = {
+  sourceRow: number;
+  customer: string;
+  invoice: string;
+  shipDate: string;
+  pro: string;
+};
+
+function outboundSourceRecords(rows: string[][]): OutboundSourceRecord[] {
+  return rows.flatMap((row, index) => {
+    const sourceRow = index + 1;
+    if (sourceRow < 4) return [];
+    const customer = cell(row, 0);
+    const invoice = cell(row, 1);
+    const shipDate = cell(row, 3);
+    if (!customer || !shipDate) return [];
+    return [{
+      sourceRow,
+      customer,
+      invoice,
+      shipDate,
+      pro: cell(row, 18),
+    }];
+  });
+}
+
+function resolveOutboundSource(records: OutboundSourceRecord[], item: ScheduleItem) {
+  const uniqueMatch = (matches: OutboundSourceRecord[]) =>
+    matches.length === 1 ? matches[0] : null;
+  const proKey = normalizedIdentifier(item.pro || item.carrierReference || "");
+  if (proKey) {
+    const proMatch = uniqueMatch(
+      records.filter((record) => normalizedIdentifier(record.pro) === proKey),
+    );
+    if (proMatch) return proMatch;
+  }
+
+  const customerKey = normalizedIdentifier(item.customer || item.customerNo || "");
+  const invoiceKeys = splitValues(item.invoice || "").map(normalizedIdentifier).filter(Boolean);
+  const shipDateKey = normalizedIdentifier(item.shipDate || "");
+  return uniqueMatch(
+    records.filter((record) => {
+      const recordInvoices = splitValues(record.invoice).map(normalizedIdentifier);
+      return (
+        customerKey &&
+        normalizedIdentifier(record.customer) === customerKey &&
+        shipDateKey &&
+        normalizedIdentifier(record.shipDate) === shipDateKey &&
+        invoiceKeys.some((invoice) => recordInvoices.includes(invoice))
+      );
+    }),
+  );
+}
+
+function outboundItems(
+  rows: string[][],
+  meta: OutboundSourceMeta = OUTBOUND_SCHEDULE_META,
+): ScheduleItem[] {
+  return rows.flatMap((row, index) => {
+    const sourceRow = index + 1;
+    if (sourceRow <= meta.headerRow) return [];
+    const customer = cell(row, 0);
+    const invoice = cell(row, 1);
+    const shipDate = cell(row, 3);
+    const date = parseDate(shipDate);
+    if (!date || !customer) return [];
+    const status = normalizeStatus(cell(row, 23) || cell(row, 20));
+    const carrier = cell(row, 16);
+    const carrierRefs = classifyOutboundReference(cell(row, 18));
+    const note = cell(row, 19);
+    return [
+      {
+        id: `outbound-${sourceRow}`,
+        direction: "outbound",
+        date,
+        dateText: shipDate,
+        title: customer,
+        reference: invoice || cell(row, 18) || "Outbound shipment",
+        secondary: [cell(row, 16), cell(row, 18)].filter(Boolean).join(" · "),
+        status,
+        sourceSheet: meta.sheetName,
+        sourceRow,
+        sourceUrl: SHEET_URL,
+        editable: true,
+        customer,
+        customerNo: customer,
+        invoice,
+        pro: carrierRefs.trackingNumber,
+        carrier,
+        carrierReference: carrierRefs.carrierReference || cell(row, 19),
+        trackingNumber: carrierRefs.trackingNumber,
+        shipDate,
+        shippingMethod: "Trucking",
+        sourceType: outboundSourceType(carrier, false),
+        department: outboundDepartment([note, customer], "Wholesale"),
+      },
+    ];
+  });
+}
+
+function nationalOutboundItems(table: any): ScheduleItem[] {
+  return (table.rows ?? []).flatMap((row: any, index: number) => {
+    const pickupDate = cell(row, 9);
+    const startShip = cell(row, 7);
+    const cancelDate = cell(row, 8);
+    const dateText = pickupDate || startShip || cancelDate;
+    const date = parseDate(dateText);
+    const channel = cell(row, 1);
+    const shippingMethod = cell(row, 11);
+    if (!date || !channel || !/^trucking$/i.test(shippingMethod)) return [];
+    const sourceRow = index + 2;
+    const order = cell(row, 3);
+    const po = cell(row, 5);
+    const department = cell(row, 2);
+    return [
+      {
+        id: `national-outbound-${sourceRow}`,
+        direction: "outbound",
+        date,
+        dateText,
+        title: channel,
+        reference: order || po || "National order",
+        secondary: [cell(row, 2), cell(row, 12)]
+          .filter(Boolean)
+          .join(" · "),
+        status: normalizeStatus(cell(row, 0)),
+        sourceSheet: "NATIONAL ORDER PROGRESS",
+        sourceRow,
+        sourceUrl: NATIONAL_SHEET_URL,
+        editable: false,
+        customer: channel,
+        customerNo: channel,
+        po,
+        invoice: order,
+        carrier: "",
+        carrierReference: "",
+        shipDate: dateText,
+        shippingMethod: "Trucking",
+        sourceType: "Wholesale",
+        department: outboundDepartment([department, channel], "Nationals"),
+      },
+    ];
+  });
+}
+
+function salesOutboundItems(table: any): ScheduleItem[] {
   return (table.rows ?? []).flatMap((row: any, index: number) => {
     const shipDate = cell(row, 4);
     const date = parseDate(shipDate);
