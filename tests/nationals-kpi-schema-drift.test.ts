@@ -65,6 +65,17 @@ describe("Nationals KPI schema drift", () => {
     expect(result.nationalsSalesMtd).toBe(0);
   });
 
+  it("reads Amount in the compact live schema when currency values prove it is revenue", () => {
+    const result = compute([
+      ["Status", "Channel", "Dept", "PO#", "Amount", "", "Order Date"],
+      ["Shipped", "ULTA-STY", "National", "85", "$660.48", "10 POs", "8/18/2026"],
+      ["Shipped", "ROSS", "ROSS", "", "140K", "2 POs", "8/20/2026"],
+      ["Shipped", "TARGET", "MBX", "", "$90,000.00", "1 PO", "8/21/2026"],
+    ]);
+    expect(result.nationalsSalesMtd).toBe(140_660.48);
+    expect(result.nationalsSalesYtd).toBe(140_660.48);
+  });
+
   it("keeps compatibility with the older workbook layout", () => {
     const result = compute([
       ["Overall PO Status", "Channel", "Department", "Order#", "Total Order Amount", "PO#", "Order Date"],

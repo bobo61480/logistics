@@ -164,9 +164,11 @@ function nationalSalesRecords(
   // cell. Falling back per row would read a unit quantity as revenue and turn
   // "50K units, no dollar value yet" into $50,000 of money that does not exist.
   //
-  // "Amount" is deliberately NOT a legacy alias: it is the unit-quantity column
-  // on the current schema, so accepting it here would mean that merely renaming
-  // or dropping the "Amount in $" header silently reports quantities as money.
+  // "Amount" is not normally a legacy alias: it is the unit-quantity column on
+  // the expanded schema. The live workbook can, however, revert to its compact
+  // schema where Amount is again the only currency column. Recognize that shape
+  // only when the column itself contains explicit currency-formatted values;
+  // this keeps a bare quantity-only Amount column from becoming revenue.
   //
   // Both are resolved by header with an explicit -1 miss rather than a
   // positional default: a positional guess lands on whatever sits at that
@@ -175,7 +177,20 @@ function nationalSalesRecords(
   const legacyDollarCol = dollarCol >= 0
     ? -1
     : headerIndex(header, ["Total Order Amount"], -1);
-  const amountCol = dollarCol >= 0 ? dollarCol : legacyDollarCol;
+  const compactAmountCol = dollarCol < 0 && legacyDollarCol < 0
+    ? headerIndex(header, ["Amount"], -1)
+    : -1;
+  const compactAmountHasCurrencyEvidence = compactAmountCol >= 0 && rows.slice(1).some((row) => {
+    const value = String(row[compactAmountCol] ?? "").trim();
+    return /^\$/.test(value) || /,\d{3}(?:\D|$)/.test(value) || /\.\d{2}(?:\D|$)/.test(value);
+  });
+  const amountCol = dollarCol >= 0
+    ? dollarCol
+    : legacyDollarCol >= 0
+      ? legacyDollarCol
+      : compactAmountHasCurrencyEvidence
+        ? compactAmountCol
+        : -1;
   const orderDateCol = headerIndex(header, ["Order Date"], 7);
 
   // NOTE: Dept column carries "National", "MBX", "Iherb" etc. — NOT the Channel
