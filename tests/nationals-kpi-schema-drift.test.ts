@@ -55,14 +55,16 @@ describe("Nationals KPI schema drift", () => {
     expect(result.nationalsSalesMtd).toBe(50_000);
   });
 
-  // If the dollar column is renamed or dropped, the unit-quantity column must
-  // not quietly stand in for it — that would report quantities as money.
-  it("reports zero rather than reading units as revenue when no dollar column exists", () => {
+  // The compact National Order Progress schema has a single authoritative
+  // Amount column. Every populated Amount is revenue, including K-suffixed
+  // values that do not happen to include "$", commas, or decimal cents.
+  it("reads every Amount value when the compact schema has no separate dollar column", () => {
     const result = compute([
       ["Status", "Channel", "Dept", "PO#", "Amount", "Spacer", "Order Date"],
       ["Shipped", "TJX", "National", "#1", "50K", "", "8/11/2026"],
     ]);
-    expect(result.nationalsSalesMtd).toBe(0);
+    expect(result.nationalsSalesMtd).toBe(50_000);
+    expect(result.nationalsSalesYtd).toBe(50_000);
   });
 
   it("reads Amount in the compact live schema when currency values prove it is revenue", () => {

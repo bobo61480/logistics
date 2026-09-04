@@ -14,14 +14,17 @@
 
 /* eslint-disable no-unused-vars */
 
-var GMAIL_PIPELINE_V2_VERSION = "2026-09-02-v6-wh-trucking-ambiguity-guard";
+var GMAIL_PIPELINE_V2_VERSION = "2026-09-04-v7-live-schedule-recovery";
 var GMAIL_V2_LOOKBACK_DAYS = 4;
 var GMAIL_V2_MAX_THREADS = 12;
 var GMAIL_V2_RUNTIME_BUDGET_MS = 210000;
-var GMAIL_V2_SEEN_PREFIX = "GMAIL_V2_SEEN_";
-var GMAIL_V2_ATTEMPT_PREFIX = "GMAIL_V2_ATTEMPT_";
-var GMAIL_V2_RETRY_AT_PREFIX = "GMAIL_V2_RETRY_AT_";
+var GMAIL_V2_SEEN_PREFIX = "GMAIL_V2_V7_SEEN_";
+var GMAIL_V2_ATTEMPT_PREFIX = "GMAIL_V2_V7_ATTEMPT_";
+var GMAIL_V2_RETRY_AT_PREFIX = "GMAIL_V2_V7_RETRY_AT_";
 var GMAIL_V2_MAX_TRANSIENT_ATTEMPTS = 4;
+// One-time v7 recovery boundary: preserve every pre-September-4 message as
+// consumed while allowing today's messages to be replayed with the new parser.
+var GMAIL_V2_REPLAY_CUTOFF_MS = 1788505200000; // 2026-09-04 00:00 America/Los_Angeles
 
 function processLogisticsEmailsV2() {
   var lock = LockService.getScriptLock();
@@ -71,6 +74,11 @@ function processLogisticsEmailsV2() {
         var message = messages[mi];
         var messageId = message.getId();
         if (gmailV2Seen_(messageId)) continue;
+        if (gmailV2PredatesReplayCutover_(message.getDate())) {
+          gmailV2MarkSeen_(messageId);
+          gmailV2ClearRetry_(messageId);
+          continue;
+        }
         if (gmailV2RetryDeferred_(messageId)) { stats.retryDeferred++; continue; }
         if (Date.now() - message.getDate().getTime() > GMAIL_V2_LOOKBACK_DAYS * 86400000) continue;
         stats.messages++;
@@ -141,6 +149,10 @@ function gmailV2Seen_(messageId) {
 
 function gmailV2MarkSeen_(messageId) {
   PropertiesService.getScriptProperties().setProperty(GMAIL_V2_SEEN_PREFIX + messageId, String(Date.now()));
+}
+
+function gmailV2PredatesReplayCutover_(messageDate) {
+  return messageDate && messageDate.getTime() < GMAIL_V2_REPLAY_CUTOFF_MS;
 }
 
 function gmailV2RetryDeferred_(messageId) {
@@ -221,6 +233,15 @@ function processLogisticsMessageV2_(message) {
     if (parsed.supported) supportedSeen = true;
     parsed.records.forEach(function (record) { records.push(record); });
   });
+
+  // Some forwarders flatten a spreadsheet schedule into plain-text rows in
+  // the message body. Recover those rows before falling back to the single
+  // subject/body context so HJ107 and HJ108 do not collapse into one shipment.
+  if (gmailV2TrustedScheduleSender_(meta.from)) {
+    extractPlainBodyScheduleRecordsV2_(subject, body).forEach(function (record) {
+      records.push(record);
+    });
+  }
 
   if (!records.length && hasStrongLogisticsContextV2_(context)) {
     records.push(mergeRecordContextV2_({}, context, meta));
@@ -395,7 +416,7 @@ function extractEmailContextV2_(subject, body) {
 
 function dateAfterLabelV2_(text, label) {
   var escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  var re = new RegExp(escaped + "\\s*[:#=-]?\\s*(\\d{1,2}[\\/. -]\\d{1,2}(?:[\\/. -]\\d{2,4})?)", "i");
+  var re = new RegExp(escaped + "(?:\\s*\\([^\\r\\n)]{1,24}\\))?\\s*[:#=-]?\\s*((?:\\d{4}[\\/. -]\\d{1,2}[\\/. -]\\d{1,2})|(?:\\d{1,2}[\\/. -]\\d{1,2}(?:[\\/.-]\\d{2,4})?))", "i");
   var match = String(text || "").match(re);
   if (!match) return "";
   return normalizeEmailDateV2_(match[1]);
@@ -403,10 +424,49 @@ function dateAfterLabelV2_(text, label) {
 
 function normalizeEmailDateV2_(value) {
   var s = String(value || "").trim().replace(/[. -]+/g, "/");
+  var iso = s.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/);
+  if (iso) {
+    return String(Number(iso[2])).padStart(2, "0") + "/" + String(Number(iso[3])).padStart(2, "0") + "/" + iso[1].slice(-2);
+  }
   var m = s.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?$/);
   if (!m) return s;
   var year = m[3] ? (m[3].length === 2 ? "20" + m[3] : m[3]) : String(new Date().getFullYear());
   return String(Number(m[1])).padStart(2, "0") + "/" + String(Number(m[2])).padStart(2, "0") + "/" + year.slice(-2);
+}
+
+function gmailV2TrustedScheduleSender_(sender) {
+  return /@(?:siliconii\.net|stylekoreanus\.com)\b/i.test(String(sender || ""));
+}
+
+/**
+ * Extracts the row-major schedule format produced when a spreadsheet table is
+ * pasted into Gmail's plain-text body: vessel, ETD, ETA, HBL, shipment step.
+ */
+function extractPlainBodyScheduleRecordsV2_(subject, body) {
+  var prefixMatch = String(subject || "").match(/\b(ES|HJ|ER|OSL|MCI)\s*\d{1,3}(?:\s*[-~]\s*\d{1,3})?\s*차/i);
+  if (!prefixMatch) return [];
+  var prefix = prefixMatch[1].toUpperCase();
+  var lines = String(body || "").split(/\r?\n/).map(function (line) { return line.trim(); }).filter(Boolean);
+  var records = [];
+  for (var i = 0; i + 4 < lines.length; i++) {
+    var vessel = cleanVesselV2_(lines[i]);
+    var etd = lines[i + 1].match(/^\d{4}[/. -]\d{1,2}[/. -]\d{1,2}$/);
+    var eta = lines[i + 2].match(/^\d{4}[/. -]\d{1,2}[/. -]\d{1,2}$/);
+    var hbl = lines[i + 3].match(/^[A-Z][A-Z0-9-]{8,}$/i);
+    var step = lines[i + 4].match(/^\d{1,3}$/);
+    if (!etd || !eta || !hbl || !step || !isPlausibleVesselV2_(vessel)) continue;
+    records.push({
+      kind: "inbound",
+      shipmentNo: prefix + Number(step[0]) + " - 2026",
+      hbl: hbl[0].toUpperCase(),
+      vessel: vessel,
+      etd: normalizeEmailDateV2_(etd[0]),
+      eta: normalizeEmailDateV2_(eta[0]),
+      note: String(subject || "").trim()
+    });
+    i += 4;
+  }
+  return records;
 }
 
 function cleanVesselV2_(value) {

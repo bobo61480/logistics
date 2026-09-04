@@ -327,12 +327,13 @@ async function fetchTabRows(document, tab) {
     try {
       return await fetchSheetsApiRows(document, tab);
     } catch (apiError) {
-      if (apiError instanceof FatalSheetsError) throw apiError;
       try {
         const csv = await fetchWithRetry(gvizUrl(document, tab), label);
         return parseCsv(csv);
       } catch (gvizError) {
-        throw new Error(`${apiError instanceof Error ? apiError.message : String(apiError)}; public fallback failed: ${gvizError instanceof Error ? gvizError.message : String(gvizError)}`);
+        const detail = `${apiError instanceof Error ? apiError.message : String(apiError)}; authenticated GViz fallback failed: ${gvizError instanceof Error ? gvizError.message : String(gvizError)}`;
+        if (apiError instanceof FatalSheetsError) throw new FatalSheetsError(detail);
+        throw new Error(detail);
       }
     }
   }

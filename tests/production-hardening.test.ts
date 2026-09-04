@@ -17,11 +17,13 @@ describe("production hardening", () => {
     expect(workflow).toContain("/api/logistics/reconciliation");
     expect(workflow).toContain("/api/logistics/monthly-kpis?month=");
     expect(workflow).toContain('"wms-sheet-fallback"');
-    expect(workflow).toContain("2026-09-02-worker-v13-relational-sheet-store");
+    expect(workflow).toContain("2026-09-04-worker-v14-production-recovery");
     expect(workflow).toContain('health.frontendSource!=="d1"');
     expect(workflow).toContain('snapshot.storage!=="d1"');
     expect(workflow).toContain('snapshot.frontendSource!=="d1"');
     expect(workflow).toContain("d1 migrations apply");
+    expect(workflow).not.toContain("D1 migrations apply failed — continuing");
+    expect(workflow).toContain("secret put CMS_IMS_API_KEY --name logistics");
     expect(workflow).toContain("wrangler deploy --keep-vars");
     expect(workflow).toContain("wrangler versions upload");
     expect(workflow).toContain("wrangler versions deploy");
@@ -46,12 +48,13 @@ describe("production hardening", () => {
     expect(wranglerConfig).toContain("[[d1_databases]]");
     expect(wranglerConfig).toContain('binding = "DB"');
     expect(wranglerConfig).toContain('database_name = "stylekorean-logistics-read-model"');
+    expect(wranglerConfig).toContain('database_id = "b7eba1d8-839f-4f18-b537-02b1b536927b"');
     expect(wranglerConfig).toContain('migrations_dir = "./migrations"');
     expect(wranglerConfig).toContain("[triggers]");
     expect(wranglerConfig).toContain('crons = ["*/15 * * * *"]');
 
     const worker = read("worker/index.ts");
-    expect(worker).toContain('const WORKER_VERSION = "2026-09-02-worker-v13-relational-sheet-store"');
+    expect(worker).toContain('const WORKER_VERSION = "2026-09-04-worker-v14-production-recovery"');
     expect(worker).toContain('frontendSource: "d1"');
     expect(worker).toContain('statusWriteMode: "strict Google Sheets + D1 dual write"');
     expect(worker).toContain('return json({ ok: false, error: "D1 frontend database is not configured"');

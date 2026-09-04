@@ -9,9 +9,15 @@
 
 /* eslint-disable no-unused-vars */
 
-var GMAIL_XPO_V2_VERSION = "2026-08-24-v3-interim-delay-precision";
+var GMAIL_XPO_V2_VERSION = "2026-09-04-v4-late-source-retry";
 var GMAIL_XPO_V2_LOOKBACK_DAYS = 4;
-var GMAIL_XPO_V2_SEEN_PREFIX = "GMAIL_XPO_V2_SEEN_";
+var GMAIL_XPO_V2_SEEN_PREFIX = "GMAIL_XPO_V4_SEEN_";
+var GMAIL_XPO_V2_ATTEMPT_PREFIX = "GMAIL_XPO_V4_ATTEMPT_";
+var GMAIL_XPO_V2_RETRY_AT_PREFIX = "GMAIL_XPO_V4_RETRY_AT_";
+var GMAIL_XPO_V2_MAX_UNMATCHED_ATTEMPTS = 4;
+// One-time v4 recovery boundary: old carrier notices stay consumed; only
+// notices dated September 4 or later are replayed under the retry policy.
+var GMAIL_XPO_V2_REPLAY_CUTOFF_MS = 1788505200000; // 2026-09-04 00:00 America/Los_Angeles
 var GMAIL_XPO_V2_MAX_MESSAGES = 100;
 var GMAIL_XPO_SOURCE_SHEETS = [
   "ULTA",
@@ -45,10 +51,16 @@ function processXpoTrackingEmailsV2() {
     messages.sort(function (a, b) { return a.getDate().getTime() - b.getDate().getTime(); });
     messages = messages.slice(-GMAIL_XPO_V2_MAX_MESSAGES);
 
-    stats = { messages: 0, updated: 0, noop: 0, pending: 0, errors: 0, priorLockSkips: consumeTriggerLockSkips_("processXpoTrackingEmailsV2") };
+    stats = { messages: 0, updated: 0, noop: 0, pending: 0, retryDeferred: 0, errors: 0, priorLockSkips: consumeTriggerLockSkips_("processXpoTrackingEmailsV2") };
     messages.forEach(function (message) {
       var id = message.getId();
       if (gmailXpoSeenV2_(id)) return;
+      if (gmailXpoPredatesReplayCutoverV2_(message.getDate())) {
+        gmailXpoMarkSeenV2_(id);
+        gmailXpoClearRetryV2_(id);
+        return;
+      }
+      if (gmailXpoRetryDeferredV2_(id)) { stats.retryDeferred++; return; }
       stats.messages++;
       try {
         var record = parseXpoMessageV2_(message);
@@ -67,6 +79,12 @@ function processXpoTrackingEmailsV2() {
 
         var result = upsertXpoSourceV2_(record);
         if (!result.matched) {
+          var disposition = gmailXpoUnmatchedDispositionV2_(id);
+          if (!disposition.pending) {
+            stats.retryDeferred++;
+            logPipeline_("XPO MATCH RETRY", id, JSON.stringify({ attempts: disposition.attempts, retryAt: disposition.retryAt, pro: record.pro, po: record.po }));
+            return;
+          }
           addPendingRow_({
             kind: "outbound",
             issues: [result.reason || "XPO notice could not be uniquely matched to a source row."],
@@ -75,7 +93,10 @@ function processXpoTrackingEmailsV2() {
             driveUrl: ""
           });
           stats.pending++;
+          gmailXpoMarkSeenV2_(id);
+          return;
         } else {
+          gmailXpoClearRetryV2_(id);
           stats[result.action] = (stats[result.action] || 0) + 1;
           if (result.action !== "noop") {
             addCommittedAuditRow_({
@@ -103,7 +124,7 @@ function processXpoTrackingEmailsV2() {
         logPipeline_("XPO INGEST ERROR", id, String(error && error.stack || error));
       }
     });
-    shouldRefreshD1 = stats.updated > 0;
+    shouldRefreshD1 = stats.updated > 0 || stats.pending > 0;
     logPipeline_("XPO V2 RUN", GMAIL_XPO_V2_VERSION, JSON.stringify(stats));
   } finally {
     lock.releaseLock();
@@ -118,6 +139,35 @@ function gmailXpoSeenV2_(messageId) {
 
 function gmailXpoMarkSeenV2_(messageId) {
   PropertiesService.getScriptProperties().setProperty(GMAIL_XPO_V2_SEEN_PREFIX + messageId, String(Date.now()));
+}
+
+function gmailXpoPredatesReplayCutoverV2_(messageDate) {
+  return messageDate && messageDate.getTime() < GMAIL_XPO_V2_REPLAY_CUTOFF_MS;
+}
+
+function gmailXpoRetryDeferredV2_(messageId) {
+  var retryAt = Number(PropertiesService.getScriptProperties().getProperty(GMAIL_XPO_V2_RETRY_AT_PREFIX + messageId) || 0);
+  return retryAt > Date.now();
+}
+
+function gmailXpoClearRetryV2_(messageId) {
+  var props = PropertiesService.getScriptProperties();
+  props.deleteProperty(GMAIL_XPO_V2_ATTEMPT_PREFIX + messageId);
+  props.deleteProperty(GMAIL_XPO_V2_RETRY_AT_PREFIX + messageId);
+}
+
+function gmailXpoUnmatchedDispositionV2_(messageId) {
+  var props = PropertiesService.getScriptProperties();
+  var attempts = Number(props.getProperty(GMAIL_XPO_V2_ATTEMPT_PREFIX + messageId) || 0) + 1;
+  props.setProperty(GMAIL_XPO_V2_ATTEMPT_PREFIX + messageId, String(attempts));
+  if (attempts < GMAIL_XPO_V2_MAX_UNMATCHED_ATTEMPTS) {
+    var delayMinutes = 15 * Math.pow(2, attempts - 1);
+    var retryAt = Date.now() + delayMinutes * 60000;
+    props.setProperty(GMAIL_XPO_V2_RETRY_AT_PREFIX + messageId, String(retryAt));
+    return { pending: false, attempts: attempts, retryAt: retryAt };
+  }
+  gmailXpoClearRetryV2_(messageId);
+  return { pending: true, attempts: attempts, retryAt: 0 };
 }
 
 function parseXpoMessageV2_(message) {

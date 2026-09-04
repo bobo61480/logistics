@@ -25,7 +25,7 @@ simple = { limit = 30, period = 60 }
 [[d1_databases]]
 binding = "DB"
 database_name = "stylekorean-logistics-read-model"
-database_id = "71d31cc4-5f9e-4ae9-8e87-b7e15a597a02"
+database_id = "b7eba1d8-839f-4f18-b537-02b1b536927b"
 migrations_dir = "./migrations"
 
 [triggers]

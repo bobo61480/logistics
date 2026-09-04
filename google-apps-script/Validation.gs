@@ -27,7 +27,7 @@ function validateRecord_(record, kind) {
   var issues = [];
 
   if (kind === "inbound") {
-    if (!record.pro && !record.container && !record.invoice) {
+    if (!record.pro && !record.container && !record.invoice && !record.mbl && !record.hbl && !record.shipmentNo && !record.filing) {
       issues.push("No B/L, container, or invoice/entry number found.");
     }
     if (!record.eta && !record.shipDate) issues.push("No ETA or ship date found.");
@@ -104,7 +104,7 @@ function appendVerificationAuditRow_(entry, status, issues, note, background) {
   if (dedupeV4ExistingAudit_(entry, allowedStatuses)) return { duplicate: true };
   var sheet = ensurePendingSheet_();
   var r = entry.record || {};
-  var blOrPro = status === "COMMITTED" ? (r.pro || r.shipmentNo || r.mbl || r.hbl || "") : (r.pro || "");
+  var blOrPro = r.pro || r.shipmentNo || r.mbl || r.hbl || r.filing || "";
   sheet.appendRow([
     new Date(),
     entry.kind || "",

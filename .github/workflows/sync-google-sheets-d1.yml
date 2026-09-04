@@ -40,9 +40,6 @@ jobs:
           [ -n "${CLOUDFLARE_API_TOKEN:-}" ] || missing+=("CLOUDFLARE_API_TOKEN")
           [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || missing+=("CLOUDFLARE_ACCOUNT_ID")
           [ -n "${CLASP_ACCESS_TOKEN:-}" ] || missing+=("CLASP_ACCESS_TOKEN")
-          if [ -z "${GOOGLE_SERVICE_ACCOUNT_JSON:-}" ] && { [ -z "${GOOGLE_SERVICE_ACCOUNT_EMAIL:-}" ] || [ -z "${GOOGLE_PRIVATE_KEY:-}" ]; }; then
-            missing+=("GOOGLE_SERVICE_ACCOUNT_JSON (or GOOGLE_SERVICE_ACCOUNT_EMAIL + GOOGLE_PRIVATE_KEY)")
-          fi
           if [ "${#missing[@]}" -gt 0 ]; then
             echo "Missing required GitHub Actions secrets:" >&2
             printf '  - %s\n' "${missing[@]}" >&2

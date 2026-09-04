@@ -24,7 +24,7 @@ import {
   SNAPSHOT_REFRESH_SECONDS,
 } from "./snapshot-cache";
 
-const WORKER_VERSION = "2026-09-02-worker-v13-relational-sheet-store";
+const WORKER_VERSION = "2026-09-04-worker-v14-production-recovery";
 
 type DatabaseEnv = Env & { DB: D1Database };
 
