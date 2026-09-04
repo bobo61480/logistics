@@ -18,10 +18,10 @@
     "verify:live-cms-kpis": "node scripts/verify-live-cms-kpis.mjs"
   },
   "dependencies": {
-    "next": "^16.3.1",
+    "next": "^16.3.4",
     "react": "19.2.6",
     "react-dom": "19.2.6",
-    "wrangler": "^4.125.0"
+    "wrangler": "^4.129.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260813.1",
@@ -32,7 +32,7 @@
     "@types/react-dom": "19.2.3",
     "tailwindcss": "4.2.1",
     "typescript": "5.9.3",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   },
   "allowScripts": {
     "sharp@0.34.5": true,
