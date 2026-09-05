@@ -3551,9 +3551,9 @@ export default function Home() {
             All rows, including hidden/completed entries. Shipping costs use freight Invoice first,
             then Rate when Invoice is blank—never shipment Invoice Amount. Nationals sales use
             Order Date and the Amount in $ column—Amount carries unit quantities in that expanded
-            layout and is never used as a per-row fallback. Compact sheets where Amount contains
-            explicit currency values, and older sheets with Total Order Amount, remain supported—expand K
-            values, and exclude cancelled orders. The card counts every department except the
+            layout and is never used as a per-row fallback. Compact sheets use their sole Amount column for every populated sales value,
+            including K-suffixed values; older sheets with Total Order Amount remain supported. Cancelled
+            orders are excluded. The card counts every department except the
             separately-reported business lines (MBX, iHerb, Wholesale B2B, Wholesale B2C, and
             Moida), so early rows whose Department holds a retailer name such as TJX, Ross, Ulta,
             or Burlington are still counted as Nationals orders.

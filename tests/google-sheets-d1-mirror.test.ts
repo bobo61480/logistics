@@ -50,10 +50,12 @@ describe("Google Sheets -> D1 primary frontend mirror", () => {
     expect(launcher).toContain("PRIVATE_SHEET_IDS");
     expect(launcher).toContain('headers.set("authorization", `Bearer ${token}`)');
     expect(launcher).toContain("/gviz/tq");
+    expect(launcher).toContain("/export");
     expect(workflow).toContain("GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}");
     expect(workflow).toContain("GOOGLE_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_EMAIL }}");
     expect(workflow).toContain("GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}");
     expect(workflow).toContain("CLASP_ACCESS_TOKEN: ${{ secrets.CLASP_ACCESS_TOKEN }}");
+    expect(workflow).not.toContain('missing+=("GOOGLE_SERVICE_ACCOUNT_JSON (or GOOGLE_SERVICE_ACCOUNT_EMAIL + GOOGLE_PRIVATE_KEY)")');
   });
 
   it("syncs workbook mirrors into D1 and serves only frontend-enabled tabs", () => {

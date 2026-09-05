@@ -56,10 +56,13 @@ describe("Google Sheets -> D1 sync fatal-failure detection", () => {
 });
 
 describe("Google Sheets -> D1 sync fatal-failure handling", () => {
-  it("skips the public fallback for a fatal failure", () => {
-    // A private workbook can only 404 on the gviz fallback, so retrying there
-    // adds a second misleading error to every tab.
-    expect(source).toContain("if (apiError instanceof FatalSheetsError) throw apiError;");
+  it("tries the authenticated GViz fallback when the Sheets API is disabled", () => {
+    // The production launcher injects the same OAuth bearer token into private
+    // GViz reads. A disabled Sheets API must not prevent that viable path.
+    expect(source).not.toContain("if (apiError instanceof FatalSheetsError) throw apiError;");
+    expect(source).toContain("authenticated GViz fallback failed");
+    expect(source).toContain("authenticated export fallback failed");
+    expect(source).toContain("function exportUrl(");
   });
 
   it("aborts the run and records it rather than reporting every tab", () => {

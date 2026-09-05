@@ -6,8 +6,8 @@
  * The existing clasp OAuth credential belongs to a Google Cloud project where
  * sheets.googleapis.com is disabled. The credential itself is valid and has
  * access to the private workbooks, so intercept private docs.google.com GViz
- * reads and attach the bearer token. This preserves the normal public Logistics
- * Master path while avoiding a Google Cloud API enablement dependency.
+ * and CSV export reads and attach the bearer token. This preserves the normal
+ * public Logistics Master path while avoiding a Google Cloud API dependency.
  */
 
 const PRIVATE_SHEET_IDS = new Set([
@@ -77,12 +77,12 @@ async function getClaspToken() {
   return tokenPromise;
 }
 
-function privateGvizId(url) {
+function privateSheetDownloadId(url) {
   try {
     const parsed = new URL(typeof url === "string" ? url : url.url);
     if (parsed.hostname !== "docs.google.com" || !parsed.pathname.includes("/spreadsheets/d/")) return "";
-    if (!parsed.pathname.endsWith("/gviz/tq")) return "";
-    const match = parsed.pathname.match(/\/spreadsheets\/d\/([^/]+)\/gviz\/tq$/);
+    if (!parsed.pathname.endsWith("/gviz/tq") && !parsed.pathname.endsWith("/export")) return "";
+    const match = parsed.pathname.match(/\/spreadsheets\/d\/([^/]+)\/(?:gviz\/tq|export)$/);
     return match && PRIVATE_SHEET_IDS.has(match[1]) ? match[1] : "";
   } catch {
     return "";
@@ -90,7 +90,7 @@ function privateGvizId(url) {
 }
 
 globalThis.fetch = async function authenticatedFetch(input, init = {}) {
-  if (!privateGvizId(input)) return nativeFetch(input, init);
+  if (!privateSheetDownloadId(input)) return nativeFetch(input, init);
   const token = await getClaspToken();
   const headers = new Headers(init.headers || {});
   headers.set("authorization", `Bearer ${token}`);

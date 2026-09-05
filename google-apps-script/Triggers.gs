@@ -8,7 +8,7 @@
 
 /* eslint-disable no-unused-vars */
 
-var GMAIL_PIPELINE_TRIGGER_SYNC_VERSION = "2026-09-02-central-v9-fulfillment-routing";
+var GMAIL_PIPELINE_TRIGGER_SYNC_VERSION = "2026-09-04-central-v10-gmail-recovery";
 var APPS_SCRIPT_DEPLOY_SYNC_VERSION = "2026-08-29-d1-canonical-v4";
 
 var TRIGGER_PLAN = [
@@ -57,6 +57,7 @@ var TRIGGER_CLEANUP_HANDLERS = [
   "processLogisticsEmails",
   "processLogisticsEmailsV2",
   "processXpoTrackingEmailsV2",
+  "processApprovedPending",
   "scanAndImportWmsTruckingOrders",
   "scanAndImportWmsTruckingOrdersV2",
   "syncFulfillmentLogistics",

@@ -319,6 +319,14 @@ function gvizUrl(document, tab) {
   return url.toString();
 }
 
+function exportUrl(document, tab) {
+  const url = new URL(`https://docs.google.com/spreadsheets/d/${document.spreadsheetId}/export`);
+  url.searchParams.set("format", "csv");
+  url.searchParams.set("gid", String(tab.sheetId));
+  url.searchParams.set("_", String(Date.now()));
+  return url.toString();
+}
+
 async function fetchTabRows(document, tab) {
   const label = `${document.alias}/${tab.title}`;
   const privateWorkbook = document.alias !== "logistics-master";
@@ -327,12 +335,18 @@ async function fetchTabRows(document, tab) {
     try {
       return await fetchSheetsApiRows(document, tab);
     } catch (apiError) {
-      if (apiError instanceof FatalSheetsError) throw apiError;
       try {
         const csv = await fetchWithRetry(gvizUrl(document, tab), label);
         return parseCsv(csv);
       } catch (gvizError) {
-        throw new Error(`${apiError instanceof Error ? apiError.message : String(apiError)}; public fallback failed: ${gvizError instanceof Error ? gvizError.message : String(gvizError)}`);
+        try {
+          const csv = await fetchWithRetry(exportUrl(document, tab), label);
+          return parseCsv(csv);
+        } catch (exportError) {
+          const detail = `${apiError instanceof Error ? apiError.message : String(apiError)}; authenticated GViz fallback failed: ${gvizError instanceof Error ? gvizError.message : String(gvizError)}; authenticated export fallback failed: ${exportError instanceof Error ? exportError.message : String(exportError)}`;
+          if (apiError instanceof FatalSheetsError) throw new FatalSheetsError(detail);
+          throw new Error(detail);
+        }
       }
     }
   }

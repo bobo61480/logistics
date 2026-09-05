@@ -43,6 +43,37 @@ function loadWmsHelpers() {
   };
 }
 
+function loadGmailContextHelpers() {
+  const pipeline = readFileSync("google-apps-script/GmailPipelineV2.gs", "utf8");
+  const validation = readFileSync("google-apps-script/Validation.gs", "utf8");
+  const context = vm.createContext({ console, Date, Map, Set });
+  vm.runInContext(
+    `${pipeline}\n${validation}\n;globalThis.__gmailContext = {
+      extractEmailContextV2_,
+      normalizeEmailDateV2_,
+      validateRecord_,
+      gmailV2PredatesReplayCutover_: typeof gmailV2PredatesReplayCutover_ === "function"
+        ? gmailV2PredatesReplayCutover_
+        : function () { return false; },
+      gmailV2TrustedScheduleSender_: typeof gmailV2TrustedScheduleSender_ === "function"
+        ? gmailV2TrustedScheduleSender_
+        : function () { return false; },
+      extractPlainBodyScheduleRecordsV2_: typeof extractPlainBodyScheduleRecordsV2_ === "function"
+        ? extractPlainBodyScheduleRecordsV2_
+        : function () { return []; }
+    };`,
+    context,
+  );
+  return context.__gmailContext as {
+    extractEmailContextV2_: (subject: string, body: string) => Record<string, string>;
+    normalizeEmailDateV2_: (value: string) => string;
+    validateRecord_: (record: Record<string, string>, kind: string) => { ok: boolean; issues: string[] };
+    gmailV2PredatesReplayCutover_: (date: Date) => boolean;
+    gmailV2TrustedScheduleSender_: (sender: string) => boolean;
+    extractPlainBodyScheduleRecordsV2_: (subject: string, body: string) => Array<Record<string, string>>;
+  };
+}
+
 describe("Gmail logistics recovery safeguards", () => {
   it("uses empty import rows before the SCHEDULING boundary before inserting more rows", () => {
     const choose = loadInboundInsertHelper();
@@ -99,5 +130,68 @@ describe("Gmail logistics recovery safeguards", () => {
     const xpo = readFileSync("google-apps-script/GmailXpoV2.gs", "utf8");
     expect(triggers).toContain("ensureCanonicalTriggersForVersion_");
     expect(xpo).toContain("ensureCanonicalTriggersForVersion_");
+  });
+
+  it("extracts parenthesized ETD and ETA labels from the live air-shipment format", () => {
+    const helpers = loadGmailContextHelpers();
+    const parsed = helpers.extractEmailContextV2_(
+      "미주법인 항공 출고서류 전달의 건_0904",
+      [
+        "[항공 스케줄]",
+        "오포창고 출고일자 : 09/04 AM",
+        "ETD(ICN): 09/07 22:00 PM",
+        "ETA(LAX): 09/08 00:25 AM",
+        "운송방법 : DIR",
+        "HWAB : JSL260904",
+      ].join("\n"),
+    );
+
+    expect(parsed.shipmentNo).toBe("JSL260904");
+    expect(parsed.etd).toBe("09/07/26");
+    expect(parsed.eta).toBe("09/08/26");
+  });
+
+  it("normalizes ISO dates and extracts each row from a plain-text vessel schedule", () => {
+    const helpers = loadGmailContextHelpers();
+    expect(helpers.normalizeEmailDateV2_("2026-09-30")).toBe("09/30/26");
+
+    const records = helpers.extractPlainBodyScheduleRecordsV2_(
+      "미주법인 HJ 107-108차 선적서류 전달의 건_0904",
+      [
+        "VSL / VOY", "ETD", "ETA", "HBL#", "차수",
+        "HMM HANBADA 0021E [MP2]", "2026-09-16", "2026-09-30", "HJTCSEL260900018", "107",
+        "HMM HANBADA 0021E [MP2]", "2026-09-16", "2026-09-30", "HJTCSEL260900019", "108",
+      ].join("\n"),
+    ).map((record) => JSON.parse(JSON.stringify(record)) as Record<string, string>);
+
+    expect(records).toHaveLength(2);
+    expect(records[0]).toMatchObject({
+      kind: "inbound",
+      shipmentNo: "HJ107 - 2026",
+      hbl: "HJTCSEL260900018",
+      vessel: "HMM HANBADA 0021E [MP2]",
+      etd: "09/16/26",
+      eta: "09/30/26",
+    });
+    expect(records[1]).toMatchObject({ shipmentNo: "HJ108 - 2026", hbl: "HJTCSEL260900019" });
+  });
+
+  it("accepts an inbound HBL or shipment number as the required B/L identifier", () => {
+    const helpers = loadGmailContextHelpers();
+    expect(helpers.validateRecord_({ hbl: "HJTCSEL260900018", eta: "09/30/26" }, "inbound")).toEqual({ ok: true, issues: [] });
+    expect(helpers.validateRecord_({ shipmentNo: "JSL260904", eta: "09/08/26" }, "inbound")).toEqual({ ok: true, issues: [] });
+  });
+
+  it("limits the one-time replay to messages dated today or later", () => {
+    const helpers = loadGmailContextHelpers();
+    expect(helpers.gmailV2PredatesReplayCutover_(new Date("2026-09-04T06:59:59Z"))).toBe(true);
+    expect(helpers.gmailV2PredatesReplayCutover_(new Date("2026-09-04T07:00:00Z"))).toBe(false);
+  });
+
+  it("only enables plain-body schedule insertion for company logistics senders", () => {
+    const helpers = loadGmailContextHelpers();
+    expect(helpers.gmailV2TrustedScheduleSender_("이지연 <jlee@siliconii.net>")).toBe(true);
+    expect(helpers.gmailV2TrustedScheduleSender_("operator@stylekoreanus.com")).toBe(true);
+    expect(helpers.gmailV2TrustedScheduleSender_("attacker@example.com")).toBe(false);
   });
 });
