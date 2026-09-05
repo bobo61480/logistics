@@ -14,7 +14,7 @@
 
 /* eslint-disable no-unused-vars */
 
-var GMAIL_PIPELINE_V2_VERSION = "2026-09-04-v7-live-schedule-recovery";
+var GMAIL_PIPELINE_V2_VERSION = "2026-09-04-v7.1-fair-thread-scan";
 var GMAIL_V2_LOOKBACK_DAYS = 4;
 var GMAIL_V2_MAX_THREADS = 12;
 var GMAIL_V2_RUNTIME_BUDGET_MS = 210000;
@@ -22,6 +22,7 @@ var GMAIL_V2_SEEN_PREFIX = "GMAIL_V2_V7_SEEN_";
 var GMAIL_V2_ATTEMPT_PREFIX = "GMAIL_V2_V7_ATTEMPT_";
 var GMAIL_V2_RETRY_AT_PREFIX = "GMAIL_V2_V7_RETRY_AT_";
 var GMAIL_V2_MAX_TRANSIENT_ATTEMPTS = 4;
+var GMAIL_V2_SCAN_CURSOR_PREFIX = "GMAIL_V2_SCAN_CURSOR_";
 // One-time v7 recovery boundary: preserve every pre-September-4 message as
 // consumed while allowing today's messages to be replayed with the new parser.
 var GMAIL_V2_REPLAY_CUTOFF_MS = 1788505200000; // 2026-09-04 00:00 America/Los_Angeles
@@ -38,27 +39,21 @@ function processLogisticsEmailsV2() {
   try {
     ensureCanonicalTriggersForVersion_();
     var labels = gmailV2Labels_();
-    var queries = gmailV2Queries_();
-    var threadsById = {};
-    queries.forEach(function (query) {
-      GmailApp.search(query, 0, GMAIL_V2_MAX_THREADS).forEach(function (thread) {
-        threadsById[thread.getId()] = thread;
-      });
-    });
+    var scan = gmailV2SelectThreads_();
+    var completedThreads = {};
 
     stats = {
       threads: 0, messages: 0, inserted: 0, updated: 0, noop: 0,
       pending: 0, errors: 0, deferredThreads: 0, retryDeferred: 0, budgetHit: false,
       priorLockSkips: consumeTriggerLockSkips_("processLogisticsEmailsV2")
     };
-    var threadIds = Object.keys(threadsById).slice(0, GMAIL_V2_MAX_THREADS);
-    for (var ti = 0; ti < threadIds.length; ti++) {
+    for (var ti = 0; ti < scan.threads.length; ti++) {
       if (Date.now() - runStarted >= GMAIL_V2_RUNTIME_BUDGET_MS) {
         stats.budgetHit = true;
-        stats.deferredThreads += threadIds.length - ti;
+        stats.deferredThreads += scan.threads.length - ti;
         break;
       }
-      var thread = threadsById[threadIds[ti]];
+      var thread = scan.threads[ti];
       stats.threads++;
       var threadPending = false;
       var threadError = false;
@@ -67,7 +62,7 @@ function processLogisticsEmailsV2() {
       for (var mi = 0; mi < messages.length; mi++) {
         if (Date.now() - runStarted >= GMAIL_V2_RUNTIME_BUDGET_MS) {
           stats.budgetHit = true;
-          stats.deferredThreads += 1 + Math.max(0, threadIds.length - ti - 1);
+          stats.deferredThreads += 1 + Math.max(0, scan.threads.length - ti - 1);
           threadFinished = false;
           break;
         }
@@ -107,7 +102,10 @@ function processLogisticsEmailsV2() {
       if (threadPending) thread.addLabel(labels.pending);
       if (threadFinished && !threadError) thread.addLabel(labels.processed);
       if (!threadFinished) break;
+      completedThreads[thread.getId()] = true;
     }
+    gmailV2AdvanceScan_(scan, completedThreads);
+    stats.scanOffsets = scan.pages.map(function (page) { return page.offset; });
 
     if (stats.inserted || stats.updated) {
       SpreadsheetApp.flush();
@@ -124,6 +122,51 @@ function processLogisticsEmailsV2() {
   }
   if (shouldRefreshD1) gmailSafetyV4RefreshD1_("processLogisticsEmailsV2");
   return stats;
+}
+
+// Revisit recent threads for new replies on every run, while rotating through
+// older matches. Interleave queries so shipment documents cannot crowd out
+// carrier updates. Keep message-level seen/retry keys unchanged: selecting an
+// old thread must not replay an already committed message.
+function gmailV2SelectThreads_() {
+  var queries = gmailV2Queries_();
+  var props = PropertiesService.getScriptProperties();
+  var pageSize = Math.max(1, Math.floor(GMAIL_V2_MAX_THREADS / (queries.length * 2)));
+  var pages = queries.map(function (query, index) {
+    var key = GMAIL_V2_SCAN_CURSOR_PREFIX + index;
+    var stored = Number(props.getProperty(key));
+    var offset = isFinite(stored) && stored >= pageSize ? Math.floor(stored) : pageSize;
+    var recent = GmailApp.search(query, 0, pageSize);
+    var backlog = GmailApp.search(query, offset, pageSize);
+    return {
+      key: key,
+      offset: offset,
+      nextOffset: backlog.length < pageSize ? pageSize : offset + pageSize,
+      backlogIds: backlog.map(function (thread) { return thread.getId(); }),
+      threads: recent.concat(backlog)
+    };
+  });
+  var selected = [];
+  var selectedIds = {};
+  for (var i = 0; i < pageSize * 2; i++) {
+    pages.forEach(function (page) {
+      var thread = page.threads[i];
+      if (!thread || selected.length >= GMAIL_V2_MAX_THREADS || selectedIds[thread.getId()]) return;
+      selectedIds[thread.getId()] = true;
+      selected.push(thread);
+    });
+  }
+  return { threads: selected, pages: pages };
+}
+
+function gmailV2AdvanceScan_(scan, completedThreads) {
+  var props = PropertiesService.getScriptProperties();
+  scan.pages.forEach(function (page) {
+    // A budget interruption must not move past threads we did not inspect.
+    if (page.backlogIds.every(function (id) { return completedThreads[id]; })) {
+      props.setProperty(page.key, String(page.nextOffset));
+    }
+  });
 }
 
 function gmailV2Queries_() {

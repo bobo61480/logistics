@@ -7,6 +7,7 @@ on:
       - 'cms-gateway/**'
       - 'wrangler.cms-gateway.toml'
       - '.github/workflows/deploy-cms-gateway.yml'
+      - 'scripts/verify-cms-gateway.mjs'
   workflow_dispatch:
 
 permissions:
@@ -50,6 +51,9 @@ jobs:
 
       - name: Typecheck project
         run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
 
       - name: Configure CMS gateway secrets
         shell: bash
@@ -106,7 +110,7 @@ jobs:
           grep -Eo 'https://[^ ]+workers.dev' /tmp/cms-gateway-deploy.log | tail -1 > /tmp/cms-gateway-url.txt || true
           echo "CMS gateway URL: $(cat /tmp/cms-gateway-url.txt 2>/dev/null || true)"
 
-      - name: Verify gateway health and August sales route
+      - name: Verify gateway health and current-month sales
         shell: bash
         run: |
           set -euo pipefail
@@ -129,14 +133,4 @@ jobs:
             exit 1
           fi
 
-          status="$(curl -sS --max-time 60 -o /tmp/cms-sales.json -w '%{http_code}' "$gateway_url/sales-summary?month=2026-08" || true)"
-          if [ "$status" = "404" ] || [ -z "$status" ]; then
-            echo "CMS sales route is not deployed"
-            exit 1
-          fi
-          echo "Gateway health:"
-          cat /tmp/cms-health.json
-          echo
-          echo "August sales route HTTP ${status}:"
-          cat /tmp/cms-sales.json
-          echo
+          CMS_GATEWAY_BASE_URL="$gateway_url" node scripts/verify-cms-gateway.mjs

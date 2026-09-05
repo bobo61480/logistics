@@ -9,6 +9,14 @@ handler `processLogisticsEmailsV2` on a 15-minute trigger. The legacy V1
 `GmailPipeline.gs` is retained only as a compatibility shim — the canonical
 trigger plan in `Triggers.gs` uses the V2 handlers.
 
+Thread discovery revisits recent matches in each search on every run and rotates
+through older matches inside the existing four-day lookback. The searches are
+interleaved within the 12-thread budget, so document emails cannot monopolize
+the scan. A backlog cursor advances only after its threads have been inspected;
+an interrupted run resumes that page. Existing message-level seen/retry keys and
+the September 4 replay boundary remain unchanged. `GMAIL V2 RUN` includes
+`scanOffsets` so operators can verify that the scan is progressing.
+
 ---
 
 ## Files to deploy
