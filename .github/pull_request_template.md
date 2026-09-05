@@ -9,5 +9,8 @@
 ## Test plan
 
 - [ ] Verified locally (dev server or browser)
-- [ ] No console errors
+- [ ] No console e:q
+rro
+
+rs
 - [ ] Google Sheets sync still works
