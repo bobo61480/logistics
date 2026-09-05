@@ -48,6 +48,8 @@ Run `typecheck` and `npm test` before every commit. The project uses `"strict": 
 | `worker/status-command.ts` | Strict Google Sheets + D1 status write path |
 | `worker/carrier-tracking.ts` | UPS/FedEx/USPS/DHL provider adapters |
 | `worker/cms-inventory.ts` | Restricted Siliconii inventory projection |
+| `cms-write-gateway/worker.ts` | CMS write rollout gateway: token-authenticated, D1-queued, dry-run by default |
+| `app/send-to-cms-button.tsx` | Two-step "Send to CMS" control on outbound cards (confirm → queue) |
 | `lib/sales-kpis.ts` | KPI parsing and calculation |
 | `google-apps-script/Code.gs` | Apps Script bound to LOGISTICS MASTER 2026; handles approved operations |
 | `archive/legacy-static-site/` | Historical reference only; never deploy from here |
@@ -83,6 +85,8 @@ GitHub Pages is not a production target. Keep the repository's Pages feature dis
 - Do not add a Pages `CNAME`; `wrangler.toml` is the production hostname source of truth.
 - Do not reintroduce browser direct-Sheets fallback. D1 is the frontend authority even during source outages.
 - Do not treat carrier proof-of-delivery/photo fields alone as delivery confirmation; use authoritative provider status/events.
+- CMS writes go only through `stylekorean-cms-write-gateway` (queue → dry-run → upstream). Never call CMS write endpoints from the browser, the main Worker, or the read-only gateway. `CMS_WRITE_DRY_RUN` stays `"true"` until the upstream write contract is verified; flipping it is a deliberate deploy.
+- `CMS_WRITE_TOKEN` is a shared bearer secret between the main Worker and the write gateway; the deploy-cms-write-gateway workflow provisions it on both. Never put it in vars, logs, or workflow command lines.
 - Do not send arbitrary Amazon `TBA...` values to Shipping v2. Its tracking contract requires the purchased shipment's matching `carrierId`.
 - `archive/legacy-static-site/` is reference-only.
 

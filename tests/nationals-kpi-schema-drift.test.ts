@@ -55,14 +55,16 @@ describe("Nationals KPI schema drift", () => {
     expect(result.nationalsSalesMtd).toBe(50_000);
   });
 
-  // If the dollar column is renamed or dropped, the unit-quantity column must
-  // not quietly stand in for it — that would report quantities as money.
-  it("reports zero rather than reading units as revenue when no dollar column exists", () => {
+  // The compact National Order Progress schema has a single authoritative
+  // Amount column. Every populated Amount is revenue, including K-suffixed
+  // values that do not happen to include "$", commas, or decimal cents.
+  it("reads every Amount value when the compact schema has no separate dollar column", () => {
     const result = compute([
       ["Status", "Channel", "Dept", "PO#", "Amount", "Spacer", "Order Date"],
       ["Shipped", "TJX", "National", "#1", "50K", "", "8/11/2026"],
     ]);
-    expect(result.nationalsSalesMtd).toBe(0);
+    expect(result.nationalsSalesMtd).toBe(50_000);
+    expect(result.nationalsSalesYtd).toBe(50_000);
   });
 
   it("reads Amount in the compact live schema when currency values prove it is revenue", () => {
@@ -110,5 +112,12 @@ describe("Nationals methodology note", () => {
     for (const dept of NON_NATIONALS_DEPTS) {
       expect(note, `methodology note does not mention excluded dept ${dept}`).toContain(dept);
     }
+  });
+
+  it("describes every compact Amount value as revenue without a formatting qualifier", () => {
+    const page = readFileSync("app/page.tsx", "utf8");
+    const note = page.slice(page.indexOf("Methodology notes"));
+    expect(note).toContain("Compact sheets use their sole Amount column for every populated sales value");
+    expect(note).not.toContain("Compact sheets where Amount contains explicit currency values");
   });
 });

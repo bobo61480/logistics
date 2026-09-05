@@ -15,6 +15,7 @@ import { fetchOperationalSources, type GmailIngestionEvent } from "./sources";
 import { handleStatusCommand } from "./status-command";
 import { handlePendingReviewCommand } from "./pending-review-command";
 import { handleTrackingCommand } from "./tracking-command";
+import { handleCmsWriteCommand } from "./cms-write-command";
 import { fetchCmsInventory } from "./cms-inventory";
 import { fetchCmsSalesKpis } from "./cms-sales-kpis";
 import {
@@ -24,7 +25,7 @@ import {
   SNAPSHOT_REFRESH_SECONDS,
 } from "./snapshot-cache";
 
-const WORKER_VERSION = "2026-09-02-worker-v13-relational-sheet-store";
+const WORKER_VERSION = "2026-09-04-worker-v14-production-recovery";
 
 type DatabaseEnv = Env & { DB: D1Database };
 
@@ -710,6 +711,8 @@ export default {
       response = await handleStatusCommand(request, env, context);
     } else if (url.pathname === "/api/logistics/pending-review") {
       response = await handlePendingReviewCommand(request, env, context);
+    } else if (url.pathname === "/api/logistics/cms-write") {
+      response = await handleCmsWriteCommand(request, env);
     } else if (url.pathname === "/api/logistics/tracking") {
       response = await handleTrackingCommand(request, env);
     } else if (url.pathname === "/api/logistics/fulfillment") {

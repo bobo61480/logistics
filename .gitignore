@@ -28,3 +28,33 @@ playwright-report/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# ---------------------------------------------------------------------------
+# Personal shell / environment config that happens to live in this directory
+# but is not part of the project. These can carry tokens and credentials, and
+# this repo pushes to a remote that runs a deploy workflow -- never commit them.
+.bash_profile
+.bashrc
+.profile
+.zprofile
+.zshrc
+.gitconfig
+.ripgreprc
+
+# Editor state
+.idea
+
+# Local MCP + Claude Code state. Note .claude/settings.json IS tracked on
+# purpose (shared project config); everything listed here is per-machine.
+.mcp.json
+.claude/settings.local.json
+.claude/agents
+.claude/commands
+.claude/hooks
+.claude/launch.json
+.claude/loop.md
+.claude/output-styles
+.claude/routines
+.claude/scheduled_tasks.json
+.claude/skills
+.claude/workflows
