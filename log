@@ -1,0 +1,26 @@
+2026-09-05T02:31:47.774Z	Initializing build environment...
+2026-09-05T02:31:50.158Z	Success: Finished initializing build environment
+2026-09-05T02:31:51.190Z	Cloning seed repository...
+2026-09-05T02:31:51.200Z	Cloning from: https://github.com/cloudflare/docs-examples.git
+2026-09-05T02:31:53.067Z	Overwriting files
+2026-09-05T02:31:53.417Z	Pushing to destination: https://github.com/bobo61480/d1-stylekorean.git
+2026-09-05T02:31:55.096Z	Detected the following tools from environment: npm@10.9.2, nodejs@24.18.0, bun@1.2.15
+2026-09-05T02:31:55.101Z	Installing project dependencies: bun install --frozen-lockfile
+2026-09-05T02:31:55.743Z	bun install v1.2.15 (df017990)
+2026-09-05T02:31:55.752Z	[3.88ms] migrated lockfile from package-lock.json
+2026-09-05T02:31:59.211Z	Saved lockfile
+2026-09-05T02:31:59.212Z	
+2026-09-05T02:31:59.212Z	+ @cloudflare/vitest-pool-workers@0.8.23
+2026-09-05T02:31:59.212Z	+ @cloudflare/workers-types@4.20250430.0
+2026-09-05T02:31:59.212Z	+ typescript@5.8.3
+2026-09-05T02:31:59.213Z	+ vitest@3.0.9
+2026-09-05T02:31:59.213Z	+ wrangler@4.14.0
+2026-09-05T02:31:59.213Z	
+2026-09-05T02:31:59.213Z	106 packages installed [3.51s]
+2026-09-05T02:31:59.397Z	Executing user build command: npm run build
+2026-09-05T02:32:00.035Z	npm error Missing script: "build"
+2026-09-05T02:32:00.036Z	npm error
+2026-09-05T02:32:00.037Z	npm error To see a list of scripts, run:
+2026-09-05T02:32:00.037Z	npm error   npm run
+2026-09-05T02:32:00.041Z	npm error A complete log of this run can be found in: /opt/buildhome/.npm/_logs/2026-09-05T02_31_59_887Z-debug-0.log
+2026-09-05T02:32:00.061Z	Failed: error occurred while running build command
