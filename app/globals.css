@@ -1165,6 +1165,25 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
 }
 .source-link:hover { border-color: var(--ink-soft); color: var(--orange-dark); }
 
+.cms-write-control { display: flex; gap: 5px; align-items: center; justify-content: end; }
+.cms-write-button,
+.cms-write-cancel {
+  min-height: 27px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: #f8f6f1;
+  color: var(--ink-soft);
+  font: 600 8px "IBM Plex Mono", monospace;
+  letter-spacing: .02em;
+  cursor: pointer;
+}
+.cms-write-button:hover { border-color: var(--ink-soft); color: var(--orange-dark); }
+.cms-write-confirm { min-height: 27px; font-size: 8px; padding: 0 8px; }
+.cms-write-result { font: 600 8px "IBM Plex Mono", monospace; letter-spacing: .02em; }
+.cms-write-ok { color: var(--ok, #1c7c3c); }
+.cms-write-error { color: var(--danger, #b3261e); }
+
 .read-only-label {
   color: var(--muted);
   font: 600 7px "IBM Plex Mono", monospace;

@@ -12,6 +12,7 @@ import { InventoryReconciliationCard, type CmsInventoryItem } from "./inventory-
 import { useParcelTracking, type TrackableShipment, type TrackingResult } from "./live-map";
 import { ThemeToggle } from "./theme-toggle";
 import { IngestionRoadmapCard } from "./ingestion-roadmap-card";
+import { SendToCmsButton } from "./send-to-cms-button";
 import { airlineNameFromFlight } from "../lib/domain/airlines";
 
 const SHEET_ID =
@@ -2563,6 +2564,14 @@ function ScheduleCard({ item }: { item: ScheduleItem }) {
           >
             SOURCE · ROW {item.sourceRow} ↗
           </a>
+          {item.direction === "outbound" ? (
+            <SendToCmsButton
+              shipmentNo={item.shipmentNo ?? undefined}
+              invoice={splitValues(item.invoice ?? "").join(", ") || undefined}
+              customer={item.customer ?? undefined}
+              status={item.status}
+            />
+          ) : null}
         </div>
       </div>
     </details>

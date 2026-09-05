@@ -1,0 +1,25 @@
+name = "stylekorean-cms-write-gateway"
+main = "cms-write-gateway/worker.ts"
+compatibility_date = "2026-08-31"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[vars]
+# Rollout guard: writes are validated and queued but NEVER sent to CMS until this
+# is explicitly flipped to "false" and CMS_WRITE_UPSTREAM_URL is set.
+CMS_WRITE_DRY_RUN = "true"
+# CMS_WRITE_UPSTREAM_URL = ""  # intentionally unset during dry-run rollout
+
+# The write queue lives in the shared read-model D1 (migrations/0006) so there is
+# exactly one D1 schema authority. This worker only binds the same database.
+[[d1_databases]]
+binding = "DB"
+database_name = "stylekorean-logistics-read-model"
+database_id = "71d31cc4-5f9e-4ae9-8e87-b7e15a597a02"
+
+[triggers]
+crons = ["17 * * * *"]
+
+[observability]
+enabled = true
+head_sampling_rate = 0.1
