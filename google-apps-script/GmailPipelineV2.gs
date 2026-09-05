@@ -14,14 +14,18 @@
 
 /* eslint-disable no-unused-vars */
 
-var GMAIL_PIPELINE_V2_VERSION = "2026-08-31-v5-trigger-boundary-recovery";
+var GMAIL_PIPELINE_V2_VERSION = "2026-09-04-v7.1-fair-thread-scan";
 var GMAIL_V2_LOOKBACK_DAYS = 4;
 var GMAIL_V2_MAX_THREADS = 12;
 var GMAIL_V2_RUNTIME_BUDGET_MS = 210000;
-var GMAIL_V2_SEEN_PREFIX = "GMAIL_V2_SEEN_";
-var GMAIL_V2_ATTEMPT_PREFIX = "GMAIL_V2_ATTEMPT_";
-var GMAIL_V2_RETRY_AT_PREFIX = "GMAIL_V2_RETRY_AT_";
+var GMAIL_V2_SEEN_PREFIX = "GMAIL_V2_V7_SEEN_";
+var GMAIL_V2_ATTEMPT_PREFIX = "GMAIL_V2_V7_ATTEMPT_";
+var GMAIL_V2_RETRY_AT_PREFIX = "GMAIL_V2_V7_RETRY_AT_";
 var GMAIL_V2_MAX_TRANSIENT_ATTEMPTS = 4;
+var GMAIL_V2_SCAN_CURSOR_PREFIX = "GMAIL_V2_SCAN_CURSOR_";
+// One-time v7 recovery boundary: preserve every pre-September-4 message as
+// consumed while allowing today's messages to be replayed with the new parser.
+var GMAIL_V2_REPLAY_CUTOFF_MS = 1788505200000; // 2026-09-04 00:00 America/Los_Angeles
 
 function processLogisticsEmailsV2() {
   var lock = LockService.getScriptLock();
@@ -35,27 +39,21 @@ function processLogisticsEmailsV2() {
   try {
     ensureCanonicalTriggersForVersion_();
     var labels = gmailV2Labels_();
-    var queries = gmailV2Queries_();
-    var threadsById = {};
-    queries.forEach(function (query) {
-      GmailApp.search(query, 0, GMAIL_V2_MAX_THREADS).forEach(function (thread) {
-        threadsById[thread.getId()] = thread;
-      });
-    });
+    var scan = gmailV2SelectThreads_();
+    var completedThreads = {};
 
     stats = {
       threads: 0, messages: 0, inserted: 0, updated: 0, noop: 0,
       pending: 0, errors: 0, deferredThreads: 0, retryDeferred: 0, budgetHit: false,
       priorLockSkips: consumeTriggerLockSkips_("processLogisticsEmailsV2")
     };
-    var threadIds = Object.keys(threadsById).slice(0, GMAIL_V2_MAX_THREADS);
-    for (var ti = 0; ti < threadIds.length; ti++) {
+    for (var ti = 0; ti < scan.threads.length; ti++) {
       if (Date.now() - runStarted >= GMAIL_V2_RUNTIME_BUDGET_MS) {
         stats.budgetHit = true;
-        stats.deferredThreads += threadIds.length - ti;
+        stats.deferredThreads += scan.threads.length - ti;
         break;
       }
-      var thread = threadsById[threadIds[ti]];
+      var thread = scan.threads[ti];
       stats.threads++;
       var threadPending = false;
       var threadError = false;
@@ -64,13 +62,18 @@ function processLogisticsEmailsV2() {
       for (var mi = 0; mi < messages.length; mi++) {
         if (Date.now() - runStarted >= GMAIL_V2_RUNTIME_BUDGET_MS) {
           stats.budgetHit = true;
-          stats.deferredThreads += 1 + Math.max(0, threadIds.length - ti - 1);
+          stats.deferredThreads += 1 + Math.max(0, scan.threads.length - ti - 1);
           threadFinished = false;
           break;
         }
         var message = messages[mi];
         var messageId = message.getId();
         if (gmailV2Seen_(messageId)) continue;
+        if (gmailV2PredatesReplayCutover_(message.getDate())) {
+          gmailV2MarkSeen_(messageId);
+          gmailV2ClearRetry_(messageId);
+          continue;
+        }
         if (gmailV2RetryDeferred_(messageId)) { stats.retryDeferred++; continue; }
         if (Date.now() - message.getDate().getTime() > GMAIL_V2_LOOKBACK_DAYS * 86400000) continue;
         stats.messages++;
@@ -99,7 +102,10 @@ function processLogisticsEmailsV2() {
       if (threadPending) thread.addLabel(labels.pending);
       if (threadFinished && !threadError) thread.addLabel(labels.processed);
       if (!threadFinished) break;
+      completedThreads[thread.getId()] = true;
     }
+    gmailV2AdvanceScan_(scan, completedThreads);
+    stats.scanOffsets = scan.pages.map(function (page) { return page.offset; });
 
     if (stats.inserted || stats.updated) {
       SpreadsheetApp.flush();
@@ -116,6 +122,51 @@ function processLogisticsEmailsV2() {
   }
   if (shouldRefreshD1) gmailSafetyV4RefreshD1_("processLogisticsEmailsV2");
   return stats;
+}
+
+// Revisit recent threads for new replies on every run, while rotating through
+// older matches. Interleave queries so shipment documents cannot crowd out
+// carrier updates. Keep message-level seen/retry keys unchanged: selecting an
+// old thread must not replay an already committed message.
+function gmailV2SelectThreads_() {
+  var queries = gmailV2Queries_();
+  var props = PropertiesService.getScriptProperties();
+  var pageSize = Math.max(1, Math.floor(GMAIL_V2_MAX_THREADS / (queries.length * 2)));
+  var pages = queries.map(function (query, index) {
+    var key = GMAIL_V2_SCAN_CURSOR_PREFIX + index;
+    var stored = Number(props.getProperty(key));
+    var offset = isFinite(stored) && stored >= pageSize ? Math.floor(stored) : pageSize;
+    var recent = GmailApp.search(query, 0, pageSize);
+    var backlog = GmailApp.search(query, offset, pageSize);
+    return {
+      key: key,
+      offset: offset,
+      nextOffset: backlog.length < pageSize ? pageSize : offset + pageSize,
+      backlogIds: backlog.map(function (thread) { return thread.getId(); }),
+      threads: recent.concat(backlog)
+    };
+  });
+  var selected = [];
+  var selectedIds = {};
+  for (var i = 0; i < pageSize * 2; i++) {
+    pages.forEach(function (page) {
+      var thread = page.threads[i];
+      if (!thread || selected.length >= GMAIL_V2_MAX_THREADS || selectedIds[thread.getId()]) return;
+      selectedIds[thread.getId()] = true;
+      selected.push(thread);
+    });
+  }
+  return { threads: selected, pages: pages };
+}
+
+function gmailV2AdvanceScan_(scan, completedThreads) {
+  var props = PropertiesService.getScriptProperties();
+  scan.pages.forEach(function (page) {
+    // A budget interruption must not move past threads we did not inspect.
+    if (page.backlogIds.every(function (id) { return completedThreads[id]; })) {
+      props.setProperty(page.key, String(page.nextOffset));
+    }
+  });
 }
 
 function gmailV2Queries_() {
@@ -141,6 +192,10 @@ function gmailV2Seen_(messageId) {
 
 function gmailV2MarkSeen_(messageId) {
   PropertiesService.getScriptProperties().setProperty(GMAIL_V2_SEEN_PREFIX + messageId, String(Date.now()));
+}
+
+function gmailV2PredatesReplayCutover_(messageDate) {
+  return messageDate && messageDate.getTime() < GMAIL_V2_REPLAY_CUTOFF_MS;
 }
 
 function gmailV2RetryDeferred_(messageId) {
@@ -196,13 +251,6 @@ function gmailV2FailureDisposition_(message, error) {
   return { seen: true, pending: true, attempts: attempts };
 }
 
-/**
- * Backward-compatible setup helper. Trigger creation is owned by setupAllTriggers().
- */
-function ensureGmailV2Trigger_() {
-  return GMAIL_PIPELINE_TRIGGER_SYNC_VERSION;
-}
-
 function processLogisticsMessageV2_(message) {
   var subject = String(message.getSubject() || "").trim();
   var body = String(message.getPlainBody() || "");
@@ -228,6 +276,15 @@ function processLogisticsMessageV2_(message) {
     if (parsed.supported) supportedSeen = true;
     parsed.records.forEach(function (record) { records.push(record); });
   });
+
+  // Some forwarders flatten a spreadsheet schedule into plain-text rows in
+  // the message body. Recover those rows before falling back to the single
+  // subject/body context so HJ107 and HJ108 do not collapse into one shipment.
+  if (gmailV2TrustedScheduleSender_(meta.from)) {
+    extractPlainBodyScheduleRecordsV2_(subject, body).forEach(function (record) {
+      records.push(record);
+    });
+  }
 
   if (!records.length && hasStrongLogisticsContextV2_(context)) {
     records.push(mergeRecordContextV2_({}, context, meta));
@@ -402,7 +459,7 @@ function extractEmailContextV2_(subject, body) {
 
 function dateAfterLabelV2_(text, label) {
   var escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  var re = new RegExp(escaped + "\\s*[:#=-]?\\s*(\\d{1,2}[\\/. -]\\d{1,2}(?:[\\/. -]\\d{2,4})?)", "i");
+  var re = new RegExp(escaped + "(?:\\s*\\([^\\r\\n)]{1,24}\\))?\\s*[:#=-]?\\s*((?:\\d{4}[\\/. -]\\d{1,2}[\\/. -]\\d{1,2})|(?:\\d{1,2}[\\/. -]\\d{1,2}(?:[\\/.-]\\d{2,4})?))", "i");
   var match = String(text || "").match(re);
   if (!match) return "";
   return normalizeEmailDateV2_(match[1]);
@@ -410,10 +467,49 @@ function dateAfterLabelV2_(text, label) {
 
 function normalizeEmailDateV2_(value) {
   var s = String(value || "").trim().replace(/[. -]+/g, "/");
+  var iso = s.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/);
+  if (iso) {
+    return String(Number(iso[2])).padStart(2, "0") + "/" + String(Number(iso[3])).padStart(2, "0") + "/" + iso[1].slice(-2);
+  }
   var m = s.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?$/);
   if (!m) return s;
   var year = m[3] ? (m[3].length === 2 ? "20" + m[3] : m[3]) : String(new Date().getFullYear());
   return String(Number(m[1])).padStart(2, "0") + "/" + String(Number(m[2])).padStart(2, "0") + "/" + year.slice(-2);
+}
+
+function gmailV2TrustedScheduleSender_(sender) {
+  return /@(?:siliconii\.net|stylekoreanus\.com)\b/i.test(String(sender || ""));
+}
+
+/**
+ * Extracts the row-major schedule format produced when a spreadsheet table is
+ * pasted into Gmail's plain-text body: vessel, ETD, ETA, HBL, shipment step.
+ */
+function extractPlainBodyScheduleRecordsV2_(subject, body) {
+  var prefixMatch = String(subject || "").match(/\b(ES|HJ|ER|OSL|MCI)\s*\d{1,3}(?:\s*[-~]\s*\d{1,3})?\s*차/i);
+  if (!prefixMatch) return [];
+  var prefix = prefixMatch[1].toUpperCase();
+  var lines = String(body || "").split(/\r?\n/).map(function (line) { return line.trim(); }).filter(Boolean);
+  var records = [];
+  for (var i = 0; i + 4 < lines.length; i++) {
+    var vessel = cleanVesselV2_(lines[i]);
+    var etd = lines[i + 1].match(/^\d{4}[/. -]\d{1,2}[/. -]\d{1,2}$/);
+    var eta = lines[i + 2].match(/^\d{4}[/. -]\d{1,2}[/. -]\d{1,2}$/);
+    var hbl = lines[i + 3].match(/^[A-Z][A-Z0-9-]{8,}$/i);
+    var step = lines[i + 4].match(/^\d{1,3}$/);
+    if (!etd || !eta || !hbl || !step || !isPlausibleVesselV2_(vessel)) continue;
+    records.push({
+      kind: "inbound",
+      shipmentNo: prefix + Number(step[0]) + " - 2026",
+      hbl: hbl[0].toUpperCase(),
+      vessel: vessel,
+      etd: normalizeEmailDateV2_(etd[0]),
+      eta: normalizeEmailDateV2_(eta[0]),
+      note: String(subject || "").trim()
+    });
+    i += 4;
+  }
+  return records;
 }
 
 function cleanVesselV2_(value) {
@@ -870,6 +966,9 @@ function upsertOutboundEmailV2_(record, allowInsert) {
     if (score) candidates.push({ row: r + 1, score: score });
   }
   candidates.sort(function (a, b) { return b.score - a.score; });
+  if (candidates.length > 1 && candidates[0].score === candidates[1].score) {
+    return { matched: false, action: "noop", blocked: "ambiguous-existing-identity" };
+  }
   if (candidates.length && (!candidates[1] || candidates[0].score > candidates[1].score)) {
     var rowNumber = candidates[0].row;
     var old = data[rowNumber - 1];

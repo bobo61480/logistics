@@ -1,4 +1,12 @@
 import type { SourceHealth } from "./sources";
+import {
+  partitionSources,
+  readSheetGrid,
+  readSheetGrids,
+  readSheetStoreHealth,
+  syncSheetGrids,
+  updateSheetCell,
+} from "./sheet-store";
 
 const PART_BYTES = 512 * 1024;
 const MAX_PARTS = 44;
@@ -57,18 +65,27 @@ export function joinPayload(chunks: string[]) {
   return JSON.parse(chunks.join("")) as unknown;
 }
 
-function payloadEntries(snapshot: OperationalSnapshot) {
+function payloadEntries(snapshot: OperationalSnapshot, metaSources: Record<string, unknown>) {
   return [
     ["sourceHealth", snapshot.sourceHealth],
-    ["sources", snapshot.sources],
+    ["sources", metaSources],
     ["kpis", snapshot.kpis],
     ["kpiError", snapshot.kpiError ?? null],
   ] as const;
 }
 
+/**
+ * Publishes a snapshot to D1. Grid-shaped sheet sources are delta-synced into
+ * the relational `sheet_rows` store (only changed rows are written); the small
+ * remainder — source health, KPIs, GViz tables, ingestion events, CMS
+ * projections — is chunked into the immutable snapshot tables behind the
+ * atomic `current_snapshot` pointer.
+ */
 export async function persistSnapshot(db: D1Database, snapshot: OperationalSnapshot) {
   const id = crypto.randomUUID();
-  const entries = payloadEntries(snapshot);
+  const { grids, meta } = partitionSources(snapshot.sources);
+  const sheetSync = await syncSheetGrids(db, grids, snapshot.generatedAt);
+  const entries = payloadEntries(snapshot, meta);
   const parts = entries.flatMap(([name, value]) =>
     splitPayload(value).map((payload, index) => ({ name, index, payload, bytes: byteLength(payload) })),
   );
@@ -99,10 +116,15 @@ export async function persistSnapshot(db: D1Database, snapshot: OperationalSnaps
     WHERE id NOT IN (
       SELECT id FROM operational_snapshots ORDER BY generated_at DESC LIMIT ?
     ) AND id NOT IN (SELECT snapshot_id FROM operational_state)`).bind(RETAINED_SNAPSHOTS).run();
-  return { id, partCount: parts.length, payloadBytes };
+  return { id, partCount: parts.length, payloadBytes, sheetSync };
 }
 
-export async function readCurrentSnapshot(db: D1Database): Promise<StoredSnapshot | null> {
+/**
+ * Reads the chunked remainder of the current snapshot — everything except the
+ * grid sources, which live in the relational store. Kept separate so a
+ * writeback can resolve snapshot metadata without materializing every sheet.
+ */
+async function readSnapshotMeta(db: D1Database): Promise<StoredSnapshot | null> {
   const [metadataResult, partsResult] = await db.batch([
     db.prepare(`SELECT s.id, s.generated_at, s.version, s.source_count, s.part_count,
       s.payload_bytes, s.created_at
@@ -154,18 +176,46 @@ export async function readCurrentSnapshot(db: D1Database): Promise<StoredSnapsho
   };
 }
 
+/**
+ * The frontend read model: chunked snapshot metadata merged with the relational
+ * sheet grids. Grids win over the chunked copy so a targeted status writeback
+ * is visible immediately, and an empty relational store simply yields whatever
+ * the chunked snapshot already held (the pre-migration shape).
+ */
+export async function readCurrentSnapshot(db: D1Database): Promise<StoredSnapshot | null> {
+  const meta = await readSnapshotMeta(db);
+  if (!meta) return null;
+  let grids: Record<string, string[][]>;
+  try {
+    grids = await readSheetGrids(db);
+  } catch (error) {
+    // If migration 0005 has not been applied yet, the current snapshot is still
+    // a pre-migration one that carries its grids inline — serve it rather than
+    // failing the read. Once the store is in use, an unreadable store is a real
+    // outage and must surface.
+    const { grids: legacy } = partitionSources(meta.sources);
+    if (!Object.keys(legacy).length) throw error;
+    console.error(JSON.stringify({ event: "d1-sheet-store-unavailable", error: String(error) }));
+    return meta;
+  }
+  return Object.keys(grids).length ? { ...meta, sources: { ...meta.sources, ...grids } } : meta;
+}
+
 export async function readDatabaseHealth(db: D1Database) {
-  const row = await db.prepare(`SELECT s.generated_at, s.created_at, s.source_count,
-    s.part_count, s.payload_bytes
-    FROM operational_state state
-    JOIN operational_snapshots s ON s.id = state.snapshot_id
-    WHERE state.key = 'current_snapshot'`).first<{
-      generated_at: string;
-      created_at: string;
-      source_count: number;
-      part_count: number;
-      payload_bytes: number;
-    }>();
+  const [row, sheetStore] = await Promise.all([
+    db.prepare(`SELECT s.generated_at, s.created_at, s.source_count,
+      s.part_count, s.payload_bytes
+      FROM operational_state state
+      JOIN operational_snapshots s ON s.id = state.snapshot_id
+      WHERE state.key = 'current_snapshot'`).first<{
+        generated_at: string;
+        created_at: string;
+        source_count: number;
+        part_count: number;
+        payload_bytes: number;
+      }>(),
+    readSheetStoreHealth(db).catch(() => ({ ready: false, sourceCount: 0, rowCount: 0, sources: [] })),
+  ]);
   return row ? {
     ready: true,
     generatedAt: row.generated_at,
@@ -174,7 +224,8 @@ export async function readDatabaseHealth(db: D1Database) {
     sourceCount: row.source_count,
     partCount: row.part_count,
     payloadBytes: row.payload_bytes,
-  } : { ready: false };
+    sheetStore,
+  } : { ready: false, sheetStore };
 }
 
 function normalize(value: unknown) {
@@ -191,31 +242,43 @@ function findStatusColumn(rows: string[][]) {
   return null;
 }
 
-function snapshotRowsForSheet(sources: Record<string, unknown>, sourceSheet: string) {
-  if (sourceSheet === "IMPORTS" && Array.isArray(sources.imports)) {
-    return { key: "imports", rows: sources.imports as string[][] };
-  }
+/** Maps an editable Sheet tab name onto its relational source key. */
+function sourceKeyForSheet(sources: Record<string, unknown>, sourceSheet: string) {
+  if (sourceSheet === "IMPORTS") return "imports";
   const outboundMeta = sources.outboundMeta as { sheetName?: string } | undefined;
-  if (outboundMeta?.sheetName === sourceSheet && Array.isArray(sources.outbound)) {
-    return { key: "outbound", rows: sources.outbound as string[][] };
-  }
+  if (outboundMeta?.sheetName === sourceSheet) return "outbound";
   return null;
 }
 
+/**
+ * Applies a Sheet-confirmed status to the D1 read model as a single-row write.
+ *
+ * The previous implementation rebuilt and re-persisted the entire snapshot for
+ * every status change; this resolves the one row and updates just that row, so
+ * writeback cost is independent of how much sheet data D1 holds.
+ */
 export async function applyConfirmedStatusToSnapshot(db: D1Database, input: {
   sourceSheet: string;
   sourceRow: number;
   entityId: string;
   status: string;
 }) {
-  const current = await readCurrentSnapshot(db);
-  if (!current) throw new Error("D1 frontend snapshot is not initialized");
-  const source = snapshotRowsForSheet(current.sources, input.sourceSheet);
-  if (!source) throw new Error(`D1 frontend does not contain editable source ${input.sourceSheet}`);
-  const info = findStatusColumn(source.rows);
+  const meta = await readSnapshotMeta(db);
+  if (!meta) throw new Error("D1 frontend snapshot is not initialized");
+  const sourceKey = sourceKeyForSheet(meta.sources, input.sourceSheet);
+  if (!sourceKey) throw new Error(`D1 frontend does not contain editable source ${input.sourceSheet}`);
+  let rows = await readSheetGrid(db, sourceKey);
+  if (!rows) {
+    // First writeback after the relational migration: the source still only
+    // exists inside the chunked snapshot, so seed it before updating in place.
+    const legacy = meta.sources[sourceKey];
+    if (!Array.isArray(legacy)) throw new Error(`D1 frontend does not contain editable source ${input.sourceSheet}`);
+    rows = legacy as string[][];
+    await syncSheetGrids(db, { [sourceKey]: rows }, meta.generatedAt);
+  }
+  const info = findStatusColumn(rows);
   if (!info) throw new Error(`D1 frontend source ${input.sourceSheet} has no status column`);
 
-  const rows = source.rows.map((row) => row.slice());
   let targetIndex = input.sourceRow - 1;
   const identity = normalize(input.entityId);
   if (targetIndex <= info.headerRow || targetIndex >= rows.length || (identity && !rows[targetIndex].some((cell) => normalize(cell) === identity))) {
@@ -225,19 +288,14 @@ export async function applyConfirmedStatusToSnapshot(db: D1Database, input: {
     if (candidates.length === 1) targetIndex = candidates[0].index;
     else if (targetIndex <= info.headerRow || targetIndex >= rows.length) throw new Error("D1 frontend row could not be resolved uniquely");
   }
-  rows[targetIndex][info.statusColumn] = input.status;
-  const sources = { ...current.sources, [source.key]: rows };
-  const next: OperationalSnapshot = {
-    ok: true,
-    generatedAt: new Date().toISOString(),
-    version: current.version,
-    sourceHealth: current.sourceHealth,
-    sources,
-    kpis: current.kpis,
-    kpiError: current.kpiError,
-  };
-  const persisted = await persistSnapshot(db, next);
-  return { ...persisted, targetIndex, statusColumn: info.statusColumn };
+
+  await updateSheetCell(db, {
+    sourceKey,
+    rowIndex: targetIndex,
+    columnIndex: info.statusColumn,
+    value: input.status,
+  });
+  return { sourceKey, targetIndex, statusColumn: info.statusColumn, rowsWritten: 1 };
 }
 
 export async function recordPendingReviewDecision(db: D1Database, event: {

@@ -15,13 +15,17 @@ import { fetchOperationalSources, type GmailIngestionEvent } from "./sources";
 import { handleStatusCommand } from "./status-command";
 import { handlePendingReviewCommand } from "./pending-review-command";
 import { handleTrackingCommand } from "./tracking-command";
+import { handleCmsWriteCommand } from "./cms-write-command";
 import { fetchCmsInventory } from "./cms-inventory";
 import { fetchCmsSalesKpis } from "./cms-sales-kpis";
+import {
+  cacheSnapshot,
+  readFreshCache,
+  SNAPSHOT_CACHE_SECONDS,
+  SNAPSHOT_REFRESH_SECONDS,
+} from "./snapshot-cache";
 
-const WORKER_VERSION = "2026-09-02-worker-v12-sse-d1-fastpath";
-const SNAPSHOT_CACHE_URL = "https://stylekorean.internal/api/logistics/snapshot";
-const SNAPSHOT_CACHE_SECONDS = 60;
-const SNAPSHOT_REFRESH_SECONDS = 15 * 60;
+const WORKER_VERSION = "2026-09-04-worker-v14-production-recovery";
 
 type DatabaseEnv = Env & { DB: D1Database };
 
@@ -167,26 +171,6 @@ function snapshotResponse(payload: OperationalSnapshot & Record<string, unknown>
   return json(payload, 200, `public, max-age=0, s-maxage=${SNAPSHOT_CACHE_SECONDS}`);
 }
 
-function cacheSnapshot(context: ExecutionContext, response: Response) {
-  const cache = (caches as CacheStorage & { default: Cache }).default;
-  const cachedResponse = response.clone();
-  cachedResponse.headers.set("cache-control", `public, max-age=${SNAPSHOT_REFRESH_SECONDS}`);
-  cachedResponse.headers.set("x-stylekorean-cached-at", String(Date.now()));
-  context.waitUntil(cache.put(new Request(SNAPSHOT_CACHE_URL), cachedResponse));
-}
-
-async function readFreshCache() {
-  const cache = (caches as CacheStorage & { default: Cache }).default;
-  const cached = await cache.match(new Request(SNAPSHOT_CACHE_URL));
-  if (!cached) return null;
-  const cachedAt = Number(cached.headers.get("x-stylekorean-cached-at") || 0);
-  if (!cachedAt || Date.now() - cachedAt > SNAPSHOT_CACHE_SECONDS * 1000) return { cached, fresh: false };
-  const response = new Response(cached.body, cached);
-  response.headers.set("cache-control", "public, max-age=0, must-revalidate");
-  response.headers.set("x-stylekorean-cache", "HIT-D1");
-  return { cached: response, fresh: true };
-}
-
 async function handleSnapshot(env: Env, context: ExecutionContext, forceRefresh = false) {
   if (!hasDatabase(env)) return json({ ok: false, error: "D1 frontend database is not configured", frontendSource: "d1" }, 503);
 
@@ -248,11 +232,13 @@ async function handleSnapshot(env: Env, context: ExecutionContext, forceRefresh 
 async function handleHealth(env: Env) {
   let databaseState: "unbound" | "initializing" | "ready" | "unavailable" = "unbound";
   let databaseAgeSeconds: number | undefined;
+  let sheetStore: Awaited<ReturnType<typeof readDatabaseHealth>>["sheetStore"] | undefined;
   if (hasDatabase(env)) {
     try {
       const health = await readDatabaseHealth(env.DB);
       databaseState = health.ready ? "ready" : "initializing";
       databaseAgeSeconds = health.ready ? health.ageSeconds : undefined;
+      sheetStore = health.sheetStore;
     } catch (error) {
       databaseState = "unavailable";
       console.error(JSON.stringify({ event: "d1-health-summary-failed", error: String(error) }));
@@ -270,8 +256,10 @@ async function handleHealth(env: Env) {
     databaseReady: databaseState === "ready",
     databaseState,
     databaseAgeSeconds,
+    sheetStore,
     deduplication: "enabled-before-d1-publish",
     statusWriteMode: "strict Google Sheets + D1 dual write",
+    statusWriteScope: "single relational row per confirmed status change",
     statusWriteAuthentication: "none",
     statusWriteRateLimit: "30 requests per 60 seconds per client IP and Cloudflare location",
     checkedAt: new Date().toISOString(),
@@ -451,12 +439,174 @@ async function handleStream(env: Env): Promise<Response> {
 const DEFAULT_FULFILLMENT_GAS_URL =
   "https://script.google.com/macros/s/AKfycbykK9DWjem9ORHxfR_mpdZl5DVh-en0D6JpCdIuel305QmfqxoNU_NqSnjkhFk401hI/exec";
 
-// Same-origin proxy for the live fulfillment feed. The frontend reads it only
-// through the Worker (never the browser calling Apps Script directly), keeping
-// every operational read same-origin. It is a live passthrough rather than a
-// D1-cached projection because fulfillment status (picking/inspection) is
-// real-time and a 15-minute snapshot cadence would render it stale; writes are
-// forwarded to the same endpoint and rate-limited like other write paths.
+type FulfillmentGvizTable = {
+  cols?: Array<{ label?: unknown }>;
+  rows?: Array<{ c?: Array<{ v?: unknown; f?: unknown } | null> }>;
+};
+
+type FulfillmentFallbackJob = {
+  invoice: string;
+  remarks: string;
+  customer: string;
+  shipDate: string;
+  pickComplete: boolean;
+  pickStart: string;
+  pickAnomaly: boolean;
+  method: string;
+  amount: number;
+  inspection: string;
+  status: string;
+  movedToPacking: boolean;
+  dimsCount: number;
+  dimsLinkedTo: string;
+};
+
+function fulfillmentHeader(value: unknown) {
+  return String(value ?? "").trim().toUpperCase().replace(/\s+/g, " ");
+}
+
+function fulfillmentCell(row: { c?: Array<{ v?: unknown; f?: unknown } | null> }, index: number) {
+  if (index < 0) return "";
+  const cell = row.c?.[index];
+  return String(cell?.f ?? cell?.v ?? "").trim();
+}
+
+function fulfillmentDateRank(value: string) {
+  const gviz = value.match(/^Date\((\d{4}),(\d{1,2}),(\d{1,2})/);
+  if (gviz) return Date.UTC(Number(gviz[1]), Number(gviz[2]), Number(gviz[3]));
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function fulfillmentAmount(value: string) {
+  const parsed = Number(value.replace(/[$,\s]/g, ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function fulfillmentFallbackJobs(snapshot: Awaited<ReturnType<typeof readCurrentSnapshot>>): FulfillmentFallbackJob[] {
+  const table = snapshot?.sources?.salesOutbound as FulfillmentGvizTable | undefined;
+  if (!table?.cols?.length || !table.rows?.length) return [];
+  const headers = table.cols.map((col) => fulfillmentHeader(col?.label));
+  const col = (...names: string[]) => names.map((name) => headers.indexOf(fulfillmentHeader(name))).find((index) => index >= 0) ?? -1;
+  const dateCol = col("DATE", "ORDER DATE", "CREATED AT");
+  const invoiceCol = col("INVOICE#", "INVOICE #", "INVOICE", "INVOICE NO.");
+  const customerCol = col("CUSTOMER", "CUSTOMER NAME");
+  const shipCol = col("SHIP OUT DATE", "SHIP DATE", "SHIP OUT");
+  const methodCol = col("SHIPPING METHOD", "METHOD", "TRUCKING");
+  const amountCol = col("INVOICE AMOUNT", "AMOUNT", "SALES");
+  if (invoiceCol < 0) return [];
+
+  return table.rows
+    .map((row) => {
+      const invoice = fulfillmentCell(row, invoiceCol);
+      const customer = fulfillmentCell(row, customerCol);
+      const shipDate = fulfillmentCell(row, shipCol);
+      const created = fulfillmentCell(row, dateCol);
+      return {
+        sortRank: Math.max(fulfillmentDateRank(shipDate), fulfillmentDateRank(created)),
+        job: {
+          invoice,
+          remarks: customer,
+          customer,
+          shipDate,
+          pickComplete: false,
+          pickStart: "",
+          pickAnomaly: false,
+          method: fulfillmentCell(row, methodCol),
+          amount: fulfillmentAmount(fulfillmentCell(row, amountCol)),
+          inspection: "",
+          status: "Source Degraded",
+          movedToPacking: false,
+          dimsCount: 0,
+          dimsLinkedTo: "",
+        } satisfies FulfillmentFallbackJob,
+      };
+    })
+    .filter(({ job }) => Boolean(job.invoice))
+    .sort((a, b) => b.sortRank - a.sortRank || b.job.invoice.localeCompare(a.job.invoice))
+    .slice(0, 500)
+    .map(({ job }) => job);
+}
+
+async function fulfillmentFallback(
+  env: Env,
+  op: string,
+  invoice: string,
+  reason: string,
+): Promise<Response | null> {
+  if (!hasDatabase(env)) return null;
+  const snapshot = await readCurrentSnapshot(env.DB).catch(() => null);
+  if (!snapshot) return null;
+  const jobs = fulfillmentFallbackJobs(snapshot);
+  if (!jobs.length) return null;
+  const warning = "Live fulfillment Apps Script is unavailable; serving the canonical WMS D1 snapshot. Picking, inspection, packing, and dimension fields remain pending until the live source reconnects.";
+  if (op === "getSalesInvoiceDetail") {
+    const job = jobs.find((item) => item.invoice.trim().toUpperCase() === invoice.trim().toUpperCase());
+    if (!job) return json({ ok: false, error: `Order not found in WMS fallback: ${invoice}`, degraded: true, source: "wms-d1-fallback" }, 404);
+    return json({
+      ok: true,
+      ...job,
+      items: [],
+      dimensions: [],
+      dims: [],
+      degraded: true,
+      source: "wms-d1-fallback",
+      generatedAt: snapshot.generatedAt,
+      warning,
+      upstreamError: reason,
+    });
+  }
+  if (op === "getSalesOverviewAndToday") {
+    return json({
+      ok: true,
+      overview: { ok: true, jobs },
+      today: { ok: true, jobs: [] },
+      degraded: true,
+      source: "wms-d1-fallback",
+      generatedAt: snapshot.generatedAt,
+      warning,
+      upstreamError: reason,
+    });
+  }
+  return json({
+    ok: true,
+    jobs,
+    degraded: true,
+    source: "wms-d1-fallback",
+    generatedAt: snapshot.generatedAt,
+    warning,
+    upstreamError: reason,
+  });
+}
+
+async function fetchFulfillmentGet(url: string) {
+  let current = url;
+  const redirects: string[] = [];
+  for (let hop = 0; hop < 4; hop += 1) {
+    const res = await fetch(current, {
+      cache: "no-store",
+      redirect: "manual",
+      // Google Apps Script commonly spends ~20–22 seconds executing the live
+      // overview after its redirect. Stay below the browser's 25s ceiling so
+      // authoritative fulfillment data wins when healthy, while D1 still
+      // returns before the client gives up if Google stalls beyond that.
+      signal: AbortSignal.timeout(23_000),
+    });
+    if (res.status < 300 || res.status >= 400) return res;
+    const location = res.headers.get("location");
+    if (!location) return res;
+    redirects.push(current);
+    current = new URL(location, current).toString();
+    if (redirects.some((seen) => seen === current)) throw new Error("Fulfillment source redirect loop detected");
+  }
+  throw new Error("Fulfillment source exceeded redirect limit");
+}
+
+// Same-origin proxy for the live fulfillment feed. The live Apps Script remains
+// authoritative for picking/inspection/packing details. If Google enters a
+// redirect loop or times out, GET reads degrade to the canonical WMS data already
+// synchronized into D1. The fallback never invents fulfillment-only state and
+// never handles writes; mutations continue to require the authoritative source.
 async function handleFulfillment(request: Request, env: Env): Promise<Response> {
   const target = env.FULFILLMENT_GAS_URL || DEFAULT_FULFILLMENT_GAS_URL;
   const proxyJson = (body: string, status: number) =>
@@ -464,13 +614,35 @@ async function handleFulfillment(request: Request, env: Env): Promise<Response> 
       status,
       headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
     });
-  try {
-    if (request.method === "GET") {
-      const upstream = new URL(target);
-      new URL(request.url).searchParams.forEach((value, key) => upstream.searchParams.set(key, value));
-      const res = await fetch(upstream.toString(), { cache: "no-store", signal: AbortSignal.timeout(25_000) });
-      return proxyJson(await res.text(), res.ok ? 200 : 502);
+  if (request.method === "GET") {
+    const requestUrl = new URL(request.url);
+    const op = requestUrl.searchParams.get("op")?.trim() || "getSalesOverview";
+    const invoice = requestUrl.searchParams.get("invoice")?.trim() || "";
+    const upstream = new URL(target);
+    requestUrl.searchParams.forEach((value, key) => upstream.searchParams.set(key, value));
+    try {
+      const res = await fetchFulfillmentGet(upstream.toString());
+      const body = await res.text();
+      if (res.ok) {
+        try {
+          const parsed = JSON.parse(body) as { ok?: boolean };
+          if (parsed && parsed.ok !== false) return proxyJson(body, 200);
+        } catch {
+          // Fall through to D1 rather than returning HTML/redirect debris as JSON.
+        }
+      }
+      const fallback = await fulfillmentFallback(env, op, invoice, `Live source returned HTTP ${res.status}`);
+      if (fallback) return fallback;
+      return proxyJson(body || JSON.stringify({ ok: false, error: "Fulfillment source unavailable and no fallback data is ready" }), 502);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.error(JSON.stringify({ event: "fulfillment-live-source-failed", op, error: reason }));
+      const fallback = await fulfillmentFallback(env, op, invoice, reason);
+      if (fallback) return fallback;
+      return json({ ok: false, error: reason }, 502);
     }
+  }
+  try {
     if (request.method === "POST") {
       // Fulfillment writes (setManualPackingMoved / saveDimensions) mutate WMS
       // state, so reject cross-site requests up front — matching the status,
@@ -539,6 +711,8 @@ export default {
       response = await handleStatusCommand(request, env, context);
     } else if (url.pathname === "/api/logistics/pending-review") {
       response = await handlePendingReviewCommand(request, env, context);
+    } else if (url.pathname === "/api/logistics/cms-write") {
+      response = await handleCmsWriteCommand(request, env);
     } else if (url.pathname === "/api/logistics/tracking") {
       response = await handleTrackingCommand(request, env);
     } else if (url.pathname === "/api/logistics/fulfillment") {

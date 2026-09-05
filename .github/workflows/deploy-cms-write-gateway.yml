@@ -1,0 +1,121 @@
+name: Deploy CMS write gateway
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cms-write-gateway/**'
+      - 'wrangler.cms-write-gateway.toml'
+      - 'migrations/0006_cms_write_queue.sql'
+      - '.github/workflows/deploy-cms-write-gateway.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cms-write-gateway-production
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate required secrets
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CMS_WRITE_TOKEN: ${{ secrets.CMS_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -n "${CLOUDFLARE_API_TOKEN:-}" ] || missing+=("CLOUDFLARE_API_TOKEN")
+          [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || missing+=("CLOUDFLARE_ACCOUNT_ID")
+          [ -n "${CMS_WRITE_TOKEN:-}" ] || missing+=("CMS_WRITE_TOKEN")
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "Missing required GitHub Actions secrets:" >&2
+            printf '  - %s\n' "${missing[@]}" >&2
+            echo "Create them under Settings > Secrets and variables > Actions." >&2
+            echo "CMS_WRITE_TOKEN is a new random shared secret (e.g. openssl rand -hex 32)." >&2
+            exit 1
+          fi
+          echo "All required secrets are configured."
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck project
+        run: npm run typecheck
+
+      - name: Apply shared D1 migrations (cms_write_queue)
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler d1 migrations apply stylekorean-logistics-read-model --remote
+
+      - name: Distribute CMS_WRITE_TOKEN to write gateway and main site Worker
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CMS_WRITE_TOKEN: ${{ secrets.CMS_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          # The write gateway requires the token to authorize any request.
+          printf '%s' "$CMS_WRITE_TOKEN" | npx wrangler secret put CMS_WRITE_TOKEN --name stylekorean-cms-write-gateway --config wrangler.cms-write-gateway.toml
+          # The main site Worker needs the same token to forward browser writes to the gateway.
+          printf '%s' "$CMS_WRITE_TOKEN" | npx wrangler secret put CMS_WRITE_TOKEN --name stylekorean
+
+      - name: Deploy CMS write gateway Worker
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --config wrangler.cms-write-gateway.toml 2>&1 | tee /tmp/cms-write-gateway-deploy.log
+          grep -Eo 'https://[^ ]+workers.dev' /tmp/cms-write-gateway-deploy.log | tail -1 > /tmp/cms-write-gateway-url.txt || true
+          echo "CMS write gateway URL: $(cat /tmp/cms-write-gateway-url.txt 2>/dev/null || true)"
+
+      - name: Verify write gateway health stays in dry-run
+        shell: bash
+        run: |
+          set -euo pipefail
+          gateway_url="$(cat /tmp/cms-write-gateway-url.txt)"
+          test -n "$gateway_url"
+
+          health_ok=0
+          for attempt in 1 2 3 4 5 6; do
+            status="$(curl -sS --max-time 30 -o /tmp/cms-write-health.json -w '%{http_code}' "$gateway_url/health" || true)"
+            if [ "$status" = "200" ] && grep -Fq '"ok":true' /tmp/cms-write-health.json; then
+              health_ok=1
+              break
+            fi
+            echo "Write gateway health attempt ${attempt} returned HTTP ${status}"
+            cat /tmp/cms-write-health.json 2>/dev/null || true
+            sleep 10
+          done
+          if [ "$health_ok" -ne 1 ]; then
+            echo "CMS write gateway health never became reachable"
+            exit 1
+          fi
+
+          echo "Write gateway health:"
+          cat /tmp/cms-write-health.json
+          echo
+          # Rollout guard: a production deploy must remain in dry-run until the
+          # upstream write contract is verified. Flip CMS_WRITE_DRY_RUN to
+          # "false" only as a deliberate, separate change.
+          if ! grep -Fq '"dryRun":true' /tmp/cms-write-health.json; then
+            echo "::error::CMS write gateway is NOT in dry-run mode. Refusing to treat this deploy as safe."
+            exit 1
+          fi

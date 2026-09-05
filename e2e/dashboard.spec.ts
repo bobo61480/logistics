@@ -431,6 +431,9 @@ test("renders live schedules and KPI cards from the D1 snapshot", async ({ page 
   await expect(importTable.locator('a[href*="maersk.com/tracking"]')).toHaveCount(1);
   // An ocean SCAC-style container number classifies the shipment as Ocean.
   await expect(page.locator(".import-totals")).toContainText("1 Ocean");
+  // Status is rendered read-only: a color-coded pill, never an editable control.
+  await expect(importTable.locator(".status")).toContainText("Shipping");
+  await expect(importTable.getByLabel("Update HJ99 - 2026 status")).toHaveCount(0);
 
   // Outbound trucking board shows the Outbound Shipping Schedule fixture.
   await expect(page.locator(".outbound-panel")).toContainText("ULTA BEAUTY");
@@ -466,9 +469,7 @@ test("renders live schedules and KPI cards from the D1 snapshot", async ({ page 
   await expect(kpiCard("TRUCKLOAD MIX")).toContainText("33%");
   await expect(kpiCard("TRUCKLOAD MIX")).toContainText("67%");
 
-  // Total trucking cost (transfers excluded): all trucking $4,600, with the
-  // California lane $1,200 and the out-of-state lane $3,400.
-  await expect(kpiCard("TOTAL TRUCKING COST")).toContainText("$4,600");
+  // Lane totals (transfers excluded): local $1,200, out of state $3,400.
   await expect(kpiCard("TOTAL TRUCKING COST")).toContainText("$1,200");
   await expect(kpiCard("TOTAL TRUCKING COST")).toContainText("$3,400");
 
@@ -497,39 +498,60 @@ test("renders live schedules and KPI cards from the D1 snapshot", async ({ page 
   expect(directSheetReads, `unexpected direct Sheets reads: ${directSheetReads.join(", ")}`).toEqual([]);
 });
 
-test("saves a status edit through the Apps Script endpoint and confirms it", async ({ page }) => {
-  const state = await mockWorkbooks(page);
+test("reconciles the tracked shipment updates panel against live source rows", async ({ page }) => {
+  await mockWorkbooks(page);
   await page.goto("/");
 
-  // The same shipment also renders as a board card with an identically
-  // labelled select, so scope to the Import Schedules table.
-  const statusSelect = page.locator(".import-table").getByLabel("Update HJ99 - 2026 status");
-  await expect(statusSelect).toBeVisible();
-  await expect(statusSelect).toHaveValue("Shipping");
+  const panel = page.locator(".tracked-updates-panel");
+  await expect(panel.getByRole("heading", { name: "Tracked Shipment Updates" })).toBeVisible();
 
-  await statusSelect.selectOption("Customs Clearance");
+  // The needsReview fixture event (IN00778) has no ETA and must surface with a
+  // priority badge and its issue text — nothing here is hard-coded in the app.
+  const row = panel.locator(".tracked-update", { hasText: "IN00778" });
+  await expect(row).toHaveCount(1);
+  await expect(row).toContainText("No ETA or ship date found.");
+  await expect(row.locator(".tracked-priority")).toBeVisible();
 
-  // The card only updates after the endpoint confirms AND the re-read of the
-  // status cell returns the new value (mocked via state.postedStatus).
-  await expect(page.locator(".toast")).toContainText("HJ99 - 2026 updated to Customs Clearance.");
-  await expect(statusSelect).toHaveValue("Customs Clearance");
+  // The reviewed-through line is the snapshot's own generation time, so it can
+  // never read as a stale hand-review date.
+  await expect(panel.locator(".tracked-updates-sub")).not.toContainText("08/22/26");
 
-  // The write payload targets the exact source row with full identifiers.
-  expect(state.postedPayload).toMatchObject({
-    kind: "inbound",
-    sourceSheet: "IMPORTS",
-    sourceRow: 3,
-    shipmentNo: "HJ99 - 2026",
-    container: "MSKU1234567",
-    currentStatus: "Shipping",
-    status: "Customs Clearance",
-  });
+  // A row that resolves to a live schedule item links at that sheet + row; one
+  // that resolves to nothing says so instead of inventing a row number.
+  const footers = panel.locator(".tracked-update-foot");
+  await expect(footers.first()).toBeVisible();
+  for (const text of await footers.allTextContents()) {
+    expect(text).toMatch(/row \d+|No source link|Source email|No matching source row/);
+  }
 
-  // Marking the shipment Delivered counts as finished, so the row leaves the
-  // "current + upcoming" Import Schedules table entirely.
-  await statusSelect.selectOption("Delivered");
-  await expect(page.locator(".import-table")).not.toContainText("HJ99 - 2026");
-  expect(state.postedStatus).toBe("Delivered");
+  await panel.screenshot({ path: "test-results/tracked-shipment-updates.png" });
+});
+
+test("presents the schedule read-only with no status-write controls", async ({ page }) => {
+  // Status editing has been removed from the UI: the app never lets a user push
+  // status changes back to the sheet. Statuses are display-only pills, and the
+  // Inventory Alerts panel replaces the former Status Workflow legend.
+  await mockWorkbooks(page);
+  await page.goto("/");
+
+  await expect(page.locator(".import-table")).toContainText("HJ99 - 2026");
+
+  // No status <select> / combobox anywhere on the page, and no "Update … status"
+  // control that the old inline editor exposed.
+  await expect(page.getByRole("combobox", { name: /Update .* status/ })).toHaveCount(0);
+  await expect(page.getByLabel("Update HJ99 - 2026 status")).toHaveCount(0);
+
+  // The former "Status Workflow" panel is gone, replaced by "Inventory Alerts".
+  await expect(page.getByRole("heading", { name: "Status Workflow" })).toHaveCount(0);
+  const alertsPanel = page.locator(".inventory-alerts-panel");
+  await expect(alertsPanel.getByRole("heading", { name: "Inventory Alerts" })).toBeVisible();
+
+  // This fixture ships no inventory tabs (dashboard/SKW all null), so the panel
+  // must report a degraded "data unavailable" state — NOT a healthy "no alerts"
+  // — since it cannot tell whether stock is fine when nothing loaded.
+  await expect(alertsPanel.locator(".inventory-alerts-degraded")).toBeVisible();
+  await expect(alertsPanel).toContainText("Inventory data unavailable");
+  await expect(alertsPanel).not.toContainText("healthy available cover");
 });
 
 test("shows the failure banner when the Worker snapshot endpoint fails", async ({ page }) => {

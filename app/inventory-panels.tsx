@@ -1,14 +1,13 @@
 "use client";
 
 // SKW Inventory Panels — active inbound allocation + current warehouse stock.
-// Reads the filtered INVENTORY aggregate and SKW_Stock tabs (created by the
-// Apps Script inventory sync inside LOGISTICS MASTER 2026) via the gviz
-// CSV endpoint. Tab-name addressing + cb + no-store per SKW conventions.
+// Browser reads stay on the same-origin D1 API. Google Sheets is synchronized
+// server-side into D1 and is never queried directly by this component.
 
 import { useCallback, useEffect, useState } from "react";
 
-const MASTER_ID = "1M-vZ24Yw4ZN7R7b_473cVn8kny8DznTakSsD3VQsCzc";
-const REFRESH_MS = 30 * 60 * 1000;
+const REFRESH_MS = 15 * 60 * 1000;
+const SHEETS_ENDPOINT = "/api/logistics/sheets";
 
 type StockRow = {
   sku: string;
@@ -22,38 +21,21 @@ type StockRow = {
   eta: string;
 };
 
-function gvizUrl(tab: string) {
-  return (
-    `https://docs.google.com/spreadsheets/d/${MASTER_ID}/gviz/tq?tqx=out:csv` +
-    `&sheet=${encodeURIComponent(tab)}&cb=${Date.now()}`
-  );
-}
-
-function parseCsvSimple(text: string): string[][] {
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let value = "";
-  let quoted = false;
-  for (let i = 0; i < text.length; i += 1) {
-    const c = text[i];
-    if (quoted) {
-      if (c === '"' && text[i + 1] === '"') { value += '"'; i += 1; }
-      else if (c === '"') quoted = false;
-      else value += c;
-    } else if (c === '"') quoted = true;
-    else if (c === ",") { row.push(value); value = ""; }
-    else if (c === "\n") { row.push(value.replace(/\r$/, "")); rows.push(row); row = []; value = ""; }
-    else value += c;
-  }
-  if (value || row.length) { row.push(value.replace(/\r$/, "")); rows.push(row); }
-  return rows;
-}
+type D1SheetPayload = {
+  ok?: boolean;
+  rows?: string[][];
+  error?: string;
+  frontendSource?: string;
+};
 
 async function fetchTab(tab: string): Promise<string[][]> {
-  const res = await fetch(gvizUrl(tab), { cache: "no-store" });
-  const text = await res.text();
-  if (text.trim().startsWith("<")) throw new Error(`${tab} is not link-readable`);
-  return parseCsvSimple(text);
+  const params = new URLSearchParams({ document: "logistics-master", tab });
+  const res = await fetch(`${SHEETS_ENDPOINT}?${params}`, { cache: "no-store" });
+  const payload = await res.json().catch(() => null) as D1SheetPayload | null;
+  if (!res.ok || payload?.ok !== true || payload.frontendSource !== "d1" || !Array.isArray(payload.rows)) {
+    throw new Error(payload?.error || `${tab} D1 mirror is unavailable`);
+  }
+  return payload.rows;
 }
 
 function indexHeaders(header: string[]): Record<string, number> {
@@ -120,7 +102,7 @@ export default function InventoryPanels() {
       setError("");
     } catch (err) {
       setState("error");
-      setError(err instanceof Error ? err.message : "Inventory read failed.");
+      setError(err instanceof Error ? err.message : "Inventory D1 read failed.");
     }
   }, []);
 
@@ -146,7 +128,7 @@ export default function InventoryPanels() {
         </thead>
         <tbody>
           {state === "loading" && (
-            <tr><td className="import-empty" colSpan={7}>Syncing inventory…</td></tr>
+            <tr><td className="import-empty" colSpan={7}>Syncing inventory from D1…</td></tr>
           )}
           {state === "error" && (
             <tr><td className="import-empty" colSpan={7}>{error}</td></tr>

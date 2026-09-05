@@ -27,7 +27,8 @@ Run `typecheck` and `npm test` before every commit. The project uses `"strict": 
 - **`output: "export"`** — the UI is a static export. Cloudflare handles server-side API routes and assets; do not add Next.js API routes.
 - **Frontend authority:** browser → same-origin Worker snapshot API → Cloudflare D1. The browser must never bypass D1 by reading Google Sheets as an operational fallback.
 - **Source refresh:** Worker → approved Apps Script/Google Sheets sources → normalization/deduplication → D1. During a short source outage, serve the last good D1 snapshot with an explicit stale marker rather than changing data authority.
-- **Status writes:** browser → same-origin Worker status API → Google Sheets → confirmed D1 update. A successful response means both stores were reconciled; do not add a D1-only or Sheet-only success path.
+- **D1 shape:** every grid-shaped sheet source is stored row-by-row in `sheet_rows`, keyed by `(source_key, row_index)` and fingerprinted by a content hash, so a refresh writes only the rows that changed. The non-grid remainder (source health, KPIs, GViz tables, ingestion events, CMS projections) stays in the chunked `operational_snapshot*` tables behind the atomic `current_snapshot` pointer. Reads merge the two, with relational rows winning.
+- **Status writes:** browser → same-origin Worker status API → Google Sheets → confirmed D1 update → edge-cache invalidation. The D1 half is a single-row `UPDATE` in `sheet_rows`, not a snapshot republish. A successful response means both stores were reconciled; do not add a D1-only or Sheet-only success path.
 - **Tracking:** carrier credentials remain server-side. UPS, FedEx, USPS, and DHL Unified are supported adapters. Amazon Shipping tracking is not live until purchased-shipment `trackingId` and required `carrierId` are stored together.
 - **Siliconii CMS:** only approved reduced inventory projections may enter the public snapshot. Do not expose raw CMS outbound/order records without an authenticated surface and an explicit allowed-field contract.
 - Auto-refresh: every 30 minutes (`AUTO_REFRESH_MS`), with D1 refresh handled independently by the Worker/cron.
@@ -40,10 +41,15 @@ Run `typecheck` and `npm test` before every commit. The project uses `"strict": 
 | `app/live-map.tsx` | Shared carrier tracking poll + shipment map |
 | `app/inventory-reconciliation-card.tsx` | Warehouse vs Siliconii inventory comparison |
 | `worker/index.ts` | D1 snapshot/health/reconciliation router and scheduled refresh |
+| `worker/sheet-store.ts` | Relational `sheet_rows` mirror: delta sync, row reads, single-row writeback |
+| `worker/snapshot-cache.ts` | Edge cache in front of the D1 snapshot (put / read / invalidate) |
+| `worker/database.ts` | Chunked snapshot metadata, health, confirmed status writeback, audit events |
 | `worker/sources.ts` | Server-side source acquisition and normalization |
 | `worker/status-command.ts` | Strict Google Sheets + D1 status write path |
 | `worker/carrier-tracking.ts` | UPS/FedEx/USPS/DHL provider adapters |
 | `worker/cms-inventory.ts` | Restricted Siliconii inventory projection |
+| `cms-write-gateway/worker.ts` | CMS write rollout gateway: token-authenticated, D1-queued, dry-run by default |
+| `app/send-to-cms-button.tsx` | Two-step "Send to CMS" control on outbound cards (confirm → queue) |
 | `lib/sales-kpis.ts` | KPI parsing and calculation |
 | `google-apps-script/Code.gs` | Apps Script bound to LOGISTICS MASTER 2026; handles approved operations |
 | `archive/legacy-static-site/` | Historical reference only; never deploy from here |
@@ -72,12 +78,15 @@ GitHub Pages is not a production target. Keep the repository's Pages feature dis
 
 ## Common Pitfalls
 
-- Do not create backup/copy sheets, nested repository copies, parallel data stores, or duplicate event feeds. Use version history, audit logs, and deterministic deduplication instead.
+- Do not create backup/copy sheets, nested repository copies, parallel data stores, or duplicate event feeds. Use version history, audit logs, and deterministic deduplication instead. A second Worker entry point or a second D1 schema is a parallel data store — `worker/` and `migrations/` are the only ones.
+- Do not republish the whole snapshot to record a single change. Writebacks target one relational row.
 - Update `APPS_SCRIPT_WRITE_URL` in `wrangler.toml` only if the Apps Script deployment ID is intentionally replaced. Normal clasp deployments update the existing ID.
 - Do **not** add `export const runtime = "edge"` or other server-side Next.js constructs — `output: "export"` will break the build.
 - Do not add a Pages `CNAME`; `wrangler.toml` is the production hostname source of truth.
 - Do not reintroduce browser direct-Sheets fallback. D1 is the frontend authority even during source outages.
 - Do not treat carrier proof-of-delivery/photo fields alone as delivery confirmation; use authoritative provider status/events.
+- CMS writes go only through `stylekorean-cms-write-gateway` (queue → dry-run → upstream). Never call CMS write endpoints from the browser, the main Worker, or the read-only gateway. `CMS_WRITE_DRY_RUN` stays `"true"` until the upstream write contract is verified; flipping it is a deliberate deploy.
+- `CMS_WRITE_TOKEN` is a shared bearer secret between the main Worker and the write gateway; the deploy-cms-write-gateway workflow provisions it on both. Never put it in vars, logs, or workflow command lines.
 - Do not send arbitrary Amazon `TBA...` values to Shipping v2. Its tracking contract requires the purchased shipment's matching `carrierId`.
 - `archive/legacy-static-site/` is reference-only.
 

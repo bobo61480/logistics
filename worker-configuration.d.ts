@@ -7,8 +7,12 @@ interface __BaseEnv_Env {
 	FULFILLMENT_GAS_URL: "https://script.google.com/macros/s/AKfycbykK9DWjem9ORHxfR_mpdZl5DVh-en0D6JpCdIuel305QmfqxoNU_NqSnjkhFk401hI/exec";
 	CMS_MCP_URL: "https://cms.mcp.siliconii.com/mcp/";
 	CMS_GATEWAY_URL: "https://stylekorean-cms-gateway.stylekorean.workers.dev";
+	CMS_WRITE_GATEWAY_URL: "https://stylekorean-cms-write-gateway.stylekorean.workers.dev";
 	CMS_MCP_AUTH_TOKEN?: string;
 	CMS_IMS_API_KEY?: string;
+	// CMS write rollout: shared bearer token between this Worker and the
+	// stylekorean-cms-write-gateway Worker (provisioned via `wrangler secret put`).
+	CMS_WRITE_TOKEN?: string;
 	// Carrier tracking API secrets are provisioned via `wrangler secret put`, not wrangler.toml
 	// vars, so `wrangler types` cannot see them — declared manually here to match carrier-tracking.ts.
 	UPS_CLIENT_ID?: string;

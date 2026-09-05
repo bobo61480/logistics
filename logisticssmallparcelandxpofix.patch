@@ -1,0 +1,101 @@
+diff --git a/app/globals.css b/app/globals.css
+index b2669c8..67ee693 100644
+--- a/app/globals.css
++++ b/app/globals.css
+@@ -1207,11 +1207,18 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
+   cursor: pointer;
+ }
+ 
+-.parcel-summary .source-badge { font-size: 10px; }
++/* Non-title shipment text inside the Small Parcels cards was a mix of 8-10px
++   across badges, tracking, invoice, footer, and the status control, while
++   .parcel-tracking alone sat at 11px -- normalized here to one consistent,
++   slightly larger size so every row reads at the same weight. Card titles
++   (.parcel-heading h2) and the summary count (.parcel-total) are untouched. */
++.parcel-badges .department-badge,
++.parcel-badges .source-badge,
++.parcel-summary .source-badge { font-size: 11px; }
+ .parcel-invoice {
+   overflow: hidden;
+   color: var(--muted);
+-  font: 600 10px "IBM Plex Mono", monospace;
++  font: 600 11px "IBM Plex Mono", monospace;
+   text-overflow: ellipsis;
+   white-space: nowrap;
+ }
+@@ -1243,7 +1250,7 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
+   display: block;
+   overflow: hidden;
+   color: var(--muted);
+-  font: 600 10px "IBM Plex Mono", monospace;
++  font: 600 11px "IBM Plex Mono", monospace;
+   letter-spacing: .01em;
+   text-overflow: ellipsis;
+   white-space: nowrap;
+@@ -1253,16 +1260,16 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
+   min-height: 31px;
+   margin: 7px 0 11px;
+   color: var(--muted);
+-  font-size: 10px;
++  font-size: 11px;
+   line-height: 1.5;
+ }
+ 
+ .parcel-footer {
+   color: var(--ink-soft);
+-  font: 600 10px "IBM Plex Mono", monospace;
++  font: 600 11px "IBM Plex Mono", monospace;
+ }
+ 
+-.parcel-footer b { margin-right: 3px; font-size: 10px; }
++.parcel-footer b { margin-right: 3px; font-size: 11px; }
+ 
+ .parcel-footer a {
+   min-height: 28px;
+@@ -1275,6 +1282,8 @@ button, a, select { -webkit-tap-highlight-color: transparent; }
+ }
+ 
+ .parcel-status-field { margin-top: 8px; }
++.parcel-status-field span { font-size: 11px; }
++.parcel-status-field select { font-size: 11px; }
+ 
+ .parcel-empty {
+   grid-column: 1 / -1;
+diff --git a/google-apps-script/GmailXpoV2.gs b/google-apps-script/GmailXpoV2.gs
+index 6aa3b5a..6ca8aed 100644
+--- a/google-apps-script/GmailXpoV2.gs
++++ b/google-apps-script/GmailXpoV2.gs
+@@ -159,7 +159,32 @@ function xpoCanonicalStatusV2_(rawStatus, body) {
+ 
+ function xpoDisplayProV2_(value) {
+   var digits = String(value || "").replace(/\D/g, "");
+-  return digits || String(value || "").trim();
++  if (!digits) return String(value || "").trim();
++
++  // XPO's own "Shipment : XXX-YYYYYY" body field already matches the source
++  // sheets' PRO# format directly (see parseXpoMessageV2_'s shipmentPro regex)
++  // and is preferred over this function. This function only runs as a
++  // fallback when that field is missing and we're left with the continuous
++  // digit string from the email subject ("Pro NNNNNNNNNN") or the "Pro
++  // Number : NNNNNNNNNN" body field instead.
++  //
++  // That continuous string is NOT the same digits as the sheet's "XXX-YYYYYY"
++  // PRO# with the dash removed -- XPO's format embeds one extra "0" after the
++  // first 3 digits (e.g. body "Shipment : 755-361935" vs. subject
++  // "Pro 07550361935" for the identical shipment). Left unconverted, this
++  // fallback never matches any source row (xpoKeyV2_ strips non-alphanumerics
++  // from both sides before comparing, so the extra digit alone breaks the
++  // match) and the notice piles up in PENDING VERIFICATION as
++  // "No source row matched XPO PO ... / PRO ...". Confirmed against 573
++  // historical XPO "Delivered" notices: 573/574 fit this exact pattern.
++  var normalized = digits;
++  if (normalized.length === 11 && normalized.charAt(0) === "0") {
++    normalized = normalized.slice(1); // drop XPO's leading zero -> 10 digits
++  }
++  if (normalized.length === 10 && normalized.charAt(3) === "0") {
++    return normalized.slice(0, 3) + "-" + normalized.slice(4); // XXX0YYYYYY -> XXX-YYYYYY
++  }
++  return digits;
+ }
+ 
+ function xpoKeyV2_(value) {

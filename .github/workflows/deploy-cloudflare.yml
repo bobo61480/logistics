@@ -52,11 +52,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          set -uo pipefail
-          if ! npx wrangler d1 migrations apply stylekorean-logistics-read-model --remote; then
-            echo "::warning::D1 migrations apply failed — continuing so Worker deployment can still proceed."
-          fi
+        run: npx wrangler d1 migrations apply stylekorean-logistics-read-model --remote
 
       - name: Deploy canonical Worker and preserve production route
         shell: bash
@@ -68,7 +64,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -n "${CMS_IMS_API_KEY:-}" ]; then
-            printf '%s' "$CMS_IMS_API_KEY" | npx wrangler secret put CMS_IMS_API_KEY --name stylekorean
+            printf '%s' "$CMS_IMS_API_KEY" | npx wrangler secret put CMS_IMS_API_KEY --name logistics
           else
             echo "CMS_IMS_API_KEY repository secret is not configured"
             exit 1
@@ -239,7 +235,7 @@ jobs:
               && grep -Fq 'generatedAt' /tmp/live-snapshot.json \
               && grep -Fiq 'x-content-type-options: nosniff' /tmp/live-health.headers \
               && grep -Fiq 'x-frame-options: DENY' /tmp/live-health.headers \
-              && node -e 'const fs=require("fs"); const health=JSON.parse(fs.readFileSync("/tmp/live-health.json","utf8")); const reconciliation=JSON.parse(fs.readFileSync("/tmp/live-reconciliation.json","utf8")); const snapshot=JSON.parse(fs.readFileSync("/tmp/live-snapshot.json","utf8")); const monthly=JSON.parse(fs.readFileSync("/tmp/live-monthly-kpis.json","utf8")); if(health.ok!==true||health.version!=="2026-09-02-worker-v12-sse-d1-fastpath"||health.frontendSource!=="d1"||health.databaseConfigured!==true||health.databaseReady!==true||reconciliation.ok!==true||reconciliation.frontendSource!=="d1"||snapshot.ok!==true||snapshot.storage!=="d1"||snapshot.frontendSource!=="d1"||snapshot.stale===true||!Array.isArray(snapshot.sourceHealth)||Number.isNaN(Date.parse(snapshot.generatedAt))) process.exit(1); if(monthly.ok!==true||!monthly.kpis||!Number.isFinite(monthly.kpis.wmsSalesMtd)||!Number.isFinite(monthly.kpis.wmsSalesYtd)||!["siliconii-cms-invoices","wms-sheet-fallback"].includes(monthly.source)) process.exit(1); if(!String(health.dataStore).includes("D1")||Number(health.databaseAgeSeconds)>30*60||Date.now()-Date.parse(snapshot.generatedAt)>30*60*1000) process.exit(1); const sources=new Map(snapshot.sourceHealth.map(i=>[i.name,i])); if(!sources.get("IMPORTS")?.ok) process.exit(1); const meta=snapshot.sources?.outboundMeta; if(!meta||!["Outbound Shipping Schedule","WH Trucking Request"].includes(meta.sheetName)||!sources.get(meta.sheetName)?.ok) process.exit(1); console.log(`Live ${health.version}; frontend=${health.frontendSource}; storage=${snapshot.storage}; sales=${monthly.source}; ageSeconds=${health.databaseAgeSeconds}; snapshot=${snapshot.generatedAt}`);'; then
+              && node -e 'const fs=require("fs"); const health=JSON.parse(fs.readFileSync("/tmp/live-health.json","utf8")); const reconciliation=JSON.parse(fs.readFileSync("/tmp/live-reconciliation.json","utf8")); const snapshot=JSON.parse(fs.readFileSync("/tmp/live-snapshot.json","utf8")); const monthly=JSON.parse(fs.readFileSync("/tmp/live-monthly-kpis.json","utf8")); if(health.ok!==true||health.version!=="2026-09-04-worker-v14-production-recovery"||health.frontendSource!=="d1"||health.databaseConfigured!==true||health.databaseReady!==true||reconciliation.ok!==true||reconciliation.frontendSource!=="d1"||snapshot.ok!==true||snapshot.storage!=="d1"||snapshot.frontendSource!=="d1"||snapshot.stale===true||!Array.isArray(snapshot.sourceHealth)||Number.isNaN(Date.parse(snapshot.generatedAt))) process.exit(1); if(monthly.ok!==true||!monthly.kpis||!Number.isFinite(monthly.kpis.wmsSalesMtd)||!Number.isFinite(monthly.kpis.wmsSalesYtd)||!["siliconii-cms-invoices","wms-sheet-fallback"].includes(monthly.source)) process.exit(1); if(!String(health.dataStore).includes("D1")||Number(health.databaseAgeSeconds)>30*60||Date.now()-Date.parse(snapshot.generatedAt)>30*60*1000) process.exit(1); const sources=new Map(snapshot.sourceHealth.map(i=>[i.name,i])); if(!sources.get("IMPORTS")?.ok) process.exit(1); const meta=snapshot.sources?.outboundMeta; if(!meta||!["Outbound Shipping Schedule","WH Trucking Request"].includes(meta.sheetName)||!sources.get(meta.sheetName)?.ok) process.exit(1); console.log(`Live ${health.version}; frontend=${health.frontendSource}; storage=${snapshot.storage}; sales=${monthly.source}; ageSeconds=${health.databaseAgeSeconds}; snapshot=${snapshot.generatedAt}`);'; then
               echo "Live custom domain, D1 frontend, and Worker APIs verified."
               exit 0
             fi

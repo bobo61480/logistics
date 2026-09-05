@@ -16,9 +16,12 @@ describe("shared MTD month selection", () => {
       today: { year: 2026, month: 9, day: 15, code: 20260915 },
       selectedMonth: "2026-08",
       nationalRows: [
-        ["Status", "Channel", "Dept", "PO#", "Amount", "Spacer", "Order Date"],
-        ["Open", "", "National", "AUG", "1000", "", "08/10/2026"],
-        ["Open", "", "National", "SEP", "2000", "", "09/10/2026"],
+        // Dollars live in "Amount in $"; "Amount" is unit quantity and is never
+        // read as revenue. This fixture exercises month selection, not amount
+        // parsing, so it just needs the dollar column populated.
+        ["Status", "Channel", "Dept", "PO#", "Amount", "Amount in $", "Order Date"],
+        ["Open", "", "National", "AUG", "10", "1000", "08/10/2026"],
+        ["Open", "", "National", "SEP", "20", "2000", "09/10/2026"],
       ],
       wmsRows: [
         ["DATE", "B", "C", "D", "E", "F", "INVOICE AMOUNT"],

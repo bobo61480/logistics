@@ -1,8 +1,8 @@
-name = "stylekorean"
-main = "worker/index.ts"
+name = "logistics"
+main = "worker/cached-index.ts"
 compatibility_date = "2026-08-12"
 compatibility_flags = ["nodejs_compat"]
-workers_dev = false
+workers_dev = true
 
 [[routes]]
 pattern = "stylekorean.dpdns.org"
@@ -16,6 +16,8 @@ APPS_SCRIPT_WRITE_URL = "https://script.google.com/macros/s/AKfycbz770kmpwqMTA-h
 FULFILLMENT_GAS_URL = "https://script.google.com/macros/s/AKfycbykK9DWjem9ORHxfR_mpdZl5DVh-en0D6JpCdIuel305QmfqxoNU_NqSnjkhFk401hI/exec"
 CMS_MCP_URL = "https://cms.mcp.siliconii.com/mcp/"
 CMS_GATEWAY_URL = "https://stylekorean-cms-gateway.stylekorean.workers.dev"
+# Separate write-only gateway (CMS write rollout). Token stays a Worker secret.
+CMS_WRITE_GATEWAY_URL = "https://stylekorean-cms-write-gateway.stylekorean.workers.dev"
 
 [[ratelimits]]
 name = "STATUS_WRITE_RATE_LIMITER"
@@ -31,10 +33,10 @@ migrations_dir = "./migrations"
 [triggers]
 crons = ["*/15 * * * *"]
 
-[assets]
-directory = "./out"
-binding = "ASSETS"
-run_worker_first = ["/api/*"]
+#[assets]
+#directory = "./out"
+#binding = "ASSETS"
+#run_worker_first = ["/api/*"]
 
 [observability]
 enabled = false

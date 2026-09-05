@@ -1,5 +1,6 @@
 import { normalizeLogisticsStatus } from "../lib/domain/status";
 import { applyConfirmedStatusToSnapshot, recordConfirmedStatusWrite } from "./database";
+import { invalidateSnapshotCache } from "./snapshot-cache";
 
 const MAX_COMMAND_BYTES = 16_384;
 const MAX_FIELD_LENGTH = 500;
@@ -56,7 +57,7 @@ async function writeSheetStatus(env: Env, command: StatusCommand, status: string
   }
 }
 
-export async function handleStatusCommand(request: Request, env: Env, _context?: ExecutionContext) {
+export async function handleStatusCommand(request: Request, env: Env, context?: ExecutionContext) {
   if (request.method !== "POST") return json({ ok: false, error: "Method not allowed" }, 405);
   const origin = request.headers.get("origin");
   if (origin && origin !== new URL(request.url).origin) return json({ ok: false, error: "Cross-origin status writes are not allowed" }, 403);
@@ -141,6 +142,11 @@ export async function handleStatusCommand(request: Request, env: Env, _context?:
   } catch (error) {
     console.error(JSON.stringify({ event: "status-write-audit-failure", correlationId, error: String(error) }));
   }
+
+  // The relational row is already updated; drop the edge-cached snapshot so the
+  // operator sees their own write on the next read instead of waiting out the
+  // cache window.
+  if (context) invalidateSnapshotCache(context);
 
   console.log(JSON.stringify({ event: "status-dual-write-confirmed", correlationId, sourceSheet: command.sourceSheet, sourceRow: Number(command.sourceRow), entityId, status }));
   return json({ ...sourceResult.result, status, correlationId, databaseUpdated: true, databaseResult, frontendSource: "d1" });
